@@ -1,0 +1,17 @@
+.DS_Store
+.env
+.env.*
+!.env.example
+
+backend/.venv/
+backend/**/__pycache__/
+backend/.pytest_cache/
+
+frontend/node_modules/
+frontend/dist/
+frontend/*.tsbuildinfo
+frontend/.fix-backup/
+
+graphify-out/
+.mimocode/
+.workbuddy/

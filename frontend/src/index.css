@@ -1,0 +1,124 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 222 47% 11%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+    /* FlowHub 主色 blue-600 #2563EB */
+    --primary: 221 83% 53%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 220 14% 96%;
+    --secondary-foreground: 222 47% 11%;
+    --muted: 220 14% 96%;
+    --muted-foreground: 215 16% 47%;
+    --accent: 217 91% 96%;
+    --accent-foreground: 224 76% 48%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 214 32% 91%;
+    --input: 214 32% 91%;
+    --ring: 221 83% 53%;
+    --radius: 0.5rem;
+    /* 深色侧栏（浅色主题下也保持深色，与原型一致） */
+    --sidebar-background: 222 47% 11%;
+    --sidebar-foreground: 213 27% 84%;
+    --sidebar-primary: 221 83% 60%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 217 33% 20%;
+    --sidebar-accent-foreground: 213 27% 84%;
+    --sidebar-border: 217 33% 20%;
+    --sidebar-ring: 221 83% 53%;
+  }
+
+  .dark {
+    --background: 222 47% 7%;
+    --foreground: 213 27% 88%;
+    --card: 222 44% 10%;
+    --card-foreground: 213 27% 88%;
+    --popover: 222 44% 10%;
+    --popover-foreground: 213 27% 88%;
+    --primary: 221 83% 60%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 217 33% 17%;
+    --secondary-foreground: 213 27% 88%;
+    --muted: 217 33% 17%;
+    --muted-foreground: 215 20% 62%;
+    --accent: 217 33% 20%;
+    --accent-foreground: 213 27% 88%;
+    --destructive: 0 72% 55%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 217 33% 17%;
+    --input: 217 33% 17%;
+    --ring: 221 83% 60%;
+    --sidebar-background: 222 47% 8%;
+    --sidebar-foreground: 213 27% 84%;
+    --sidebar-primary: 221 83% 60%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 217 33% 18%;
+    --sidebar-accent-foreground: 213 27% 84%;
+    --sidebar-border: 217 33% 18%;
+    --sidebar-ring: 221 83% 60%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  html, body, #root {
+    height: 100%;
+  }
+  body {
+    @apply bg-slate-100 text-slate-700 font-sans antialiased;
+    font-size: 14px;
+  }
+  .dark body {
+    @apply bg-slate-950 text-slate-300;
+  }
+  h1, h2, h3, h4 {
+    @apply font-semibold text-slate-900;
+  }
+  .dark h1, .dark h2, .dark h3, .dark h4 {
+    @apply text-slate-100;
+  }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { background: hsl(215 16% 72%); border-radius: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  .dark ::-webkit-scrollbar-thumb { background: hsl(217 33% 24%); }
+}
+
+@layer components {
+  /* 页面容器 */
+  .page-container { @apply mx-auto max-w-[1200px] px-4 py-6 sm:px-6; }
+
+  /* 键值网格（Agent 确认 / 重试等弹窗） */
+  .kv-grid { @apply grid grid-cols-2 gap-x-6 gap-y-2 rounded-lg border border-slate-200 p-4 dark:border-slate-700/60; }
+  .kv { @apply flex flex-col gap-0.5 py-1; }
+  .kv .k { @apply text-[11px] font-medium text-slate-400 dark:text-slate-500; }
+  .kv .v { @apply text-[12.5px] font-medium text-slate-700 dark:text-slate-200; }
+
+  /* 风险提示条 */
+  .risk-tip {
+    @apply flex items-start gap-2.5 rounded-lg border border-amber-200 bg-amber-50 px-3.5 py-3 text-[12.5px] leading-relaxed text-slate-600 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-slate-300;
+  }
+
+  /* Agent 能力标签 */
+  .cap-tag {
+    @apply inline-flex items-center rounded-full px-2.5 py-1 text-[11.5px] font-medium;
+  }
+  .cap-direct { @apply bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300; }
+  .cap-confirm { @apply bg-amber-50 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300; }
+  .cap-forbid { @apply bg-red-50 text-red-600 dark:bg-red-500/15 dark:text-red-300; }
+
+  /* 表格行标题 */
+  .t-title { @apply font-medium text-slate-700 hover:text-blue-600 cursor-pointer leading-snug dark:text-slate-200; }
+
+  /* 导航分组标题 */
+  .sb-grp { @apply px-3 pt-5 pb-2 text-[11px] font-medium tracking-wider text-slate-500; }
+}

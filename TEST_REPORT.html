@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FlowHub 系统测试报告</title>
+<style>
+  :root {
+    --brand: #2563eb; --brand-dark: #1e40af; --ok: #16a34a; --warn: #d97706;
+    --danger: #dc2626; --ink: #1f2937; --sub: #6b7280; --bg: #f8fafc;
+    --card: #ffffff; --line: #e5e7eb;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif; background: var(--bg); color: var(--ink); line-height: 1.7; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 32px 24px 64px; }
+  header { background: linear-gradient(135deg, #1e3a8a, #2563eb); color: #fff; border-radius: 16px; padding: 32px 36px; margin-bottom: 28px; }
+  header h1 { font-size: 26px; letter-spacing: 1px; }
+  header .sub { margin-top: 8px; opacity: .85; font-size: 14px; }
+  .meta { display: flex; flex-wrap: wrap; gap: 12px 28px; margin-top: 18px; font-size: 13px; }
+  .meta span b { font-weight: 600; }
+  h2 { font-size: 20px; margin: 34px 0 14px; padding-left: 12px; border-left: 4px solid var(--brand); }
+  h3 { font-size: 16px; margin: 20px 0 10px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 20px 24px; margin-bottom: 16px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th, td { padding: 9px 12px; text-align: left; border-bottom: 1px solid var(--line); }
+  th { background: #f1f5f9; font-weight: 600; white-space: nowrap; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .kpi { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin: 16px 0; }
+  .kpi .box { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; }
+  .kpi .v { font-size: 30px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .kpi .l { font-size: 12.5px; color: var(--sub); margin-top: 2px; }
+  .green { color: var(--ok); } .red { color: var(--danger); } .amber { color: var(--warn); } .blue { color: var(--brand); }
+  .pill { display: inline-block; padding: 1px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+  .pill.h { background: #fee2e2; color: #b91c1c; } .pill.m { background: #fef3c7; color: #b45309; }
+  .pill.l { background: #dbeafe; color: #1d4ed8; } .pill.info { background: #dcfce7; color: #15803d; }
+  .bug { border-left: 4px solid var(--danger); }
+  .bug.m { border-left-color: var(--warn); } .bug.l { border-left-color: var(--brand); }
+  .bug .title { font-weight: 700; font-size: 15px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .bug p { font-size: 13.5px; margin-top: 6px; }
+  .code { background: #0f172a; color: #e2e8f0; border-radius: 8px; padding: 10px 14px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; overflow-x: auto; }
+  .bar-row { display: flex; align-items: center; gap: 10px; margin: 6px 0; font-size: 13px; }
+  .bar-row .name { width: 90px; flex-shrink: 0; color: var(--sub); }
+  .bar-row .track { flex: 1; background: #eef2f7; border-radius: 6px; height: 18px; position: relative; }
+  .bar-row .fill { height: 100%; border-radius: 6px; background: linear-gradient(90deg, #3b82f6, #2563eb); }
+  .bar-row .val { width: 130px; text-align: right; font-variant-numeric: tabular-nums; }
+  .note { font-size: 12.5px; color: var(--sub); margin-top: 6px; }
+  footer { margin-top: 40px; text-align: center; color: var(--sub); font-size: 12.5px; }
+  .tag { font-size: 12px; color: var(--sub); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>FlowHub 系统测试报告（缺陷修复回归版）</h1>
+  <div class="sub">FlowHub 流枢 · 可审计流程协同平台 — 系统测试与修复回归（接口功能 / 权限安全 / 流程闭环 / 构建冒烟 / 性能冒烟）</div>
+  <div class="meta">
+    <span>被测版本：<b>backend 0.1.0 / frontend 0.0.0</b></span>
+    <span>报告日期：<b>2026-08-22（初测）→ 2026-08-22（修复回归）</b></span>
+    <span>测试框架：<b>pytest 8.x + FastAPI TestClient + Vite/TS</b></span>
+    <span>回归结论：<b class="green" style="color:#bbf7d0">缺陷 A/B/C/D 已全部修复，197/197 用例通过</b></span>
+  </div>
+</header>
+
+<!-- 执行摘要 -->
+<h2>一、执行摘要（修复回归）</h2>
+<div class="kpi">
+  <div class="box"><div class="v green">197</div><div class="l">后端接口用例总数（15 模块）</div></div>
+  <div class="box"><div class="v green">197</div><div class="l">用例通过（100%）</div></div>
+  <div class="box"><div class="v green">0</div><div class="l">缺陷标记（已修复转绿）</div></div>
+  <div class="box"><div class="v green">0</div><div class="l">意外失败</div></div>
+  <div class="box"><div class="v green">4</div><div class="l">已修复缺陷（A/B/C/D）</div></div>
+  <div class="box"><div class="v blue">8.3s</div><div class="l">回归测试总时长</div></div>
+</div>
+
+<div class="card">
+  <h3>回归结论</h3>
+  <p>初测发现的 4 类缺陷（<b>BUG-A 错误码/HTTP 状态不一致、BUG-B matrix 角色写操作 500、BUG-C 待审批用户可登录、BUG-D 归档项目只读失效</b>）已全部修复，测试库重建后全量回归：<b>197 个用例全部通过（0 失败 / 0 缺陷标记）</b>。此前标记的 28 个 <code>xfail</code> 用例已移除标记并转为正式断言，修复验证生效。</p>
+  <p style="margin-top:8px">同步完成观察项修复：documents 列表分页排序、main.py 未使用导入清理、BizError 弃用常量替换；服务启动冒烟通过（/health、/openapi 200）。</p>
+  <p style="margin-top:8px">前端：生产构建通过（2413 模块，2.55s）；ESLint 26 errors 与主 chunk 1.02MB 属代码质量观察项，建议按 P2 迭代处理（详见 §六）。</p>
+</div>
+
+<!-- 测试统计 -->
+<h2>二、测试范围与执行统计（回归）</h2>
+<div class="card">
+  <table>
+    <tr><th>模块</th><th class="num">用例数</th><th class="num">通过</th><th class="num">初测缺陷标记</th><th class="num">回归通过率</th></tr>
+    <tr><td>基础健康 / OpenAPI / MCP</td><td class="num">5</td><td class="num">5</td><td class="num">0</td><td class="num">100%</td></tr>
+    <tr><td>认证 Auth（登录/注册/审批/改密）</td><td class="num">23</td><td class="num">23</td><td class="num">3</td><td class="num">100%</td></tr>
+    <tr><td>组织 Org（用户 CRUD/解锁/角色解析）</td><td class="num">18</td><td class="num">18</td><td class="num">1</td><td class="num">100%</td></tr>
+    <tr><td>权限矩阵 Matrix（角色/防自锁）</td><td class="num">15</td><td class="num">15</td><td class="num">7</td><td class="num">100%</td></tr>
+    <tr><td>项目 Project（CRUD/归档）</td><td class="num">16</td><td class="num">16</td><td class="num">4</td><td class="num">100%</td></tr>
+    <tr><td>模板与画布（版本/发布校验）</td><td class="num">18</td><td class="num">18</td><td class="num">2</td><td class="num">100%</td></tr>
+    <tr><td>工作项 WorkItems（发起/去重）</td><td class="num">12</td><td class="num">12</td><td class="num">3</td><td class="num">100%</td></tr>
+    <tr><td>任务 Tasks（认领/转办/提交推进/闭环）</td><td class="num">20</td><td class="num">20</td><td class="num">3</td><td class="num">100%</td></tr>
+    <tr><td>文档 Documents（上传校验链/链接）</td><td class="num">14</td><td class="num">14</td><td class="num">1</td><td class="num">100%</td></tr>
+    <tr><td>Agent（注册/绑定/调用/access keys）</td><td class="num">18</td><td class="num">18</td><td class="num">2</td><td class="num">100%</td></tr>
+    <tr><td>通知 / 审计 / 看板 / 搜索</td><td class="num">20</td><td class="num">20</td><td class="num">0</td><td class="num">100%</td></tr>
+    <tr><td>安全专项（越权/认证绕过/泄露/CORS）</td><td class="num">18</td><td class="num">18</td><td class="num">1</td><td class="num">100%</td></tr>
+    <tr style="background:#f0f9ff;font-weight:700"><td>合计</td><td class="num">197</td><td class="num">197</td><td class="num">28</td><td class="num">100%</td></tr>
+  </table>
+  <p class="note">用例数由初测 200 调整为 197：外部重构移除了 <code>GET /documents/{id}/content</code> 与 <code>GET /tasks/{id}/context</code> 两个端点，对应 3 个用例同步移除；其余 28 个缺陷标记用例修复后全部转为正式断言并转绿。</p>
+</div>
+
+<!-- 修复记录 -->
+<h2>三、缺陷修复记录（本轮已全部关闭）</h2>
+
+<div class="card">
+  <div class="title" style="font-weight:700;font-size:15px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+    BUG-A <span class="pill info">已修复</span> 业务错误码与 HTTP 状态码不一致（系统性，22 处）
+  </div>
+  <p><b>根因：</b><code>core/response.py</code> <code>BizError</code> 默认状态码 400，契约 40401→404 / 40301·40302→403 / 40901·40902→409 / 42201→422 / 42301→423 未生效。</p>
+  <p><b>修复：</b>新增 <code>CODE_TO_HTTP</code> 错误码→HTTP 状态映射，<code>BizError.__init__</code> 未显式传 <code>http_status</code> 时按映射推导；显式传参的 14 处调用点与映射一致，行为不受影响。</p>
+  <p><b>验证：</b>22 个契约断言用例（auth/org/matrix/projects/templates/workitems/tasks/documents/agents/notifications）全部转绿，404/403/409 状态码正确返回。</p>
+</div>
+
+<div class="card">
+  <div class="title" style="font-weight:700;font-size:15px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+    BUG-B <span class="pill info">已修复</span> 权限矩阵角色写操作 500（MissingGreenlet）
+  </div>
+  <p><b>根因：</b><code>routes/matrix.py</code> 在 <code>session.commit()</code> 后访问未加载的 <code>Role.members</code> 关系，async 下触发 <code>MissingGreenlet</code>；角色创建/复制/更新/删除 4 个写操作全部 500。</p>
+  <p><b>修复：</b>① 新增 <code>_get_role()</code> 统一 <code>selectinload(Role.members)</code> 加载；② 列表查询加 <code>selectinload</code>；③ 新建角色显式初始化 <code>role.members = []</code>，消除 commit 后懒加载。</p>
+  <p><b>验证：</b>角色创建/复制/更新/删除/成员分配 5 个用例转绿，接口返回 200 与正确成员数据。</p>
+</div>
+
+<div class="card">
+  <div class="title" style="font-weight:700;font-size:15px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+    BUG-C <span class="pill info">已修复</span> 待审批（invited）用户可直接登录系统
+  </div>
+  <p><b>根因：</b><code>services/auth.py login()</code> 仅校验 locked/disabled，未拦截 invited 状态，注册用户绕过管理员审批直接登录。</p>
+  <p><b>修复：</b><code>login()</code> 在密码校验后、locked 判断前增加 <code>status == "invited"</code> 拦截，返回 403「账号待管理员审批，暂不可登录」。</p>
+  <p><b>验证：</b>安全专项用例断言 403 + 提示文案，转绿；注册→审批→登录闭环不受影响。</p>
+</div>
+
+<div class="card">
+  <div class="title" style="font-weight:700;font-size:15px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+    BUG-D <span class="pill info">已修复</span> 归档项目只读保护失效
+  </div>
+  <p><b>根因：</b><code>update_project</code> 仅检查 <code>read_only</code> 字段；seed 项目 p9（archived）缺 <code>read_only=True</code>，可被直接 PATCH。</p>
+  <p><b>修复：</b>① 更新校验改为 <code>read_only or status == "archived"</code> 双重拦截；② seed 数据 p9 补 <code>read_only: True</code>。</p>
+  <p><b>验证：</b>接口归档链路（archive→PATCH 403）与 seed 一致性用例均转绿。</p>
+</div>
+
+<div class="card bug l">
+  <div class="title">观察项修复 <span class="pill info">已处理（部分）</span></div>
+  <p>① documents 列表补 <code>order_by(DocItem.id.desc())</code>，分页顺序稳定（已修）；② <code>main.py</code> 未使用导入 <code>get_current_user</code> 清理（已修）；③ BizError 弃用常量替换为 <code>HTTP_422_UNPROCESSABLE_CONTENT</code>（已修）。</p>
+  <p style="margin-top:6px">待处理（P2）：前端 ESLint 26 errors（canvas.tsx 8 处、app-store.tsx react-refresh 3 处等）、主 bundle 1.02MB 代码分割、存储型 XSS 前端转义确认。</p>
+</div>
+
+<div class="card" style="background:#f0fdf4;border-color:#86efac">
+  <p style="font-size:14px"><b>注：</b>测试期间检测到代码基线外部变更——<code>GET /documents/{id}/content</code>（短时链接签名校验）与 <code>GET /tasks/{id}/context</code>（结构化上下文）端点被移除、<code>task_context.py</code> 删除、<code>create_link</code> 简化为 UUID token。对应 3 个测试用例已同步移除，建议确认是否为预期重构（当前 link 生成的 token 无签名校验，若需保留下载链路请补充实现）。</p>
+</div>
+
+<!-- 前端检查 -->
+<h2>四、前端检查结果</h2>
+<div class="card">
+  <table>
+    <tr><th>检查项</th><th>结果</th><th>说明</th></tr>
+    <tr><td>TypeScript 编译 + 生产构建</td><td><span class="pill info">通过</span></td><td>tsc -b + vite build，2.55s，2413 modules</td></tr>
+    <tr><td>产物冒烟</td><td><span class="pill info">通过</span></td><td>index.html / JS / CSS 均可访问，标题「FlowHub 流枢 · 可审计流程协同平台」</td></tr>
+    <tr><td>ESLint</td><td><span class="pill m">26 errors</span></td><td>1 warning；集中在 canvas.tsx(8)、app-store.tsx(3)、task-detail.tsx(2)、sidebar.tsx(2) 等</td></tr>
+    <tr><td>bundle 体积</td><td><span class="pill m">1.02MB</span></td><td>gzip 285KB；建议 dynamic import / manualChunks 代码分割</td></tr>
+  </table>
+  <p class="note">前端为 mock 过渡形态、无单元测试框架；本轮以构建、静态检查与产物冒烟覆盖，组件行为由接口闭环间接验证。</p>
+</div>
+
+<!-- 性能 -->
+<h2>五、性能冒烟（开发环境参考值）</h2>
+<div class="card">
+  <table>
+    <tr><th>接口</th><th class="num">请求数</th><th class="num">成功率</th><th class="num">p50</th><th class="num">p95</th><th class="num">p99</th><th class="num">max</th></tr>
+    <tr><td>GET /health（无鉴权）</td><td class="num">200（并发 20）</td><td class="num green">100%</td><td class="num">17.2ms</td><td class="num">118.2ms</td><td class="num">193.3ms</td><td class="num">241.3ms</td></tr>
+    <tr><td>GET /api/v1/projects（JWT）</td><td class="num">100（并发 10）</td><td class="num green">100%</td><td class="num">16.7ms</td><td class="num">34.0ms</td><td class="num">36.2ms</td><td class="num">36.2ms</td></tr>
+    <tr><td>GET /api/v1/tasks（JWT）</td><td class="num">100（并发 10）</td><td class="num green">100%</td><td class="num">13.2ms</td><td class="num">33.7ms</td><td class="num">56.5ms</td><td class="num">56.5ms</td></tr>
+  </table>
+  <div class="bar-row"><div class="name">/health p50</div><div class="track"><div class="fill" style="width:17%"></div></div><div class="val">17.2ms</div></div>
+  <div class="bar-row"><div class="name">/projects p50</div><div class="track"><div class="fill" style="width:16%"></div></div><div class="val">16.7ms</div></div>
+  <div class="bar-row"><div class="name">/tasks p50</div><div class="track"><div class="fill" style="width:13%"></div></div><div class="val">13.2ms</div></div>
+  <p class="note">环境为开发配置（DEBUG=true → SQL echo 开启），数值仅作相对冒烟参考；单进程 uvicorn。首轮 /health 偏高含连接建立开销。</p>
+</div>
+
+<!-- 质量评估 -->
+<h2>六、质量评估（回归后）</h2>
+<div class="card">
+  <table>
+    <tr><th>维度</th><th>评分</th><th>说明</th></tr>
+    <tr><td>功能正确性</td><td><span class="pill info">优秀</span></td><td>核心业务闭环与 CRUD 全部通过；去重/幂等/防自锁/审计机制有效</td></tr>
+    <tr><td>权限安全</td><td><span class="pill info">良好</span></td><td>invited 登录漏洞已修复；RBAC 越权拦截、防自锁验证通过</td></tr>
+    <tr><td>契约一致性</td><td><span class="pill info">优秀</span></td><td>错误码与 HTTP 状态映射修复，404/403/409/422/423 契约断言全部转绿</td></tr>
+    <tr><td>稳定性</td><td><span class="pill info">良好</span></td><td>matrix 懒加载 500 已修复；eager-load 模式与 projects 路由对齐</td></tr>
+    <tr><td>工程质量</td><td><span class="pill m">待改进</span></td><td>后端分层清晰、注释规范；前端 lint 26 errors、bundle 超阈值、无单测（P2）</td></tr>
+  </table>
+</div>
+
+<!-- 改进建议 -->
+<h2>七、剩余改进建议（P2）</h2>
+<div class="card">
+  <ol style="padding-left:20px;font-size:14px">
+    <li><b>前端质量：</b>ESLint 清零（canvas.tsx 8 处、app-store.tsx react-refresh 拆分文件、task-detail.tsx set-state-in-effect 重构）；主 chunk 代码分割（dynamic import / manualChunks）。</li>
+    <li><b>前端测试：</b>引入 Vitest + Testing Library 单测；补齐 CI 流水线（pytest + build + lint 门禁）。</li>
+    <li><b>后端静态检查：</b>接入 Ruff（lint+format）与 mypy 类型检查，纳入 CI。</li>
+    <li><b>安全跟踪：</b>确认存储型 XSS 前端转义；短时链接下载链路（content 端点）若需保留请确认重构方案。</li>
+    <li><b>压测：</b>生产配置（DEBUG=false）下补充基准压测与慢查询分析。</li>
+  </ol>
+</div>
+
+<h2>八、测试复现</h2>
+<div class="card">
+  <div class="code"># 后端（需本机 PostgreSQL；自动创建/重置 flowhub_test 测试库）<br>cd backend<br>.venv/bin/pip install -e . && .venv/bin/pip install "pytest>=8,<9" "pytest-asyncio&gt;=0.23"<br>.venv/bin/python -m pytest tests -q&nbsp;&nbsp;# 期望：197 passed, 0 failed</div>
+  <div class="code" style="margin-top:8px"># 前端<br>cd frontend && npm run build && npm run lint</div>
+  <p class="note">测试代码位于 <code>backend/tests/</code>（15 个模块，conftest 负责测试库重置与登录夹具）。本轮修复涉及 <code>core/response.py</code>、<code>routes/matrix.py</code>、<code>services/auth.py</code>、<code>routes/projects.py</code>、<code>seed/demo.py</code>、<code>routes/documents.py</code>、<code>main.py</code>。</p>
+</div>
+
+<footer>FlowHub 系统测试报告 · 初测 2026-08-22 · 修复回归 2026-08-22 · 缺陷 A/B/C/D 已全部关闭 · 配套文档：TEST_PLAN.md / backend/tests/</footer>
+</div>
+</body>
+</html>
