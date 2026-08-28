@@ -4,9 +4,9 @@ import type { PageId, RoleKey, User } from '../types'
 import { api, clearAuthCache, getStoredUser, getToken } from '../lib/api'
 
 export type DialogName =
-  | 'submit' | 'return' | 'transfer' | 'agentConfirm' | 'agentCreate'
+  | 'submit' | 'return' | 'transfer' | 'expertApproval'
   | 'validate' | 'retryNotify' | 'registerAccount' | 'changePwd' | 'createUser'
-  | 'registerApprove' | 'permissionDemo' | 'userTakeover' | 'agentDetail' | 'agentEdit' | 'toolEdit'
+  | 'registerApprove' | 'permissionDemo' | 'userTakeover'
 
 export interface CheckProblem {
   title: string
@@ -28,9 +28,8 @@ interface AppState {
   checkProblems: CheckProblem[]
   /** 画布目标模板（模板页点开某模板时设置，画布按此加载） */
   canvasTarget: { templateId: string; templateName: string; version: string } | null
-  /** Agent 详情弹窗目标（查看调用历史/确认请求时设置） */
-  dialogAgentId: string | null
-  dialogToolId: string | null
+  /** Expert 编辑器目标：null=新建（未落库草稿），非空=编辑该 Expert */
+  expertEditorTarget: string | null
   /** 注册审批弹窗目标：null=批量模式（全量多选/全部），非空=单个审批该用户 */
   approvalTargetId: string | null
   /** 当前工作项 / 任务（详情页与「去处理」页按此拉取真实数据） */
@@ -50,13 +49,13 @@ interface AppState {
   openDialog: (d: DialogName) => void
   closeDialog: () => void
   openApproval: (uid?: string | null) => void
-  openAgentDetail: (agentId: string) => void
-  openAgentEdit: (agentId: string) => void
-  openToolEdit: (toolId?: string | null) => void
+
   bumpTask: () => void
   locateCanvasNode: (nodeId: string) => void
   setCheckProblems: (problems: CheckProblem[]) => void
   openCanvas: (templateId: string, templateName: string, version: string) => void
+  /** 打开 Expert 编辑器：不传或传 null 进入新建模式 */
+  openExpertEditor: (expertId?: string | null) => void
 }
 
 const AppContext = createContext<AppState | null>(null)
@@ -84,8 +83,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [locateNode, setLocateNode] = useState<string | null>(null)
   const [checkProblems, setCheckProblemsState] = useState<CheckProblem[]>([])
   const [canvasTarget, setCanvasTarget] = useState<{ templateId: string; templateName: string; version: string } | null>(null)
-  const [dialogAgentId, setDialogAgentId] = useState<string | null>(null)
-  const [dialogToolId, setDialogToolId] = useState<string | null>(null)
+  const [expertEditorTarget, setExpertEditorTarget] = useState<string | null>(null)
   const [approvalTargetId, setApprovalTargetId] = useState<string | null>(null)
   const [activeWiId, setActiveWiId] = useState<string | null>(null)
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null)
@@ -147,6 +145,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setRole(mapRole(u))
     setAuthed(true)
     setPage('tasks')
+    window.dispatchEvent(new Event('flowhub-auth-changed'))
     // 重新拉取用户表（登出已清空 orgUsers，避免账号切换后仍显示上一账号的数据）
     api.get<{ items: User[] }>('/api/v1/org/users')
       .then((d) => { if (d.items.length) setOrgUsers(d.items) })
@@ -164,9 +163,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setOrgUsers([])
     setTaskCounter(0)
     setDialog(null)
-    setDialogAgentId(null)
-    setDialogToolId(null)
     setCanvasTarget(null)
+    setExpertEditorTarget(null)
     setActiveWiId(null)
     setActiveTaskId(null)
     setLocateNode(null)
@@ -182,29 +180,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setDialog('registerApprove')
   }, [])
   const bumpTask = useCallback(() => setTaskCounter((c) => c + 1), [])
-  const openAgentDetail = useCallback((agentId: string) => {
-    setDialogAgentId(agentId)
-    setDialog('agentDetail')
-  }, [])
-  const openAgentEdit = useCallback((agentId: string) => {
-    setDialogAgentId(agentId)
-    setDialog('agentEdit')
-  }, [])
-  /** 编辑客户端工具：toolId 为空=新增，非空=编辑 */
-  const openToolEdit = useCallback((toolId?: string | null) => {
-    setDialogToolId(toolId ?? null)
-    setDialog('toolEdit')
-  }, [])
   const openCanvas = useCallback((templateId: string, templateName: string, version: string) => {
     setCanvasTarget({ templateId, templateName, version })
     setPage('canvas')
   }, [])
 
+  const openExpertEditor = useCallback((expertId?: string | null) => {
+    setExpertEditorTarget(expertId ?? null)
+    setPage('expert-editor')
+    window.scrollTo({ top: 0 })
+  }, [])
+
   const value = useMemo(() => ({
-    authed, role, page, dialog, taskCounter, orgUsers, currentUser, locateNode, checkProblems, canvasTarget, dialogAgentId, dialogToolId, approvalTargetId, activeWiId, activeTaskId,
-    navigate, openWorkItem, openTask, login, logout, openDialog, closeDialog, openApproval, openAgentDetail, openAgentEdit, openToolEdit, bumpTask,
-    updateUser, assignUserRoles, refreshOrgUsers, locateCanvasNode, setCheckProblems, openCanvas,
-  }), [authed, role, page, dialog, taskCounter, orgUsers, currentUser, locateNode, checkProblems, canvasTarget, dialogAgentId, dialogToolId, approvalTargetId, activeWiId, activeTaskId, navigate, openWorkItem, openTask, login, logout, openDialog, closeDialog, openApproval, openAgentDetail, openAgentEdit, openToolEdit, bumpTask, updateUser, assignUserRoles, refreshOrgUsers, locateCanvasNode, setCheckProblems, openCanvas])
+    authed, role, page, dialog, taskCounter, orgUsers, currentUser, locateNode, checkProblems, canvasTarget, approvalTargetId, activeWiId, activeTaskId, expertEditorTarget,
+    navigate, openWorkItem, openTask, login, logout, openDialog, closeDialog, openApproval, bumpTask,
+    updateUser, assignUserRoles, refreshOrgUsers, locateCanvasNode, setCheckProblems, openCanvas, openExpertEditor,
+  }), [authed, role, page, dialog, taskCounter, orgUsers, currentUser, locateNode, checkProblems, canvasTarget, approvalTargetId, activeWiId, activeTaskId, expertEditorTarget, navigate, openWorkItem, openTask, login, logout, openDialog, closeDialog, openApproval, bumpTask, updateUser, assignUserRoles, refreshOrgUsers, locateCanvasNode, setCheckProblems, openCanvas, openExpertEditor])
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>
 }
@@ -217,10 +208,10 @@ export function useApp() {
 
 /* 角色 → 可见导航（PRD §5 功能权限，原型 ROLE_NAV） */
 export const ROLE_NAV: Record<RoleKey, PageId[]> = {
-  leader: ['tasks', 'notif', 'dashboard', 'projects', 'templates', 'docs', 'agents', 'channel'],
-  org: ['tasks', 'notif', 'dashboard', 'projects', 'templates', 'docs', 'agents', 'org', 'channel', 'matrix', 'audit'],
-  dev: ['tasks', 'notif', 'projects', 'templates', 'docs', 'agents'],
-  sales: ['tasks', 'notif', 'projects', 'templates', 'docs', 'agents'],
+  leader: ['os-overview', 'aichat', 'tasks', 'notif', 'dashboard', 'projects', 'templates', 'expert-center', 'skill-center', 'mcp-center', 'provider-center', 'knowledge', 'memory', 'runtime-center', 'approvals', 'docs', 'channel', 'external-tools'],
+  org: ['os-overview', 'aichat', 'tasks', 'notif', 'dashboard', 'projects', 'templates', 'expert-center', 'skill-center', 'mcp-center', 'provider-center', 'knowledge', 'memory', 'runtime-center', 'approvals', 'docs', 'org', 'channel', 'matrix', 'audit', 'external-tools'],
+  dev: ['os-overview', 'aichat', 'tasks', 'notif', 'projects', 'templates', 'expert-center', 'skill-center', 'mcp-center', 'provider-center', 'knowledge', 'memory', 'runtime-center', 'approvals', 'docs', 'external-tools'],
+  sales: ['os-overview', 'aichat', 'tasks', 'notif', 'projects', 'templates', 'expert-center', 'skill-center', 'mcp-center', 'provider-center', 'knowledge', 'memory', 'runtime-center', 'approvals', 'docs', 'external-tools'],
 }
 
 export { toast }

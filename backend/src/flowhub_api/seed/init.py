@@ -13,13 +13,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from flowhub_api.core.config import get_settings
 from flowhub_api.models import (
-    Agent, AgentCapability, AgentModel, AgentTool, AgentType, AuditRow, DocItem, GlobalTemplate,
+    AuditRow, DocItem, GlobalTemplate,
     NodeAssignment, NotificationItem, Project, ProjectTemplateBinding,
     Role, TaskItem, User, WorkItem, WorkflowInstance,
 )
-from flowhub_api.seed.data import AGENT_MODELS, AGENT_TOOLS, AGENT_TYPES, GLOBAL_TEMPLATES, PERM_MATRIX, ROLE_META, ROLE_ORDER, SEED_USERS
+from flowhub_api.seed.data import GLOBAL_TEMPLATES, PERM_MATRIX, ROLE_META, ROLE_ORDER, SEED_USERS
 from flowhub_api.seed.demo import (
-    CHANGE_START_SCHEMA, DEMO_AGENTS, DEMO_AUDITS, DEMO_DOCUMENTS, DEMO_NOTIFICATIONS,
+    CHANGE_START_SCHEMA, DEMO_AUDITS, DEMO_DOCUMENTS, DEMO_NOTIFICATIONS,
     DEMO_PROJECTS, DEMO_TASKS, DEMO_WORK_ITEMS, ISSUE_START_SCHEMA, REQ_START_SCHEMA,
 )
 
@@ -34,21 +34,17 @@ async def seed_all(session: AsyncSession) -> None:
     # 系统骨架：角色 / 权限矩阵 / 流程模板（任何模式下都初始化）
     await _seed_roles(session)
     await _seed_templates(session)
-    await _seed_agent_models(session)
-    await _seed_agent_types(session)
-    await _seed_agent_tools(session)
     if SEED_DEMO:
         await _seed_users(session)          # 12 个演示用户
         await _seed_projects(session)
         await _seed_work_items(session)
         await _seed_documents(session)
-        await _seed_agents(session)
         await _seed_notifications(session)
         await _seed_audits(session)
         logger.info(
-            "Seed 演示模式：角色 %d / 用户 %d / 模板 %d / 项目 %d / 工作项 %d / 任务 %d / 文档 %d / Agent %d / 通知 %d / 审计 %d",
+            "Seed 演示模式：角色 %d / 用户 %d / 模板 %d / 项目 %d / 工作项 %d / 任务 %d / 文档 %d / 通知 %d / 审计 %d",
             len(ROLE_ORDER), len(SEED_USERS), len(GLOBAL_TEMPLATES), len(DEMO_PROJECTS),
-            len(DEMO_WORK_ITEMS), len(DEMO_TASKS), len(DEMO_DOCUMENTS), len(DEMO_AGENTS),
+            len(DEMO_WORK_ITEMS), len(DEMO_TASKS), len(DEMO_DOCUMENTS),
             len(DEMO_NOTIFICATIONS), len(DEMO_AUDITS),
         )
     else:
@@ -80,6 +76,8 @@ async def _seed_roles(session: AsyncSession) -> None:
     for idx, role_id in enumerate(ROLE_ORDER):
         exists = await session.get(Role, role_id)
         if exists:
+            defaults = {perm: bool(cells[idx]) for perm, cells in PERM_MATRIX}
+            exists.perms = {**defaults, **(exists.perms or {})}
             continue
         label, desc = ROLE_META[role_id]
         perms = {perm: bool(cells[idx]) for perm, cells in PERM_MATRIX}
@@ -111,6 +109,12 @@ async def _get_or_create_role(session: AsyncSession, role_id: str) -> Role:
 
 
 async def _seed_templates(session: AsyncSession) -> None:
+    # 物化默认画布：引擎主边取画布边（_edges_of），不物化则退化为节点顺序线性链，
+    # 并行分叉/汇合等图语义全部失效——与惰性 GET 画布保持同一版本与构建器
+    from flowhub_api.models import TemplateCanvas, TemplateVersion
+    from flowhub_api.routes.templates import _default_issue_v1_canvas, _default_req_v3_canvas
+
+    default_canvases = {"tpl-req": ("v3", _default_req_v3_canvas), "tpl-issue": ("v1", _default_issue_v1_canvas)}
     for tpl in GLOBAL_TEMPLATES:
         exists = await session.get(GlobalTemplate, tpl["id"])
         if exists:
@@ -124,54 +128,16 @@ async def _seed_templates(session: AsyncSession) -> None:
             start_schema=TEMPLATE_START_SCHEMA.get(tpl["id"], []),
             nodes=tpl["nodes"],
         ))
-
-
-async def _seed_agent_models(session: AsyncSession) -> None:
-    for m in AGENT_MODELS:
-        row = (await session.execute(
-            select(AgentModel).where(AgentModel.provider == m["provider"], AgentModel.model == m["model"])
-        )).scalar_one_or_none()
-        if row:
-            # 已有记录仅补描述/label/base_url（migrate 加列后旧行为空）
-            if not row.desc:
-                row.desc = m.get("desc", "")
-            if row.label != m["label"]:
-                row.label = m["label"]
-            if not row.base_url:
-                row.base_url = m.get("base_url", "")
+    for tpl_id, (version, builder) in default_canvases.items():
+        vid = f"{tpl_id}:{version}"
+        if await session.get(TemplateCanvas, vid) is not None:
             continue
-        session.add(AgentModel(
-            id=f"am{uuid4().hex[:6]}", provider=m["provider"], model=m["model"], label=m["label"],
-            desc=m.get("desc", ""), base_url=m.get("base_url", ""), status="active",
-        ))
-
-
-async def _seed_agent_types(session: AsyncSession) -> None:
-    for t in AGENT_TYPES:
-        row = (await session.execute(select(AgentType).where(AgentType.code == t["code"]))).scalar_one_or_none()
-        if row:
-            # 已有记录仅补 system_prompt（migrate 加列后旧行为空）
-            if not row.system_prompt:
-                row.system_prompt = t.get("system_prompt", "")
-            continue
-        session.add(AgentType(
-            id=f"at{uuid4().hex[:6]}", code=t["code"], label=t["label"], desc=t["desc"],
-            default_caps=t["default_caps"], system_prompt=t.get("system_prompt", ""), status="active",
-        ))
-
-
-async def _seed_agent_tools(session: AsyncSession) -> None:
-    from datetime import datetime
-    for tool in AGENT_TOOLS:
-        exists = await session.execute(select(AgentTool).where(AgentTool.name == tool["name"]))
-        if exists.scalar_one_or_none():
-            continue
-        session.add(AgentTool(
-            id=f"tool{uuid4().hex[:4]}", name=tool["name"], engine=tool["engine"],
-            provider=tool.get("provider", ""), model=tool.get("model", ""),
-            base_url=tool.get("base_url", ""), desc=tool.get("desc", ""),
-            status="active", created_at=datetime.now().strftime("%m-%d %H:%M"),
-        ))
+        if await session.get(TemplateVersion, vid) is None:
+            session.add(TemplateVersion(
+                id=vid, template_id=tpl_id, version=version, status="draft",
+                updated="—", updated_by="system", instances=0, nodes=0,
+            ))
+        session.add(builder(vid))
 
 
 async def _seed_projects(session: AsyncSession) -> None:
@@ -229,7 +195,7 @@ async def _seed_work_items(session: AsyncSession) -> None:
             node=t["node"], node_id=t["node_id"], type=t["type"], priority=t["priority"],
             status=t["status"], assignee=t["assignee"], due=t["due"],
             sla_hours=t["sla"], overdue=t.get("overdue", False),
-            agent_pending=t.get("agent_pending", False), source=t.get("source", ""),
+            expert_pending=t.get("expert_pending", False), source=t.get("source", ""),
         ))
 
 
@@ -243,25 +209,6 @@ async def _seed_documents(session: AsyncSession) -> None:
             level=d["level"], scan=d["scan"], uploader=d["uploader"],
             size=d["size"], time=d["time"], kind=d["kind"], wi=d["wi"],
         ))
-
-
-async def _seed_agents(session: AsyncSession) -> None:
-    for a in DEMO_AGENTS:
-        exists = await session.get(Agent, a["id"])
-        if exists:
-            continue
-        agent = Agent(
-            id=a["id"], name=a["name"], code=a["code"], desc=a["desc"],
-            status=a["status"], scope=a["scope"], bindings=a["bindings"],
-            owner=a["owner"], calls=a["calls"], success_rate=a["success_rate"],
-            avg_ms=a["avg_ms"], updated=a["updated"],
-        )
-        for name, mode in [("read_context", "direct"), ("read_documents", "direct"), ("generate_content", "confirm"),
-                           ("submit_task", "forbid"), ("return_task", "forbid"), ("transfer_task", "forbid")]:
-            agent.capabilities.append(AgentCapability(
-                id=f"cap-{a['id']}-{name}", agent_id=a["id"], name=name, mode=mode,
-            ))
-        session.add(agent)
 
 
 async def _seed_notifications(session: AsyncSession) -> None:

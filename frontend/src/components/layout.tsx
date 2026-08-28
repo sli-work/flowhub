@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import {
   LayoutGrid, Bell, BarChart3, FolderKanban, Workflow,
   FileText, Bot, Building2, ShieldCheck, ScrollText, LogOut, Search,
-  Moon, Sun, Webhook,
+  Moon, Sun, Webhook, Sparkles, Boxes, Cable, Database, BrainCircuit, Activity, CircleCheck, Download,
 } from 'lucide-react'
 import { useApp, toast, ROLE_NAV } from '../store/app-store'
 import { api } from '../lib/api'
@@ -15,27 +15,48 @@ const NAV: { grp: string; items: { id: PageId; label: string; icon: React.ReactN
   {
     grp: '工作台',
     items: [
+      { id: 'os-overview', label: 'OS 总览', icon: <Sparkles className="h-[17px] w-[17px]" /> },
+      { id: 'aichat', label: 'AiChat', icon: <Bot className="h-[17px] w-[17px]" /> },
       { id: 'tasks', label: '我的任务', icon: <LayoutGrid className="h-[17px] w-[17px]" />, badge: 6 },
       { id: 'notif', label: '通知中心', icon: <Bell className="h-[17px] w-[17px]" />, dot: true },
       { id: 'dashboard', label: '领导看板', icon: <BarChart3 className="h-[17px] w-[17px]" /> },
     ],
   },
   {
-    grp: '业务',
+    grp: '流程管理',
     items: [
       { id: 'projects', label: '项目列表', icon: <FolderKanban className="h-[17px] w-[17px]" /> },
       { id: 'templates', label: '流程模板', icon: <Workflow className="h-[17px] w-[17px]" /> },
     ],
   },
   {
-    grp: '资源',
+    grp: 'AI 构建',
     items: [
-      { id: 'docs', label: '文档中心', icon: <FileText className="h-[17px] w-[17px]" /> },
-      { id: 'agents', label: 'Agent 管理', icon: <Bot className="h-[17px] w-[17px]" /> },
+      { id: 'expert-center', label: 'Expert 中心', icon: <Boxes className="h-[17px] w-[17px]" /> },
+      { id: 'skill-center', label: 'Expert Skill', icon: <BrainCircuit className="h-[17px] w-[17px]" /> },
+      { id: 'mcp-center', label: 'MCP 中心', icon: <Cable className="h-[17px] w-[17px]" /> },
+      { id: 'provider-center', label: 'Provider', icon: <CircleCheck className="h-[17px] w-[17px]" /> },
+
+      { id: 'external-tools', label: 'MCP / Skill 下载', icon: <Download className="h-[17px] w-[17px]" /> },
     ],
   },
   {
-    grp: '系统',
+    grp: '知识库',
+    items: [
+      { id: 'knowledge', label: '知识库', icon: <Database className="h-[17px] w-[17px]" /> },
+      { id: 'memory', label: 'Memory', icon: <BrainCircuit className="h-[17px] w-[17px]" /> },
+      { id: 'docs', label: '文档中心', icon: <FileText className="h-[17px] w-[17px]" /> },
+    ],
+  },
+  {
+    grp: '运行治理',
+    items: [
+      { id: 'runtime-center', label: '运行中心', icon: <Activity className="h-[17px] w-[17px]" /> },
+      { id: 'approvals', label: '审批队列', icon: <ShieldCheck className="h-[17px] w-[17px]" />, badge: 2 },
+    ],
+  },
+  {
+    grp: '系统管理',
     items: [
       { id: 'org', label: '组织管理', icon: <Building2 className="h-[17px] w-[17px]" /> },
       { id: 'channel', label: '渠道配置', icon: <Webhook className="h-[17px] w-[17px]" /> },
@@ -157,17 +178,29 @@ export function Topbar() {
     tasks: ['我的任务', '工作台 / 我的任务'],
     notif: ['通知中心', '工作台 / 通知中心'],
     dashboard: ['领导看板', '工作台 / 领导看板'],
-    projects: ['项目列表', '业务 / 项目列表'],
-    templates: ['流程模板', '业务 / 流程模板'],
-    canvas: ['流程画布 · 需求流程 v3', '业务 / 流程画布'],
-    workitem: ['工作项详情', '业务 / 工作项详情'],
-    node: ['节点处理 · 测试', '业务 / 节点处理'],
-    docs: ['文档中心', '资源 / 文档中心'],
-    agents: ['Agent 管理', '资源 / Agent 管理'],
-    org: ['组织管理', '系统 / 组织管理'],
-    channel: ['渠道配置', '系统 / 渠道配置'],
-    matrix: ['权限矩阵', '系统 / 权限矩阵'],
-    audit: ['审计中心', '系统 / 审计中心'],
+    projects: ['项目列表', '流程管理 / 项目列表'],
+    templates: ['流程模板', '流程管理 / 流程模板'],
+    canvas: ['流程画布 · 需求流程 v3', '流程管理 / 流程画布'],
+    workitem: ['工作项详情', '流程管理 / 工作项详情'],
+    node: ['节点处理 · 测试', '流程管理 / 节点处理'],
+    docs: ['文档中心', '知识库 / 文档中心'],
+
+    'os-overview': ['Expert OS 总览', '工作台 / Expert OS 总览'],
+    aichat: ['AiChat', '工作台 / AiChat'],
+    'expert-center': ['Expert 中心', 'AI 构建 / Expert 中心'],
+    'expert-editor': ['Expert 编辑器', 'AI 构建 / Expert 中心 / Expert 编辑器'],
+    'skill-center': ['Expert Skill', 'AI 构建 / Expert Skill'],
+    'mcp-center': ['MCP 中心', 'AI 构建 / MCP 中心'],
+    'provider-center': ['Provider', 'AI 构建 / Provider'],
+    knowledge: ['知识库', '知识库 / 知识库'],
+    memory: ['Memory', '知识库 / Memory'],
+    'runtime-center': ['运行中心', '运行治理 / 运行中心'],
+    approvals: ['审批队列', '运行治理 / 审批队列'],
+    'external-tools': ['MCP / Skill 下载', 'AI 构建 / MCP / Skill 下载'],
+    org: ['组织管理', '系统管理 / 组织管理'],
+    channel: ['渠道配置', '系统管理 / 渠道配置'],
+    matrix: ['权限矩阵', '系统管理 / 权限矩阵'],
+    audit: ['审计中心', '系统管理 / 审计中心'],
   }
   const [title, crumb] = titles[page]
 
@@ -261,7 +294,7 @@ export function Topbar() {
                 onClick={() => {
                   setNotifOpen(false)
                   if (n.unread) markRead(n.id)
-                  if (n.kind === 'agent') openDialog('agentConfirm')
+                  if (n.kind === 'agent') openDialog('expertApproval')
                   else if (n.kind === 'arrive' && n.taskId) openTask(n.taskId, n.wiId)
                   else if (n.wiId) openWorkItem(n.wiId)
                   else navigate('notif')

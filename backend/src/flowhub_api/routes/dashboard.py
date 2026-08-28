@@ -33,7 +33,7 @@ async def overview(
     running = (await session.execute(select(WorkflowInstance).where(WorkflowInstance.state == "running"))).scalars().all().__len__()
     closed = (await session.execute(select(WorkItem).where(WorkItem.status == "closed"))).scalars().all().__len__()
     overdue = (await session.execute(select(TaskItem).where(TaskItem.overdue == True))).scalars().all().__len__()  # noqa: E712
-    agent_pending = (await session.execute(select(TaskItem).where(TaskItem.agent_pending == True))).scalars().all().__len__()  # noqa: E712
+    expert_pending = (await session.execute(select(TaskItem).where(TaskItem.expert_pending == True))).scalars().all().__len__()  # noqa: E712
 
     type_rows = (await session.execute(
         select(WorkItem.type, func.count()).group_by(WorkItem.type)
@@ -93,7 +93,7 @@ async def overview(
             {"label": "运行中流程", "value": running},
             {"label": "已关闭工作项", "value": closed},
             {"label": "超时任务", "value": overdue},
-            {"label": "Agent 待确认", "value": agent_pending},
+            {"label": "Expert 待审批", "value": expert_pending},
         ],
         "type_split": type_split,
         "timeout_top": timeout_top,

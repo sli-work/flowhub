@@ -15,3 +15,11 @@ frontend/.fix-backup/
 graphify-out/
 .mimocode/
 .workbuddy/
+
+# 工具本地目录
+.freebuff/
+.zcode/
+
+# @file-viewer vite 插件生成的渲染资源（构建/开发时自动拷贝）
+frontend/public/vendor/
+frontend/public/

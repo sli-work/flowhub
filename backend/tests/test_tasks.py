@@ -66,7 +66,7 @@ class TestTaskDetail:
         assert r.status_code == 200
         data = r.json()["data"]
         assert data["task"]["node"] == "测试"
-        assert "suggestions" in data  # Agent 建议列表
+        assert "expertRuns" in data
 
     def test_detail_not_found(self, client: TestClient, leader_headers: dict):
         r = client.get("/api/v1/tasks/T-GHOST", headers=leader_headers)
@@ -160,11 +160,11 @@ class TestTaskActions:
         assert r.status_code == 404
 
     def test_task_not_found_idempotent_guard(self, client: TestClient, leader_headers: dict, _fresh_task: str):
-        """完成后重复 submit → 409 幂等保护。"""
+        """完成后重复 submit → 409 幂等保护。（节点产出契约：提交需带 schema 必填值）"""
         client.post(f"/api/v1/tasks/{_fresh_task}/actions", headers=leader_headers,
-                    json={"action": "submit", "node_id": "n1", "form_values": {}})
+                    json={"action": "submit", "node_id": "n1", "form_values": {"conclusion": "分析完成"}})
         r = client.post(f"/api/v1/tasks/{_fresh_task}/actions", headers=leader_headers,
-                        json={"action": "submit", "node_id": "n1", "form_values": {}})
+                        json={"action": "submit", "node_id": "n1", "form_values": {"conclusion": "分析完成"}})
         assert r.status_code == 409
         assert r.json()["code"] == 40902
 
@@ -187,7 +187,7 @@ class TestTaskSubmitAdvance:
         assert n2["status"] != "completed"
         # 提交 n2 → 继续流转到下一节点
         r = client.post(f"/api/v1/tasks/{n2['id']}/actions", headers=leader_headers,
-                        json={"action": "submit", "form_values": {"需求分析": "ok"}})
+                        json={"action": "submit", "form_values": {"conclusion": "ok"}})
         assert r.status_code == 200
         assert r.json()["data"]["next_node"]["label"] not in (None, "")
         tasks = client.get(f"/api/v1/work-items/{wi['id']}", headers=leader_headers).json()["data"]["tasks"]
@@ -207,9 +207,15 @@ class TestTaskSubmitAdvance:
             if not open_tasks:
                 break
             tid = open_tasks[0]["id"]
+            node = next((x["node"] for x in detail["tasks"] if x["id"] == tid), "")
+            values = {"title": title, "conclusion": "ok", "verdict": "pass", "opinion": "通过",
+                      "subitems": "子项A", "impl": "完成", "unitTest": "pass", "apiDoc": "doc-1",
+                      "components": "-", "deliverable": "doc-2", "note": "-", "report": "doc-3",
+                      "version": "v1", "env": "prod", "planTime": "2026-09-01", "record": "doc-4"}
+            payload = {k: v for k, v in values.items() if k in ("title",) or True}
             resp = client.post(f"/api/v1/tasks/{tid}/actions", headers=leader_headers,
-                               json={"action": "submit", "node_id": "n1", "form_values": {"title": title}})
-            if resp.json()["data"]["next_node"] is None:
+                               json={"action": "submit", "node_id": "n1", "form_values": values})
+            if resp.json().get("data") is None or resp.json()["data"]["next_node"] is None:
                 break
         final = client.get(f"/api/v1/work-items/{wi['id']}", headers=leader_headers).json()["data"]["item"]
         assert final["status"] == "closed"

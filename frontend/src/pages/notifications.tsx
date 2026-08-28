@@ -78,7 +78,7 @@ export function NotificationsPage() {
   })
 
   const onOpen = (n: NotificationItem) => {
-    if (n.kind === 'agent') openDialog('agentConfirm')
+    if (n.kind === 'agent') openDialog('expertApproval')
     else if (n.failed) retry(n)
     else if (n.kind === 'arrive' || n.kind === 'transfer') {
       // 跳转到对应任务处理页（携带真实任务 ID），无关联任务则提示回列表
@@ -119,7 +119,7 @@ export function NotificationsPage() {
 
       <div className="mb-4 flex items-center gap-1 border-b border-slate-200 dark:border-slate-700">
         {([
-          ['all', '全部', counts.all], ['mine', '待我处理', counts.mine], ['agent', 'Agent 待确认', counts.agent], ['failed', '发送失败', counts.failed],
+          ['all', '全部', counts.all], ['mine', '待我处理', counts.mine], ['agent', 'Expert 待审批', counts.agent], ['failed', '发送失败', counts.failed],
         ] as const).map(([k, label, cnt]) => (
           <button key={k} onClick={() => setTab(k)}
             className={cn('-mb-px flex items-center gap-1.5 border-b-2 px-4 py-2.5 text-[13.5px] font-medium transition-colors',

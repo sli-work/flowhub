@@ -4,6 +4,7 @@ import { toast } from '../store/app-store'
 import { api, ApiError, getToken } from '../lib/api'
 import { Badge, PageHeader, kindIcon, type Tone } from '../components/common'
 import { cn } from '../lib/utils'
+import { DocumentViewerDrawer } from '../components/document-viewer-drawer'
 import type { DocItem } from '../types'
 
 const levelTone: Record<string, Tone> = { L1: 'suc', L2: 'info', L3: 'err' }
@@ -12,6 +13,7 @@ const scanTone: Record<string, Tone> = { 已扫描: 'suc', 含毒: 'err', 扫描
 export function DocumentsPage() {
   const [filter, setFilter] = useState<'all' | 'L1' | 'L2' | 'L3' | 'infected'>('all')
   const [docs, setDocs] = useState<DocItem[]>([])
+  const [viewer, setViewer] = useState<{ open: boolean; initialId?: string }>({ open: false })
   const fileRef = useRef<HTMLInputElement>(null)
 
   /* 接后端：GET /documents 拉取文档列表 */
@@ -63,15 +65,10 @@ export function DocumentsPage() {
     }
   }
 
-  /* 短时链接：POST /documents/{id}/link */
-  const openLink = async (d: DocItem) => {
-    try {
-      const r = await api.post<{ link: string; expire: string }>(`/api/v1/documents/${d.id}/link`)
-      toast.success(`权限代理校验通过，短时链接已生成（${r.expire}）`)
-      if (r.link) window.open(r.link, '_blank')
-    } catch (e) {
-      toast.error(e instanceof ApiError ? e.message : '生成链接失败')
-    }
+  /* 文件名点击 → 统一预览抽屉（含毒文件拦截；下载在抽屉内） */
+  const openViewer = (d: DocItem) => {
+    if (d.scan === '含毒') { toast.error('含毒文件已拦截，禁止预览与下载'); return }
+    setViewer({ open: true, initialId: d.id })
   }
 
   return (
@@ -145,7 +142,7 @@ export function DocumentsPage() {
                       <span className={cn('flex h-7 w-7 flex-none items-center justify-center rounded-md',
                         'bg-blue-50 text-blue-600 dark:bg-blue-500/15 dark:text-blue-400')}>{kindIcon(d.kind)}</span>
                       <div className="min-w-0">
-                        <div className="cursor-pointer truncate font-medium text-slate-700 hover:text-blue-600 dark:text-slate-200" onClick={() => openLink(d)}>{d.name}</div>
+                        <div className="cursor-pointer truncate font-medium text-slate-700 hover:text-blue-600 dark:text-slate-200" onClick={() => openViewer(d)}>{d.name}</div>
                         <div className="text-[11px] text-slate-400">{d.kind}</div>
                       </div>
                     </div>
@@ -189,6 +186,12 @@ export function DocumentsPage() {
           </div>
         </div>
       </div>
+      <DocumentViewerDrawer
+        open={viewer.open}
+        docs={searched.map((d) => ({ id: d.id, name: d.name, uploader: d.uploader, kind: d.kind, time: d.time }))}
+        initialDocId={viewer.initialId}
+        onClose={() => setViewer({ open: false })}
+      />
     </div>
   )
 }

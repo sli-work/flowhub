@@ -1,11 +1,16 @@
 import path from "path"
 import react from "@vitejs/plugin-react"
 import { defineConfig } from "vite"
+import { fileViewerRenderers } from "@file-viewer/vite-plugin"
 
 // https://vite.dev/config/
 export default defineConfig({
   base: './',
-  plugins: [react()],
+  plugins: [
+    react(),
+    // @file-viewer 渲染器资源（pdf worker / wasm / 字体）自托管拷贝，内网可用
+    fileViewerRenderers({ copyAssets: true }),
+  ],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),

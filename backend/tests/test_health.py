@@ -36,3 +36,41 @@ class TestHealth:
         """外部 Agent 接入的 MCP SSE 端点已挂载：未带 access key → 401 认证拦截。"""
         r = client.get("/api/v1/mcp/sse")
         assert r.status_code == 401
+
+
+class TestExternalAgentDownloads:
+    def test_downloads_require_authenticated_console_session(self, client: TestClient):
+        assert client.get("/api/v1/external-tools/mcp-config").status_code == 401
+        assert client.get("/api/v1/external-tools/skill-markdown").status_code == 401
+
+    def test_downloads_render_real_mcp_and_skill_artifacts(self, client: TestClient, org_headers: dict):
+        mcp = client.get("/api/v1/external-tools/mcp-config", headers=org_headers)
+        assert mcp.status_code == 200
+        assert "attachment" in mcp.headers["content-disposition"]
+        assert "${FLOWHUB_ACCESS_KEY}" in mcp.text
+        assert "/api/v1/mcp/sse" in mcp.text
+
+        created = client.post("/api/v1/access-keys", headers=org_headers, json={"name": "MCP Export"}).json()["data"]["key"]
+        configured = client.get(f"/api/v1/external-tools/mcp-config?key_id={created['id']}", headers=org_headers)
+        assert configured.status_code == 200
+        assert created["key"] in configured.text
+        assert "${FLOWHUB_ACCESS_KEY}" not in configured.text
+
+        skill = client.get("/api/v1/external-tools/skill-markdown", headers=org_headers)
+        assert skill.status_code == 200
+        assert skill.headers["content-type"].startswith("text/markdown")
+        assert "FlowHub MCP 操作 Skill" in skill.text
+
+
+class TestAccessKeyManagement:
+    def test_creates_lists_and_revokes_access_key(self, client: TestClient, org_headers: dict):
+        created = client.post("/api/v1/access-keys", headers=org_headers, json={"name": "Claude Desktop"})
+        assert created.status_code == 200
+        plain = created.json()["data"]["key"]["key"]
+        assert plain.startswith("sk_")
+
+        listed = client.get("/api/v1/access-keys", headers=org_headers)
+        assert listed.status_code == 200
+        item = next(key for key in listed.json()["data"]["items"] if key["name"] == "Claude Desktop")
+        assert "key" not in item
+        assert client.delete(f"/api/v1/access-keys/{item['id']}", headers=org_headers).status_code == 200

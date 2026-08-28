@@ -13,8 +13,8 @@ from flowhub_api.db.migrate import migrate
 from flowhub_api.db.session import SessionFactory, engine
 from flowhub_api.models import Base
 from flowhub_api.routes import (
-    access_keys, agents, audits, auth, dashboard, documents, matrix, notifications,
-    org, projects, search, tasks, templates, workitems,
+    access_keys, audits, auth, dashboard, documents, matrix, notifications,
+    org, projects, search, tasks, templates, workitems, experts, external_tools,
 )
 from flowhub_api.seed.init import seed_all
 
@@ -34,6 +34,8 @@ async def lifespan(_: FastAPI):
             await seed_all(session)
             from flowhub_api.services.runtime_config import load_runtime_config
             await load_runtime_config(session)
+        from flowhub_api.services.expert_runtime import setup_checkpointer
+        await setup_checkpointer()
         logger.info("数据库初始化完成（PostgreSQL 已连接）")
     except Exception as exc:  # noqa: BLE001
         logger.warning(
@@ -87,7 +89,7 @@ async def health():
     return {"status": "ok"}
 
 
-for r in (auth, org, projects, templates, workitems, tasks, matrix, access_keys, agents, documents, notifications, audits, dashboard, search):
+for r in (auth, org, projects, templates, workitems, tasks, matrix, access_keys, experts, external_tools, documents, notifications, audits, dashboard, search):
     app.include_router(r.router)
 
 # 外部 Agent 接入：MCP SSE server（/api/v1/mcp/sse，access key 认证）

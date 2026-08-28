@@ -5,7 +5,7 @@ from typing import Annotated
 from urllib.parse import quote
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, File, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,6 +32,8 @@ def _brief(d: DocItem) -> dict:
         "id": d.id, "name": d.name, "project": d.project, "version": d.version,
         "level": d.level, "scan": d.scan, "uploader": d.uploader, "size": d.size,
         "time": d.time, "kind": d.kind, "wi": d.wi,
+        # 扩展名（前端类型图标/预览能力判断用）
+        "ext": d.name.rsplit(".", 1)[-1].lower() if "." in d.name else "",
     }
 
 
@@ -66,7 +68,11 @@ async def upload_document(
     file: Annotated[UploadFile, File(...)],
     user: Annotated[User, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_db)],
-    project: str = "", kind: str = "文档", wi: str = "",
+    # 明确声明为表单字段：前端 FormData 传入的 wi/kind/project 此前被当作 query 参数忽略，
+    # 导致任务处理中上传的文档无法关联工作项
+    project: str = Form(""),
+    kind: str = Form("文档"),
+    wi: str = Form(""),
 ):
     auth = build_authorizer(user)
     auth.require("document:upload")
@@ -148,6 +154,42 @@ async def read_document_content(
         obj.release_conn()
     except Exception as exc:  # noqa: BLE001
         raise BizError(BizCode.NOT_FOUND, "文档内容不可用") from exc
+    media_type = mimetypes.guess_type(doc.name)[0] or "application/octet-stream"
+    headers = {"Content-Disposition": f"attachment; filename*=UTF-8''{quote(doc.name)}"}
+    return StreamingResponse(BytesIO(data), media_type=media_type, headers=headers)
+
+
+@router.get("/{doc_id}/download")
+async def download_document(
+    doc_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Download a document through the authenticated API boundary.
+
+    The browser cannot attach the Bearer token to a plain anchor reliably, so
+    the frontend fetches this endpoint and saves the returned Blob.
+    """
+    build_authorizer(user).require("document:download")
+    doc = await session.get(DocItem, doc_id)
+    if doc is None or doc.deleted:
+        raise BizError(BizCode.NOT_FOUND, "文档不存在")
+    if doc.scan == "含毒":
+        raise BizError(BizCode.FORBIDDEN, "文档含毒，已禁止访问")
+    if not doc.object_name:
+        raise BizError(BizCode.NOT_FOUND, "文档内容不可用")
+    minio = get_minio()
+    if minio is None:
+        raise BizError(BizCode.NOT_FOUND, "文档存储不可用")
+    try:
+        obj = minio.get_object(get_settings().minio_bucket, doc.object_name)
+        data = obj.read()
+        obj.close()
+        obj.release_conn()
+    except Exception as exc:  # noqa: BLE001
+        raise BizError(BizCode.NOT_FOUND, "文档内容不可用") from exc
+    await AuditService(session).record(actor=user.name, action="document:download", target=doc.name, result="success")
+    await session.commit()
     media_type = mimetypes.guess_type(doc.name)[0] or "application/octet-stream"
     headers = {"Content-Disposition": f"attachment; filename*=UTF-8''{quote(doc.name)}"}
     return StreamingResponse(BytesIO(data), media_type=media_type, headers=headers)

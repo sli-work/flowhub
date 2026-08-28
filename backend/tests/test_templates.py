@@ -154,11 +154,11 @@ class TestCanvasValidate:
         assert data["ok"] is False
         assert any("回退不能指向自身" in e["message"] for e in data["errors"])
 
-    def test_validate_agent_auto_without_binding(self, client: TestClient):
-        """handler=Agent 自动 但未绑定 Agent → 校验失败。"""
+    def test_validate_expert_auto_without_binding(self, client: TestClient):
+        """handler=Expert 自动 但未绑定 Deployment → 校验失败。"""
         payload = {
             "nodes": [
-                {"id": "a", "type": "start"}, {"id": "b", "type": "task", "cfg": {"handler": "Agent 自动"}},
+                {"id": "a", "type": "start"}, {"id": "b", "type": "task", "cfg": {"handler": "Expert 自动"}},
                 {"id": "c", "type": "end"},
             ],
             "edges": [["a", "b"], ["b", "c"]], "fallbacks": [],
@@ -166,7 +166,7 @@ class TestCanvasValidate:
         r = client.post("/api/v1/templates/tpl-req/versions/v3/canvas/validate", json=payload)
         data = r.json()["data"]
         assert data["ok"] is False
-        assert any("必须绑定 Agent" in e["message"] for e in data["errors"])
+        assert any("必须绑定 Expert Deployment" in e["message"] for e in data["errors"])
 
 
 class TestPublish:

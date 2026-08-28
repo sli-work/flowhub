@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import {
-  ArrowLeft, ArrowRight, Bot, FileText, Info, Users, Plus,
-  Send, Undo2, UserPlus, PauseCircle, ShieldAlert, ChevronRight,
+  ArrowLeft, ArrowRight, Bot, ClipboardList, FileText, Info, Layers, Users, Plus,
+  Send, Sparkles, Undo2, UserPlus, PauseCircle, ShieldAlert, ChevronRight, Trash2,
 } from 'lucide-react'
 import { useApp, toast } from '../store/app-store'
 import {
@@ -9,10 +9,11 @@ import {
 } from '../components/common'
 import { SchemaForm, validateSchema, type SchemaValues } from '../components/schema-form'
 import { api, ApiError } from '../lib/api'
+import { DocumentViewerDrawer, type ViewerDoc } from '../components/document-viewer-drawer'
 import { cn } from '../lib/utils'
-import type { FormField, TaskItem, WorkItem } from '../types'
+import type { AcceptanceChecks, FormField, NodeDeliverable, TaskItem, WorkItem } from '../types'
 
-/* ---------- Agent 能力边界默认（后端无数据时兜底展示） ---------- */
+/* ---------- Expert Runtime 状态（后端无数据时兜底展示） ---------- */
 const CAPABILITY_DEFAULT: { name: string; mode: string }[] = [
   { name: 'read_context', mode: 'direct' }, { name: 'read_documents', mode: 'direct' }, { name: 'read_history', mode: 'direct' },
   { name: 'generate_content', mode: 'confirm' }, { name: 'write_form', mode: 'confirm' }, { name: 'append_form', mode: 'confirm' },
@@ -21,7 +22,22 @@ const CAPABILITY_DEFAULT: { name: string; mode: string }[] = [
   { name: 'pause_workflow', mode: 'forbid' }, { name: 'resume_workflow', mode: 'forbid' }, { name: 'close_work_item', mode: 'forbid' },
 ]
 
-interface CanvasNodeLite { id: string; label: string; type?: string; cfg?: { schema?: never[] } }
+interface CanvasNodeLite {
+  id: string
+  label: string
+  type?: string
+  cfg?: {
+    schema?: FormField[]
+    purpose?: string
+    handler?: string
+    sla?: string
+    deliverable?: NodeDeliverable
+    split?: { mode?: 'off' | 'manual' | 'ai_assist' | 'ai_auto' }
+  }
+}
+
+interface SubtaskBrief { id: string; title: string; node: string; status: string; assignee: string; due: string }
+interface SplitRow { title: string; note: string; assignee: string }
 
 function fieldLabel(schema: FormField[] | undefined, key: string): string {
   return schema?.find((field) => field.key === key)?.label ?? key
@@ -36,12 +52,23 @@ export function NodeProcessPage() {
   const [instance, setInstance] = useState<{ id: string; templateId: string; version: string; currentNode: string; state: string } | null>(null)
   const [startValues, setStartValues] = useState<Record<string, unknown>>({})
   const [candidates, setCandidates] = useState<{ name: string; dept?: string }[]>([])
-  const [curSchema, setCurSchema] = useState<never[]>([])
+  const [curSchema, setCurSchema] = useState<FormField[]>([])
   const [curNodeType, setCurNodeType] = useState<string>('')
-  const [agentCaps, setAgentCaps] = useState(CAPABILITY_DEFAULT)
+  /* 节点产出契约与拆分配置（来自画布 cfg） */
+  const [curCfg, setCurCfg] = useState<{ purpose?: string; handler?: string; sla?: string; deliverable?: NodeDeliverable; splitMode?: string }>({})
+  const [acceptance, setAcceptance] = useState<AcceptanceChecks>({})
+  /* 子任务拆分 */
+  const [subtasks, setSubtasks] = useState<SubtaskBrief[]>([])
+  const [splitOpen, setSplitOpen] = useState(false)
+  const [splitRows, setSplitRows] = useState<SplitRow[]>([{ title: '', note: '', assignee: '' }])
+  const [suggestBusy, setSuggestBusy] = useState(false)
+  const [splitBusy, setSplitBusy] = useState(false)
+  const [expertCaps] = useState(CAPABILITY_DEFAULT)
   const [flowSteps, setFlowSteps] = useState<{ name: string; status: string; assignee: string; time: string }[]>([])
   const [timeline, setTimeline] = useState<{ id: string; time: string; title: string; desc: string; by: string; kind: string }[]>([])
-  const [suggestions, setSuggestions] = useState<{ id: string; title: string; body: string; status: string; time: string; agentId: string }[]>([])
+  const [expertRuns, setExpertRuns] = useState<{ id: string; status: string; output: string; error: string; startedAt: string }[]>([])
+  const [aiFilledKeys, setAiFilledKeys] = useState<string[]>([])
+  const [fillBusy, setFillBusy] = useState(false)
   /* 继承上下文：起始表单 + 已执行前序节点表单（来自 GET /tasks/{id} upstream）；按节点折叠、默认收起 */
   type UpstreamSeg = {
     node: string; task_id?: string; values: Record<string, unknown>; assignee?: string
@@ -60,19 +87,43 @@ export function NodeProcessPage() {
     return next
   })
   const [loading, setLoading] = useState(true)
+  const [docs, setDocs] = useState<ViewerDoc[]>([])
+  const [viewer, setViewer] = useState<{ open: boolean; initialId?: string }>({ open: false })
 
-  /* 挂载：任务详情(+Agent 建议 + 继承上下文) → 工作项详情(实例/时间线) → 模板画布(流程步骤 + 当前节点表单) + 候选处理人 */
+  /* 挂载：任务详情(+Expert Run 摘要 + 继承上下文) → 工作项详情 → 模板画布。 */
   useEffect(() => {
     if (!activeTaskId) { navigate('tasks'); return }
     let curNodeId = ''
     let instRef: typeof instance = null
-    api.get<{ task: TaskItem & { nodeId?: string }; upstream?: typeof upstream; suggestions?: typeof suggestions }>(`/api/v1/tasks/${activeTaskId}`)
+    // 引擎视角配置（nodeCfg）优先；画布链路仅在其缺失时兜底
+    let engineCfgApplied = false
+    api.get<{
+      task: TaskItem & { nodeId?: string; acceptanceChecks?: AcceptanceChecks }
+      upstream?: typeof upstream
+      subtasks?: SubtaskBrief[]
+      expertRuns?: { id: string; status: string; output: string; error: string; startedAt: string }[]
+      nodeCfg?: { purpose?: string; handler?: string; sla?: string; schema?: FormField[]; deliverable?: NodeDeliverable; split?: { mode?: string } }
+    }>(`/api/v1/tasks/${activeTaskId}`)
       .then((td) => {
         setTask(td.task)
         curNodeId = td.task.nodeId ?? ''
         if (td.upstream?.length) setUpstream(td.upstream)
         else setUpstream([])
-        if (td.suggestions?.length) setSuggestions(td.suggestions)
+        if (td.expertRuns?.length) setExpertRuns(td.expertRuns)
+        setSubtasks(td.subtasks ?? [])
+        // 引擎视角的节点配置（最新 published 画布）：任务书/表单/拆分与流转校验同源
+        if (td.nodeCfg) {
+          engineCfgApplied = true
+          setCurCfg({
+            purpose: td.nodeCfg.purpose, handler: td.nodeCfg.handler, sla: td.nodeCfg.sla,
+            deliverable: td.nodeCfg.deliverable, splitMode: td.nodeCfg.split?.mode ?? 'off',
+          })
+          if (td.nodeCfg.schema?.length) setCurSchema(td.nodeCfg.schema)
+          const accList = td.nodeCfg.deliverable?.acceptance ?? []
+          if (accList.length) {
+            setAcceptance(Object.fromEntries(accList.map((item) => [item.key, { text: item.text, checked: td.task?.acceptanceChecks?.[item.key]?.checked ?? false }])))
+          } else setAcceptance({})
+        }
         return api.get<{ item: WorkItem; instance: typeof instance; startValues: Record<string, unknown>; tasks: { id: string; node: string; status: string; assignee: string; due: string }[] }>(`/api/v1/work-items/${td.task.wiId}`)
       })
       .then((wd) => {
@@ -101,6 +152,24 @@ export function NodeProcessPage() {
           const cur = canvas.nodes.find((n) => n.id === curNodeId) ?? canvas.nodes.find((n) => n.type === 'task')
           if (cur?.cfg?.schema) setCurSchema(cur.cfg.schema)
           setCurNodeType(cur?.type ?? '')
+          if (!engineCfgApplied) {
+            setCurCfg({
+              purpose: cur?.cfg?.purpose, handler: cur?.cfg?.handler, sla: cur?.cfg?.sla,
+              deliverable: cur?.cfg?.deliverable, splitMode: cur?.cfg?.split?.mode ?? 'off',
+            })
+          }
+          // 验收清单初始化（保留已有勾选快照——例如提交失败后重进页面）
+          if (!engineCfgApplied) {
+            const list = cur?.cfg?.deliverable?.acceptance ?? []
+            if (list.length) {
+              setAcceptance((prev) => {
+                if (Object.keys(prev).length) return prev
+                const next: AcceptanceChecks = {}
+                for (const item of list) next[item.key] = { text: item.text, checked: false }
+                return next
+              })
+            } else setAcceptance({})
+          }
         }
       })
       .catch((e) => toast.error(e instanceof ApiError ? e.message : '任务数据加载失败'))
@@ -108,11 +177,21 @@ export function NodeProcessPage() {
     api.get<{ users: { name: string; dept?: string }[] }>(`/api/v1/tasks/${activeTaskId}/candidates`)
       .then((d) => setCandidates(d.users))
       .catch(() => {})
-    api.get<{ items: { name: string; mode: string }[] }>('/api/v1/agents/capabilities').then((d) => { if (d.items.length) setAgentCaps(d.items) }).catch(() => {})
+    if (activeTaskId) {
+      // 当前工作项全部文档（表单上传 + Expert 生成 + 聊天产出），供预览抽屉与文档卡
+      api.get<{ items: ViewerDoc[] }>(`/api/v1/documents?wi=${activeTaskId}&page_size=100`)
+        .then((d) => setDocs(d.items))
+        .catch(() => {})
+    }
   }, [activeTaskId, navigate])
 
   const submitTask = async () => {
     if (!activeTaskId) { toast.error('暂无真实任务可提交（请先新建工作项）'); return }
+    // 验收清单：节点配置了验收标准时必须逐条勾选（后端 advance 再次强校验）
+    if (curNodeType !== 'start' && Object.keys(acceptance).length) {
+      const unchecked = Object.values(acceptance).filter((c) => !c.checked)
+      if (unchecked.length) { toast.error(`验收标准未全部确认（剩 ${unchecked.length} 项）：${unchecked[0].text}`); return }
+    }
     try {
       // 起始节点任务：表单已在发起时提交，提交时携带起始表单值，无需重填
       const form = curNodeType === 'start' ? startValues : formValues
@@ -120,7 +199,7 @@ export function NodeProcessPage() {
         next_node?: { label?: string } | null; next_assignees?: { name: string }[]
         next_task_id?: string | null; next_tasks?: { id: string; node: string }[]
         parallel?: boolean; waiting_join?: boolean; closed?: boolean
-      }>(`/api/v1/tasks/${activeTaskId}/actions`, { action: 'submit', form_values: form })
+      }>(`/api/v1/tasks/${activeTaskId}/actions`, { action: 'submit', form_values: form, acceptance_checks: acceptance })
       const next = d.next_node?.label
       const names = (d.next_assignees ?? []).map((a) => a.name).join('、')
       if (d.parallel) {
@@ -142,6 +221,31 @@ export function NodeProcessPage() {
     }
   }
 
+  /* ---------- Expert 协助填充：人工确认 → 生成全部字段（含文档）→ 回填表单供审核 ---------- */
+  const canAiFill = (
+    curNodeType === 'task'
+    && (curCfg.handler ?? '').includes('Expert')
+    && curSchema.length > 0
+    && !!activeTaskId
+    && !task?.frozen
+    && task?.status !== 'completed'
+  )
+
+  const aiFill = async () => {
+    if (!activeTaskId) return
+    if (!window.confirm('将由 Expert 生成全部表单字段（文件类产出会自动生成文档并上传），生成后可逐字段修改。确认继续？')) return
+    setFillBusy(true)
+    try {
+      const d = await api.post<{ values: Record<string, unknown>; warnings: string[]; runId: string }>(`/api/v1/tasks/${activeTaskId}/ai-fill`, {})
+      setFormValues((prev) => ({ ...prev, ...d.values }))
+      setAiFilledKeys(Object.keys(d.values))
+      if (d.warnings.length) toast.warning(`部分字段未生成：${d.warnings.join('；')}`)
+      else toast.success('Expert 已填充表单草稿，请审核后提交')
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : 'Expert 填充失败')
+    } finally { setFillBusy(false) }
+  }
+
   const requestInfo = async () => {
     if (!activeTaskId) { toast.error('暂无任务可请求补充信息'); return }
     try {
@@ -151,6 +255,45 @@ export function NodeProcessPage() {
       toast.error(e instanceof ApiError ? e.message : '请求失败')
     }
   }
+
+  /* ---------- 子任务拆分（独立流转语义） ---------- */
+  const canSplit = curNodeType === 'task' && curCfg.splitMode !== 'off' && !!activeTaskId && !task?.frozen && task?.status !== 'completed' && !task?.parentTaskId
+
+  const suggestSplit = async () => {
+    if (!activeTaskId) return
+    setSuggestBusy(true)
+    try {
+      const d = await api.post<{ proposals: { title: string; note: string; assigneeHint?: string }[]; parseError?: string }>(`/api/v1/tasks/${activeTaskId}/split-suggest`, {})
+      if (d.proposals.length) {
+        setSplitRows(d.proposals.map((p) => ({ title: p.title, note: p.note, assignee: p.assigneeHint ?? '' })))
+        toast.success(`AI 建议拆分为 ${d.proposals.length} 个子任务，请确认或修改后创建`)
+      } else {
+        toast.error(d.parseError || 'AI 未返回有效建议，请手动填写')
+      }
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : 'AI 拆分建议失败')
+    } finally { setSuggestBusy(false) }
+  }
+
+  const submitSplit = async () => {
+    if (!activeTaskId) return
+    const rows = splitRows.filter((r) => r.title.trim())
+    if (!rows.length) { toast.error('请至少填写一个子任务标题'); return }
+    setSplitBusy(true)
+    try {
+      const d = await api.post<{ children: { id: string }[] }>(`/api/v1/tasks/${activeTaskId}/split`, {
+        children: rows.map((r) => ({ title: r.title.trim(), note: r.note, assignee: r.assignee.trim() })),
+      })
+      toast.success(`已拆分为 ${d.children.length} 个子任务，均在下一节点独立流转`)
+      setSplitOpen(false)
+      // 拆分后父任务已完成：定位到第一条子线继续处理
+      if (d.children[0]?.id) openTask(d.children[0].id, task?.wiId)
+      else if (task?.wiId) openWorkItem(task.wiId)
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : '拆分失败')
+    } finally { setSplitBusy(false) }
+  }
+
 
   /* 前序节点补充信息：原处理人按该节点表单 schema 结构化追加，提交后刷新继承上下文 */
   const submitAppend = async () => {
@@ -180,7 +323,9 @@ export function NodeProcessPage() {
       ]
     : [
         { label: '认领', icon: <UserPlus className="h-4 w-4" />, disabled: true, reason: `已认领（${task?.assignee || '—'}）`, onClick: () => {} },
-        { label: '提交', icon: <Send className="h-4 w-4" />, tone: 'primary' as const, onClick: submitTask },
+        task?.status === 'pending_confirmation'
+          ? { label: '提交', icon: <Send className="h-4 w-4" />, disabled: true, reason: 'Expert 运行等待审批：批准后自动填充并流转', onClick: () => {} }
+          : { label: '提交', icon: <Send className="h-4 w-4" />, tone: 'primary' as const, onClick: submitTask },
         { label: '退回', icon: <Undo2 className="h-4 w-4" />, tone: 'danger' as const, onClick: () => openDialog('return') },
         { label: '转办', icon: <ArrowRight className="h-4 w-4" />, onClick: () => openDialog('transfer') },
         { label: '暂停流程', icon: <PauseCircle className="h-4 w-4" />, disabled: true, reason: '仅项目管理员可暂停', onClick: () => {} },
@@ -211,9 +356,9 @@ export function NodeProcessPage() {
             <Info className="h-4 w-4" />请求补充信息
           </button>
           <button className="flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-[12.5px] font-medium text-slate-600 transition-colors hover:border-blue-400 hover:text-blue-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300"
-            onClick={() => openDialog('agentConfirm')}>
-            <Bot className="h-4 w-4" />Agent 待确认
-            <span className="rounded-full bg-violet-100 px-1.5 text-[10.5px] font-semibold text-violet-700 dark:bg-violet-500/20 dark:text-violet-300">{suggestions.filter((s) => s.status !== 'applied' && s.status !== 'rejected').length}</span>
+            onClick={() => openDialog('expertApproval')}>
+            <Bot className="h-4 w-4" />Expert 待审批
+            <span className="rounded-full bg-violet-100 px-1.5 text-[10.5px] font-semibold text-violet-700 dark:bg-violet-500/20 dark:text-violet-300">{expertRuns.filter((r) => r.status === 'interrupted').length}</span>
           </button>
         </div>
       </div>
@@ -245,8 +390,102 @@ export function NodeProcessPage() {
           </div>
         </SectionCard>
 
-        {/* 中栏：表单 + 继承上下文 + Agent 结果 */}
+        {/* 中栏：任务书 + 表单 + 拆分 + 继承上下文 + Expert Run 结果 */}
         <div className="space-y-5">
+          {curNodeType !== 'start' && (curCfg.purpose || curCfg.deliverable?.instruction || task?.brief || Object.keys(acceptance).length > 0) && (
+            /* 任务书：人与 AI 共用同一份产出契约 */
+            <SectionCard title="任务书" extra={<Badge tone="cyn"><ClipboardList className="mr-1 h-3 w-3" />产出契约</Badge>} bodyClassName="p-4">
+              <div className="space-y-3 text-[12.5px] leading-relaxed text-slate-600 dark:text-slate-300">
+                {task?.brief && (
+                  <div className="rounded-lg border border-violet-200 bg-violet-50/60 p-3 dark:border-violet-500/30 dark:bg-violet-500/10">
+                    <b className="text-[11.5px] font-semibold text-violet-700 dark:text-violet-300">拆分说明（来自父任务）</b>
+                    <p className="mt-1 whitespace-pre-wrap">{task.brief}</p>
+                  </div>
+                )}
+                {curCfg.purpose && (
+                  <p><span className="font-semibold text-slate-500 dark:text-slate-400">节点目的：</span>{curCfg.purpose}</p>
+                )}
+                {curCfg.deliverable?.instruction && (
+                  <div>
+                    <div className="mb-1 flex items-center gap-1.5 font-semibold text-slate-700 dark:text-slate-200"><FileText className="h-3.5 w-3.5" />产出要求</div>
+                    <p className="whitespace-pre-wrap rounded-lg bg-slate-50 p-3 dark:bg-slate-800/60">{curCfg.deliverable.instruction}</p>
+                  </div>
+                )}
+                {Object.keys(acceptance).length > 0 && (
+                  <div>
+                    <div className="mb-1.5 flex items-center justify-between">
+                      <span className="flex items-center gap-1.5 font-semibold text-slate-700 dark:text-slate-200"><ClipboardList className="h-3.5 w-3.5" />验收标准</span>
+                      <Badge tone={Object.values(acceptance).every((c) => c.checked) ? 'suc' : 'warn'}>
+                        {Object.values(acceptance).filter((c) => c.checked).length}/{Object.keys(acceptance).length} 已确认
+                      </Badge>
+                    </div>
+                    <div className="space-y-1.5">
+                      {Object.entries(acceptance).map(([key, item]) => (
+                        <label key={key} className={cn('flex cursor-pointer items-start gap-2 rounded-lg border px-3 py-2 transition-colors',
+                          item.checked ? 'border-emerald-200 bg-emerald-50/60 dark:border-emerald-500/30 dark:bg-emerald-500/10' : 'border-slate-200 hover:border-blue-300 dark:border-slate-700')}>
+                          <input type="checkbox" className="mt-0.5" checked={item.checked}
+                            onChange={(e) => setAcceptance((prev) => ({ ...prev, [key]: { ...item, checked: e.target.checked } }))} />
+                          <span className="min-w-0">
+                            <span className={cn('block', item.checked ? 'text-emerald-700 line-through decoration-emerald-400 dark:text-emerald-300' : '')}>{item.text}</span>
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                    <p className="mt-1.5 text-[11px] text-slate-400">提交前必须逐条勾选确认；勾选记录随提交存档可审计。</p>
+                  </div>
+                )}
+                {(curCfg.deliverable?.example || curCfg.deliverable?.aiGuidance) && (
+                  <details className="rounded-lg border border-dashed border-slate-200 px-3 py-2 dark:border-slate-700">
+                    <summary className="cursor-pointer text-[11.5px] font-medium text-slate-400">参考示例 / AI 指引</summary>
+                    {curCfg.deliverable?.example && <p className="mt-1.5 whitespace-pre-wrap">{curCfg.deliverable.example}</p>}
+                    {curCfg.deliverable?.aiGuidance && <p className="mt-1.5 whitespace-pre-wrap text-[11.5px] text-slate-400">AI 指引：{curCfg.deliverable.aiGuidance}</p>}
+                  </details>
+                )}
+              </div>
+            </SectionCard>
+          )}
+
+          {(canSplit || subtasks.length > 0 || task?.parentTaskId) && curNodeType !== 'start' && (
+            /* 子任务拆分区 */
+            <SectionCard
+              title="子任务"
+              extra={
+                canSplit ? (
+                  <button
+                    className="inline-flex items-center gap-1 rounded-lg border border-blue-200 px-2.5 py-1 text-[11.5px] font-medium text-blue-600 transition-colors hover:bg-blue-50 dark:border-blue-500/30 dark:text-blue-300 dark:hover:bg-blue-500/10"
+                    onClick={() => { setSplitRows([{ title: '', note: '', assignee: '' }]); setSplitOpen(true) }}>
+                    <Layers className="h-3.5 w-3.5" />拆分子任务
+                  </button>
+                ) : null
+              }
+              bodyClassName="p-4">
+              {subtasks.length > 0 ? (
+                <div className="space-y-1.5">
+                  {subtasks.map((s) => (
+                    <div key={s.id} className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-[12px] dark:border-slate-700">
+                      <button className="min-w-0 flex-1 truncate text-left font-medium text-blue-600 hover:underline" onClick={() => openTask(s.id, task?.wiId)}>
+                        ↳ {s.title}
+                      </button>
+                      <span className="flex-none text-slate-400">{s.assignee}</span>
+                      <Badge tone={s.status === 'completed' ? 'suc' : s.status === 'pending_confirmation' ? 'orgx' : 'info'}>{s.status}</Badge>
+                    </div>
+                  ))}
+                  <p className="pt-1 text-[11px] leading-relaxed text-slate-400">
+                    子任务在下一节点独立流转；各线全部完成后工作项才会关闭。
+                  </p>
+                </div>
+              ) : canSplit ? (
+                <div className="rounded-lg border border-dashed border-slate-200 p-3.5 text-center text-[12px] leading-relaxed text-slate-400 dark:border-slate-700">
+                  本节点支持拆分为多个子任务，拆分后各子任务在<b>「{flowSteps.find((s) => s.status === 'current')?.name ?? '下一节点'}」</b>独立流转。
+                  {curCfg.splitMode === 'ai_assist' && ' 可使用 AI 建议快速生成拆分方案。'}
+                  {curCfg.splitMode === 'manual' && ' 请人工填写拆分方案。'}
+                </div>
+              ) : task?.parentTaskId ? (
+                <p className="text-[11.5px] text-slate-400">本任务是上级节点拆分出的子任务线；完成后沿流程独立流转。</p>
+              ) : null}
+            </SectionCard>
+          )}
+
           {curNodeType === 'start' ? (
             /* 起始节点：表单已在发起时提交，只读回显，不重复要求填写 */
             <SectionCard title={`${task?.node ?? '起始节点'} 表单`} extra={<Badge tone="suc">发起时已提交</Badge>}>
@@ -268,7 +507,22 @@ export function NodeProcessPage() {
               </div>
             </SectionCard>
           ) : (
-            <SectionCard title={`${task?.node ?? '当前节点'} 表单`} extra={<Badge tone="cyn">Schema 驱动 · 与画布节点一致</Badge>}>
+            <SectionCard title={`${task?.node ?? '当前节点'} 表单`} extra={
+              <div className="flex items-center gap-2">
+                {canAiFill && (
+                  <button className="inline-flex items-center gap-1 rounded-lg border border-violet-200 px-2.5 py-1 text-[11.5px] font-medium text-violet-600 transition-colors hover:bg-violet-50 disabled:opacity-50 dark:border-violet-500/30 dark:text-violet-300 dark:hover:bg-violet-500/10"
+                    disabled={fillBusy} onClick={() => void aiFill()}>
+                    <Bot className="h-3.5 w-3.5" />{fillBusy ? 'Expert 生成中…' : 'Expert 协助填充'}
+                  </button>
+                )}
+                <Badge tone="cyn">Schema 驱动 · 与画布节点一致</Badge>
+              </div>
+            }>
+              {aiFilledKeys.length > 0 && (
+                <div className="mb-3 flex items-center gap-1.5 rounded-lg border border-violet-200 bg-violet-50/60 px-3 py-2 text-[11.5px] text-violet-700 dark:border-violet-500/30 dark:bg-violet-500/10 dark:text-violet-300">
+                  <Bot className="h-3.5 w-3.5 flex-none" />Expert 已填充 {aiFilledKeys.length} 个字段（含生成的文档），请逐项审核修改后提交。
+                </div>
+              )}
               <SchemaForm fields={curSchema} values={formValues} onChange={setFormValues} workItemId={task?.wiId} project={task?.project} />
               {curSchema.length === 0 && (
                 <div className="rounded-lg border border-dashed border-slate-200 p-3.5 text-center text-[12px] text-slate-400 dark:border-slate-700">
@@ -350,50 +604,62 @@ export function NodeProcessPage() {
             </SectionCard>
           )}
 
-          {/* Agent 结果 */}
-          <SectionCard title="Agent 结果" extra={<button className="text-xs font-medium text-blue-600 hover:underline" onClick={() => openDialog('agentConfirm')}>Agent 确认</button>}>
+          {/* Expert Run 结果 */}
+          <SectionCard title="Expert Run 结果" extra={<button className="text-xs font-medium text-blue-600 hover:underline" onClick={() => openDialog('expertApproval')}>审批队列</button>}>
             <div className="space-y-3">
-              {suggestions.length === 0 && (
+              {expertRuns.length === 0 && (
                 <div className="rounded-lg border border-dashed border-slate-200 p-3.5 text-center text-[12px] text-slate-400 dark:border-slate-700">
-                  暂无 Agent 产出（可在 Agent 管理注册并激活后，在本节点调用 Agent 生成建议）
+                  暂无 Expert Run 产出（为节点绑定 Expert Deployment 后，到达节点将创建可追溯 Run 并可 AI 填充表单）
                 </div>
               )}
-              {suggestions.map((s) => (
+              {expertRuns.map((s) => (
                 <div key={s.id} className="rounded-lg border border-violet-100 bg-violet-50/50 p-3.5 dark:border-violet-500/20 dark:bg-violet-500/5">
                   <div className="flex items-center justify-between gap-2">
                     <span className="flex items-center gap-1.5 text-[12.5px] font-semibold text-violet-700 dark:text-violet-300">
-                      <Bot className="h-4 w-4" />{s.title}
+                      <Bot className="h-4 w-4" />{s.id}
                     </span>
-                    <Badge tone={s.status === 'applied' ? 'suc' : s.status === 'rejected' ? 'gry' : 'pur'}>
-                      {s.status === 'suggestion' ? '建议（未执行）' : s.status === 'applied' ? '已应用' : s.status === 'rejected' ? '已忽略' : s.status}
-                    </Badge>
+                    <Badge tone={s.status === 'succeeded' ? 'suc' : s.status === 'failed' ? 'err' : s.status === 'interrupted' ? 'orgx' : 'info'}>{s.status}</Badge>
                   </div>
-                  <p className="mt-1.5 text-[12.5px] leading-relaxed text-slate-600 dark:text-slate-300">{s.body}</p>
-                  <div className="mt-1.5 text-[11px] text-slate-400">{s.time} · Agent 结果默认是草稿或建议，不自动执行（PRD §8.4）</div>
+                  <p className="mt-1.5 whitespace-pre-wrap break-words text-[12.5px] leading-relaxed text-slate-600 dark:text-slate-300">{s.output || s.error || '（无文本输出）'}</p>
+                  <div className="mt-1.5 text-[11px] text-slate-400">{s.startedAt} · Expert Run 输出受版本和审批策略约束</div>
                 </div>
               ))}
             </div>
             <div className="mt-4 border-t border-slate-100 pt-3 dark:border-slate-800">
-              <div className="mb-2 text-[12px] font-semibold text-slate-500 dark:text-slate-400">本节点 Agent 能力配置</div>
+              <div className="mb-2 text-[12px] font-semibold text-slate-500 dark:text-slate-400">本节点 Expert Runtime 策略</div>
               <div className="flex flex-wrap gap-1.5">
-                {agentCaps.slice(0, 8).map((c) => (
+                {expertCaps.slice(0, 8).map((c) => (
                   <span key={c.name} className={cn('cap-tag', c.mode === 'direct' ? 'cap-direct' : c.mode === 'confirm' ? 'cap-confirm' : 'cap-forbid')}>
                     {c.name} · {c.mode === 'direct' ? 'direct' : c.mode === 'confirm' ? '需确认' : '禁止'}
                   </span>
                 ))}
                 <span className="cap-tag cap-forbid">submit_task · 禁止</span>
               </div>
-              <p className="mt-2 text-[11px] leading-relaxed text-slate-400">节点配置只能限制 Agent，不能扩大授权用户权限（PRD §8.3）。</p>
+              <p className="mt-2 text-[11px] leading-relaxed text-slate-400">节点配置只能限制 Expert Deployment，不能扩大授权用户权限。</p>
             </div>
           </SectionCard>
         </div>
 
         {/* 右栏：文档 + 历史 + 动作 */}
         <div className="space-y-5">
-          <SectionCard title="节点文档" bodyClassName="p-3">
-            <div className="rounded-lg border border-dashed border-slate-200 p-3.5 text-center text-[12px] text-slate-400 dark:border-slate-700">
-              当前节点暂无上传文档（可在工作项详情上传）
-            </div>
+          <SectionCard title="节点文档" extra={<Badge tone="info">{docs.length}</Badge>} bodyClassName="p-3">
+            {docs.length ? (
+              <div className="space-y-1">
+                {docs.map((d) => (
+                  <button key={d.id}
+                    className="flex w-full items-center gap-2 rounded-lg border border-slate-200 px-2.5 py-2 text-left text-[12px] transition-colors hover:border-blue-400 dark:border-slate-700"
+                    onClick={() => setViewer({ open: true, initialId: d.id })}>
+                    <FileText className="h-3.5 w-3.5 flex-none text-blue-500" />
+                    <span className="min-w-0 flex-1 truncate text-slate-600 dark:text-slate-300">{d.name}</span>
+                    <span className="flex-none text-[10.5px] text-slate-400">{d.uploader}</span>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="rounded-lg border border-dashed border-slate-200 p-3.5 text-center text-[12px] text-slate-400 dark:border-slate-700">
+                当前工作项暂无文档（表单上传 / Expert 生成后在此预览）
+              </div>
+            )}
           </SectionCard>
 
           <SectionCard title="处理历史" extra={<button className="text-xs font-medium text-blue-600 hover:underline" onClick={() => navigate('audit')}>审计</button>} bodyClassName="p-4">
@@ -432,6 +698,71 @@ export function NodeProcessPage() {
           </SectionCard>
         </div>
       </div>
+
+      <DocumentViewerDrawer open={viewer.open} docs={docs} initialDocId={viewer.initialId} onClose={() => setViewer({ open: false })} />
+
+      {/* 子任务拆分对话框：人工填写或 AI 建议预填，确认后创建并独立流转 */}
+      {splitOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => { if (!splitBusy) setSplitOpen(false) }}>
+          <div className="max-h-[86vh] w-full max-w-2xl overflow-y-auto rounded-xl border border-slate-200 bg-white p-5 shadow-l dark:border-slate-700 dark:bg-slate-900"
+            onClick={(e) => e.stopPropagation()}>
+            <div className="mb-1 flex items-center justify-between">
+              <b className="flex items-center gap-1.5 text-sm text-slate-800 dark:text-slate-100"><Layers className="h-4 w-4" />拆分「{task?.node}」为子任务</b>
+              <button className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200" onClick={() => { if (!splitBusy) setSplitOpen(false) }}>✕</button>
+            </div>
+            <p className="mb-3 text-[11.5px] leading-relaxed text-slate-400">
+              拆分后当前任务完成，各子任务在下一节点<b>独立流转</b>：各自有负责人与状态，全部完成工作项才会关闭。
+            </p>
+            <div className="space-y-2">
+              {splitRows.map((row, i) => (
+                <div key={i} className="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+                  <div className="flex items-center gap-2">
+                    <span className="flex-none text-[11px] font-semibold text-slate-400">{i + 1}</span>
+                    <input className="h-8 min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-2 text-[12.5px] outline-none focus:border-blue-500 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200"
+                      placeholder={`子任务 ${i + 1} 标题`} value={row.title}
+                      onChange={(e) => setSplitRows((prev) => prev.map((r, j) => (j === i ? { ...r, title: e.target.value } : r)))} />
+                    <input className="h-8 w-32 rounded-md border border-slate-300 bg-white px-2 text-[12px] outline-none focus:border-blue-500 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200"
+                      list="split-assignee-options" placeholder="负责人（可选）" value={row.assignee}
+                      onChange={(e) => setSplitRows((prev) => prev.map((r, j) => (j === i ? { ...r, assignee: e.target.value } : r)))} />
+                    <datalist id="split-assignee-options">
+                      {candidates.map((c) => <option key={c.name} value={c.name} />)}
+                      <option value={currentUser?.name ?? ''} />
+                    </datalist>
+                    {splitRows.length > 1 && (
+                      <button className="flex-none text-slate-300 hover:text-red-500" onClick={() => setSplitRows((prev) => prev.filter((_, j) => j !== i))}>
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                  </div>
+                  <textarea className="mt-1.5 min-h-[40px] w-full rounded-md border border-slate-300 bg-white p-2 text-[12px] outline-none focus:border-blue-500 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200"
+                    placeholder="该子任务的具体要求说明（将作为子任务的任务书）" value={row.note}
+                    onChange={(e) => setSplitRows((prev) => prev.map((r, j) => (j === i ? { ...r, note: e.target.value } : r)))} />
+                </div>
+              ))}
+            </div>
+            <div className="mt-3 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <button className="inline-flex items-center gap-1 rounded-lg border border-violet-200 px-3 py-1.5 text-[12px] font-medium text-violet-600 transition-colors hover:bg-violet-50 disabled:opacity-50 dark:border-violet-500/30 dark:text-violet-300 dark:hover:bg-violet-500/10"
+                  disabled={suggestBusy} onClick={() => void suggestSplit()}>
+                  <Sparkles className="h-3.5 w-3.5" />{suggestBusy ? 'AI 分析中…' : 'AI 建议拆分'}
+                </button>
+                <button className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-3 py-1.5 text-[12px] font-medium text-slate-600 hover:border-blue-400 hover:text-blue-600 disabled:opacity-50 dark:border-slate-600 dark:text-slate-300"
+                  disabled={splitRows.length >= 10} onClick={() => setSplitRows((prev) => [...prev, { title: '', note: '', assignee: '' }])}>
+                  <Plus className="h-3.5 w-3.5" />添加子任务
+                </button>
+              </div>
+              <div className="flex gap-2">
+                <button className="rounded-lg border border-slate-300 px-3.5 py-1.5 text-[12px] font-medium text-slate-600 hover:border-slate-400 disabled:opacity-50 dark:border-slate-600 dark:text-slate-300"
+                  disabled={splitBusy} onClick={() => setSplitOpen(false)}>取消</button>
+                <button className="rounded-lg bg-blue-600 px-3.5 py-1.5 text-[12px] font-medium text-white shadow-sm transition-colors hover:bg-blue-700 disabled:opacity-50"
+                  disabled={splitBusy} onClick={() => void submitSplit()}>
+                  {splitBusy ? '创建中…' : `创建 ${splitRows.filter((r) => r.title.trim()).length || ''} 个子任务`}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 前序节点补充信息弹窗：按该节点表单 schema 结构化追加 */}
       {appendFor && (

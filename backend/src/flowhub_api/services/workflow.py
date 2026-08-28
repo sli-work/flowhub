@@ -1,5 +1,4 @@
 """工作流服务（docs/04 §5）：发起实例 / 节点动作 / 绑定解析自动分配。"""
-import asyncio
 import re
 from datetime import UTC, datetime, timedelta
 
@@ -11,6 +10,7 @@ from flowhub_api.models import (
     GlobalTemplate, NodeAssignment, NotificationItem, Project, TaskItem, User, WorkItem, WorkflowInstance,
 )
 from flowhub_api.seed.init import gen_id
+from flowhub_api.services.audit import AuditService
 
 
 class WorkflowService:
@@ -172,6 +172,57 @@ class WorkflowService:
                     candidates[u.id] = u
         return list(candidates.values())
 
+    # ---------- 产出契约 ----------
+    @staticmethod
+    def deliverable_of(cfg: dict | None) -> dict:
+        """规范化节点产出契约：兼容旧 cfg.output（单行文本）懒迁移为 instruction。"""
+        cfg = cfg or {}
+        deliverable = dict(cfg.get("deliverable") or {})
+        if not deliverable.get("instruction"):
+            legacy = str(cfg.get("output") or "").strip()
+            if legacy and legacy != "待配置":
+                deliverable["instruction"] = legacy
+        deliverable.setdefault("instruction", "")
+        deliverable.setdefault("acceptance", [])
+        deliverable.setdefault("aiGuidance", "")
+        deliverable.setdefault("example", "")
+        return deliverable
+
+    async def build_task_brief(self, task: TaskItem, tpl: GlobalTemplate) -> str:
+        """结构化任务书：节点目的 + 产出要求 + 验收标准 + 表单字段 + 上游摘要。
+        人（处理页任务书）与 AI（Expert 运行 prompt）消费同一份契约。"""
+        cfg = await self._node_cfg_of(tpl, task.node_id) or {}
+        deliverable = self.deliverable_of(cfg)
+        wi = await self.session.get(WorkItem, task.wi_id)
+        lines: list[str] = [f"# 任务书：{task.node}"]
+        if task.brief:
+            lines.append(f"## 拆分说明\n{task.brief}")
+        purpose = str(cfg.get("purpose") or "").strip()
+        if purpose:
+            lines.append(f"## 节点目的\n{purpose}")
+        if deliverable["instruction"]:
+            lines.append(f"## 产出要求\n{deliverable['instruction']}")
+        acceptance = deliverable.get("acceptance") or []
+        if acceptance:
+            items = "\n".join(f"- {item.get('text', '')}" + (f"（{item.get('hint')}）" if item.get("hint") else "") for item in acceptance)
+            lines.append(f"## 验收标准（逐条确认）\n{items}")
+        schema = cfg.get("schema") or []
+        if schema:
+            fields = "\n".join(
+                f"- {f.get('label', f.get('key'))}（{f.get('key')}，{'必填' if f.get('required') else '选填'}）：{f.get('placeholder') or ''}"
+                for f in schema
+            )
+            lines.append(f"## 需要填写的产出字段\n{fields}\n请严格按字段 key 组织结果 JSON。")
+        if deliverable.get("aiGuidance"):
+            lines.append(f"## AI 执行指引\n{deliverable['aiGuidance']}")
+        if wi is not None and (wi.start_values or {}).get("title"):
+            sv = wi.start_values or {}
+            summary = "；".join(f"{k}={str(v)[:80]}" for k, v in sv.items() if k != "labels" and str(v).strip())[:600]
+            lines.append(f"## 工作项背景\n{summary}")
+        if deliverable.get("example"):
+            lines.append(f"## 参考示例\n{deliverable['example']}")
+        return "\n\n".join(lines)
+
     # ---------- 节点动作 ----------
     @staticmethod
     def _match_cond(form: dict, cond: dict | None) -> bool:
@@ -207,22 +258,40 @@ class WorkflowService:
         current = task.node_id
         cur_node = next((n for n in nodes if n.get("id") == current), None)
         out_edges = [b for a, b in edges if a == current]
+        cfg = await self._node_cfg_of(tpl, current) or {}
+        values = task.form_values or {}
+
+        # 产出契约统一校验：所有产出节点的 schema 必填项 + 验收清单强制勾选（此前仅 end 节点校验）
+        for field in cfg.get("schema") or []:
+            key = field.get("key", "")
+            if field.get("required") and not str(values.get(key, "") or "").strip():
+                raise BizError(BizCode.VALIDATION, f"「{field.get('label', key)}」为必填")
+        acceptance = self.deliverable_of(cfg).get("acceptance") or []
+        if acceptance:
+            checks = task.acceptance_checks or {}
+            missing = [item.get("text", "") for item in acceptance if not (checks.get(item.get("key", "")) or {}).get("checked")]
+            if missing:
+                raise BizError(BizCode.VALIDATION, f"验收标准未全部确认：{'；'.join(missing)}")
 
         # 结束节点是最终人工确认任务：处理人提交（含 Schema 必填校验）后才关闭流程。
+        # 多线流程（子任务独立流转）：仅当工作项下没有其他未终结任务时才关闭，否则保持进行中。
         if cur_node and cur_node.get("type") == "end":
-            cfg = await self._node_cfg_of(tpl, current) or {}
-            values = task.form_values or {}
-            for field in cfg.get("schema") or []:
-                key = field.get("key", "")
-                if field.get("required") and not str(values.get(key, "") or "").strip():
-                    raise BizError(BizCode.VALIDATION, f"「{field.get('label', key)}」为必填")
             task.status = "completed"
+            open_left = (await self.session.execute(
+                select(TaskItem).where(
+                    TaskItem.wi_id == task.wi_id,
+                    TaskItem.id != task.id,
+                    TaskItem.status.not_in(["completed", "cancelled"]),
+                )
+            )).scalars().first()
             wi = await self.session.get(WorkItem, task.wi_id)
-            if wi:
+            if wi and open_left is None:
                 wi.status = "closed"
                 wi.progress = cur_node.get("label", "完成")
-            await self._sync_instance(task.wi_id, node_id=current, state="closed")
-            return {"next_node": cur_node, "next_assignees": [], "closed": True}
+                await self._sync_instance(task.wi_id, node_id=current, state="closed")
+            elif wi:
+                wi.progress = f"{cur_node.get('label', '完成')}（等待其他分支）"
+            return {"next_node": cur_node, "next_assignees": [], "closed": open_left is None}
 
         # 决策节点：多条出边按提交表单值选一条分支（无匹配走默认分支）
         if cur_node and cur_node.get("type") == "decision" and len(out_edges) > 1:
@@ -270,11 +339,13 @@ class WorkflowService:
         # 并行汇合：目标节点有多条入边（来自多个分支）→ 必须所有分支任务完成后才生成
         join_sources = {a for a, b in edges if b == next_id}
         if len(join_sources) > 1:
-            done_nodes = {
-                x.node_id for x in (await self.session.execute(
-                    select(TaskItem).where(TaskItem.wi_id == task.wi_id, TaskItem.status == "completed")
-                )).scalars().all()
-            }
+            # 子任务独立流转：汇合只等待同一子线 root 的分支，不能与其他子线互相满足/阻塞。
+            join_stmt = select(TaskItem).where(TaskItem.wi_id == task.wi_id, TaskItem.status == "completed")
+            if task.lineage_root_id:
+                join_stmt = join_stmt.where(TaskItem.lineage_root_id == task.lineage_root_id)
+            else:
+                join_stmt = join_stmt.where(TaskItem.lineage_root_id.is_(None))
+            done_nodes = {x.node_id for x in (await self.session.execute(join_stmt)).scalars().all()}
             done_nodes.add(current)
             missing = sorted(join_sources - done_nodes)
             if missing:
@@ -302,49 +373,149 @@ class WorkflowService:
             "tasks": [new_task],
         }
 
-    async def _spawn_task(self, task: TaskItem, project: Project, tpl: GlobalTemplate, next_node: dict) -> TaskItem:
-        """为 next_node 生成任务（绑定解析处理人 + Agent 节点触发），并落库（flush）。"""
+    # ---------- 节点表单 AI 填充 ----------
+    async def fill_task_from_run(self, task: TaskItem, run, cfg: dict, actor: User) -> tuple[dict, list[str]]:
+        """把 Expert Run 产出解析为节点表单值（upload 字段自动生成工作项文档）。"""
+        from flowhub_api.services.expert_runtime import parse_schema_output
+
+        schema = cfg.get("schema") or []
+        values, warnings = parse_schema_output(schema, run.output or "")
+        for f in schema:
+            key, ftype = f.get("key", ""), f.get("type", "")
+            if ftype in ("upload", "file") and isinstance(values.get(key), str) and values[key].strip():
+                from flowhub_api.services.expert_runtime import create_document_from_text
+
+                ref = await create_document_from_text(
+                    self.session, wi_id=task.wi_id, project=task.project,
+                    name=f"{f.get('label', key)}-{task.id}", content=values[key], uploader=actor,
+                )
+                values[key] = [ref]
+        return values, warnings
+
+    def acceptance_checks_ai(self, cfg: dict) -> dict:
+        """Expert 自动路径：验收清单由 AI 自评逐条确认（快照标注来源，供人复核）。"""
+        acceptance = self.deliverable_of(cfg).get("acceptance") or []
+        return {item.get("key", ""): {"text": item.get("text", ""), "checked": True, "source": "ai"} for item in acceptance}
+
+    async def ai_autosubmit(self, task: TaskItem, project: Project, tpl: GlobalTemplate, cfg: dict, run, actor: User) -> dict:
+        """Expert 自动节点：填充表单后自动流转。返回 advance 结果。"""
+        values, warnings = await self.fill_task_from_run(task, run, cfg, actor)
+        task.form_values = values
+        task.acceptance_checks = self.acceptance_checks_ai(cfg)
+        await AuditService(self.session).record(
+            actor=f"Expert({actor.name})", action="task:ai_submit", target=f"{task.id} · {task.node}",
+            result="success", after={"runId": run.id, "warnings": warnings[:5]},
+        )
+        return await self.advance(task, project, tpl)
+
+    async def resolve_template_for_task(self, task: TaskItem) -> tuple[Project | None, GlobalTemplate | None]:
+        project = (await self.session.execute(select(Project).where(Project.name == task.project))).scalar_one_or_none()
+        tpl = None
+        if project:
+            binding = next((b for b in project.template_bindings if b.status == "active"), None)
+            if binding:
+                tpl = await self.session.get(GlobalTemplate, binding.template_id)
+        return project, tpl
+
+    async def _spawn_task(self, task: TaskItem, project: Project, tpl: GlobalTemplate, next_node: dict, *, title: str = "", assignee: str = "", due_hours: int | None = None, brief: str = "", parent_task_id: str | None = None, lineage_root_id: str | None = None) -> TaskItem:
+        """为 next_node 生成任务并触发绑定的 Expert Deployment。
+        覆盖参数供子任务拆分使用（标题/负责人/截止/拆分说明/父链接）。"""
         next_id = next_node.get("id", "")
-        assignees = await self.resolve_node_assignees(project.id, tpl.id, next_id)
+        resolved = await self.resolve_node_assignees(project.id, tpl.id, next_id)
+        due = timedelta(hours=due_hours) if due_hours else timedelta(hours=48)
         new_task = TaskItem(
-            id=self.next_task_id(), wi_id=task.wi_id, title=task.title, project=project.name,
+            id=self.next_task_id(), wi_id=task.wi_id,
+            title=title or task.title, project=project.name,
             node=next_node.get("label", next_id), node_id=next_id, type=task.type,
             priority=task.priority, status="assigned",
-            assignee=assignees[0].name if assignees else "待分配",
-            due=(datetime.now(UTC) + timedelta(hours=48)).strftime("%m-%d %H:%M"),
-            sla_hours=48,
+            assignee=assignee or (resolved[0].name if resolved else "待分配"),
+            due=(datetime.now(UTC) + due).strftime("%m-%d %H:%M"),
+            sla_hours=due_hours or 48,
+            parent_task_id=parent_task_id,
+            # 普通后继沿用当前子线 root；拆分起点首次创建时稍后以自身 id 固定 root
+            lineage_root_id=lineage_root_id if lineage_root_id is not None else task.lineage_root_id,
+            brief=brief,
         )
-        # Agent 节点集成（docs/05 §5）：节点 handler 含「需要 Agent 协助」（Agent 自动 / 人工+可协助）
-        # 且绑定 Agent → 置 agent_pending + 触发预分析/确认流。
+        # Expert Deployment 节点集成：画布绑定一个已发布的 Deployment。
+        # 运行时读取固定 Version，由 LangGraph 执行并在写入操作处 interrupt。
         canvas_cfg = await self._node_cfg_of(tpl, next_id)
         handler = (canvas_cfg or {}).get("handler", "")
-        agent_cfg = (canvas_cfg or {}).get("agent") or {}
-        if agent_cfg.get("agentId"):
-            new_task.agent_pending = True
-            if handler in ("Agent 自动", "人工 + Agent 可协助"):
-                from flowhub_api.services.agent_runner import trigger_node_invocation
+        expert_cfg = (canvas_cfg or {}).get("expert") or {}
+        deployment_id = expert_cfg.get("expertDeploymentId")
+        if deployment_id:
+            new_task.expert_pending = True
+            self.session.add(new_task)
+            await self.session.flush()
+            # 运行发起人：节点处理人优先；待分配时回退工作项创建人，再回退系统管理员
+            expert_user = (await self.session.execute(select(User).where(User.name == new_task.assignee))).scalar_one_or_none()
+            if expert_user is None:
+                wi_row = await self.session.get(WorkItem, new_task.wi_id)
+                if wi_row is not None:
+                    expert_user = (await self.session.execute(select(User).where(User.name == wi_row.creator))).scalar_one_or_none()
+            if expert_user is None:
+                expert_user = (await self.session.execute(
+                    select(User).join(User.roles).where(User.name == "系统管理员")
+                )).scalars().first()
+            from flowhub_api.services.expert_runtime import start_deployment_run
 
-                # 先落库新任务（同一会话 flush），确认请求才能查到该任务
-                self.session.add(new_task)
-                await self.session.flush()
-                if handler == "Agent 自动":
-                    new_task.status = "pending_confirmation"
-                    # Agent 自动：同步等待确认请求创建（与任务同一事务、立即可见可批准）
-                    await trigger_node_invocation(
-                        agent_cfg["agentId"], new_task.id,
-                        {**canvas_cfg, "id": next_id, "label": next_node.get("label", next_id)},
-                        new_task.assignee, session=self.session,
-                    )
-                else:
-                    # 人工 + Agent 可协助：预分析后台执行，不阻塞人工处理
-                    asyncio.create_task(trigger_node_invocation(
-                        agent_cfg["agentId"], new_task.id,
-                        {**canvas_cfg, "id": next_id, "label": next_node.get("label", next_id)},
-                        new_task.assignee,
-                    ))
+            # AI 拿到与人相同的产出契约任务书，而不是「id·标题·节点」三件套
+            brief_text = await self.build_task_brief(new_task, tpl)
+            if handler == "Expert 自动":
+                new_task.status = "pending_confirmation"
+            run = await start_deployment_run(
+                self.session, deployment_id, brief_text,
+                expert_user, write_intent=handler == "Expert 自动", task_id=new_task.id,
+            )
+            if handler == "Expert 自动" and run.status == "failed":
+                # 运行失败：回退人工兜底（保持待办可见，不再阻塞提交）
+                new_task.status = "assigned"
         self.session.add(new_task)
         await self.session.flush()
         return new_task
+
+    async def split_task(self, task: TaskItem, project: Project, tpl: GlobalTemplate, children: list[dict], actor: User) -> list[TaskItem]:
+        """把当前任务拆分为多个子任务：父任务完成（不 advance），子任务在下一节点独立流转。
+        约束：仅任务类型节点、单出边、cfg.split.mode != off；每个子任务带独立标题/负责人/截止/需求说明。"""
+        nodes = tpl.nodes
+        edges = await self._edges_of(tpl)
+        current = task.node_id
+        cur_node = next((n for n in nodes if n.get("id") == current), None)
+        if not cur_node or cur_node.get("type") != "task":
+            raise BizError(BizCode.VALIDATION, "仅任务类型节点支持拆分子任务", http_status=422)
+        cfg = await self._node_cfg_of(tpl, current) or {}
+        split_mode = (cfg.get("split") or {}).get("mode", "off")
+        if split_mode == "off":
+            raise BizError(BizCode.VALIDATION, "该节点未开启子任务拆分（请在流程画布节点配置中开启）", http_status=422)
+        out_edges = [b for a, b in edges if a == current]
+        if len(out_edges) != 1:
+            raise BizError(BizCode.VALIDATION, "拆分要求节点只有一条后继分支；多分支请使用并行分叉节点", http_status=422)
+        next_node = next((n for n in nodes if n.get("id") == out_edges[0]), {"id": out_edges[0], "label": out_edges[0]})
+
+        created: list[TaskItem] = []
+        for child in children:
+            spawned = await self._spawn_task(
+                task, project, tpl, next_node,
+                title=child.get("title", ""), assignee=child.get("assignee", ""),
+                due_hours=child.get("due_hours"), brief=child.get("note", ""),
+                parent_task_id=task.id,
+            )
+            # 每个拆分起点就是一条独立子线 root；其后的普通流转会一直继承此标识
+            spawned.lineage_root_id = spawned.id
+            created.append(spawned)
+        task.status = "completed"
+        task.form_values = {
+            "__split__": True,
+            "split_to": [{"task": c.id, "title": c.title, "assignee": c.assignee} for c in created],
+        }
+        wi = await self.session.get(WorkItem, task.wi_id)
+        if wi:
+            wi.progress = f"{next_node.get('label', '')}（{len(created)} 条子线）"
+        await AuditService(self.session).record(
+            actor=actor.name, action="task:split", target=f"{task.id} · {task.node}",
+            result="success", after={"children": [c.id for c in created]},
+        )
+        await self.session.flush()
+        return created
 
     async def _edges_of(self, tpl: GlobalTemplate) -> list[tuple[str, str]]:
         """模板主边：优先取最新 published 版本的画布边（引擎按已发布流程执行），
@@ -374,6 +545,24 @@ class WorkflowService:
                 return [(e[0], e[1]) for e in canvas.edges]
         ids = [n.get("id") for n in tpl.nodes]
         return list(zip(ids, ids[1:])) if len(ids) > 1 else []
+
+    async def latest_published_canvas_nodes(self, tpl: GlobalTemplate) -> list[dict]:
+        """引擎视角的节点配置来源：最新 published 画布（与 _node_cfg_of/_edges_of 同一选择规则）。"""
+        from flowhub_api.models import TemplateCanvas, TemplateVersion
+
+        rows = (await self.session.execute(
+            select(TemplateVersion).where(TemplateVersion.template_id == tpl.id)
+        )).scalars().all()
+        ordered = sorted(
+            rows, key=lambda tv: int(tv.version[1:]) if tv.version[1:].isdigit() else 0, reverse=True,
+        )
+        for tv in ordered:
+            if tv.status != "published":
+                continue
+            canvas = await self.session.get(TemplateCanvas, tv.id)
+            if canvas and canvas.nodes:
+                return canvas.nodes
+        return []
 
     async def _node_cfg_of(self, tpl: GlobalTemplate, node_id: str) -> dict | None:
         """读模板指定节点的 cfg（含 agent 绑定）：优先取最新 published 版本画布，

@@ -19,7 +19,7 @@ class TestAuthenticationBypass:
             ("get", "/api/v1/projects"), ("get", "/api/v1/tasks"),
             ("get", "/api/v1/work-items"), ("get", "/api/v1/templates/pool"),
             ("get", "/api/v1/documents"), ("get", "/api/v1/notifications"),
-            ("get", "/api/v1/agents"), ("get", "/api/v1/matrix/roles"),
+            ("get", "/api/v1/experts"), ("get", "/api/v1/matrix/roles"),
             ("get", "/api/v1/org/users"), ("get", "/api/v1/audits"),
             ("get", "/api/v1/dashboard/overview"), ("get", "/api/v1/search"),
             ("get", "/api/v1/auth/me"),
@@ -68,8 +68,12 @@ class TestPrivilegeEscalation:
         r = client.delete("/api/v1/documents/d1", headers=dev_headers)
         assert r.status_code == 403
 
-    def test_dev_cannot_register_agent(self, client: TestClient, dev_headers: dict):
+    def test_retired_agent_api_is_removed(self, client: TestClient, dev_headers: dict):
         r = client.post("/api/v1/agents/register", headers=dev_headers, json={"name": "x"})
+        assert r.status_code == 404
+
+    def test_dev_cannot_create_expert(self, client: TestClient, dev_headers: dict):
+        r = client.post("/api/v1/experts", headers=dev_headers, json={"name": "x", "slug": "x"})
         assert r.status_code == 403
 
     def test_dev_cannot_export_audits(self, client: TestClient, dev_headers: dict):
@@ -90,9 +94,9 @@ class TestSensitiveInfo:
         r = client.get("/api/v1/org/users", headers=org_headers)
         assert "password" not in r.text and "secret" not in r.text.lower()
 
-    def test_agent_list_no_secret_hash(self, client: TestClient, org_headers: dict):
-        r = client.get("/api/v1/agents", headers=org_headers)
-        assert "secret" not in r.text.lower()
+    def test_provider_list_no_secret(self, client: TestClient, org_headers: dict):
+        r = client.get("/api/v1/providers", headers=org_headers)
+        assert "api_key" not in r.text.lower()
 
     def test_openapi_no_secret_leak(self, client: TestClient):
         r = client.get("/openapi.json")

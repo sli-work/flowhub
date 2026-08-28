@@ -1,4 +1,4 @@
-"""Agent 模型 API Key 加密工具（Fernet 对称加密）+ 文档短时链接 token。
+"""Provider API Key 加密工具（Fernet 对称加密）+ 文档短时链接 token。
 
 密钥由 `agent_key_encrypt_secret`（或回退 `secret_key`）经 sha256 派生：
 32 字节摘要 → urlsafe_base64 → 44 字符合法 Fernet key。
@@ -15,7 +15,7 @@ from flowhub_api.core.response import BizCode, BizError
 
 def _fernet_key() -> bytes:
     s = get_settings()
-    secret = s.agent_key_encrypt_secret or s.secret_key or "flowhub-agent-key"
+    secret = s.agent_key_encrypt_secret or s.secret_key or "flowhub-provider-key"
     return base64.urlsafe_b64encode(hashlib.sha256(secret.encode("utf-8")).digest())
 
 
@@ -35,6 +35,6 @@ def decrypt_secret(token: str) -> str:
     except (InvalidToken, ValueError):
         raise BizError(
             BizCode.FORBIDDEN,
-            "Agent API Key 解密失败（加密密钥可能已变更），请在创建页重新录入",
+            "Provider API Key 解密失败（加密密钥可能已变更），请在 Provider 管理中重新录入",
             http_status=500,
         )

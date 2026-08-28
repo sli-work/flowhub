@@ -65,6 +65,10 @@ class TestUpload:
 
 
 class TestLinkAndContent:
+    def test_download_requires_bearer_auth(self, client: TestClient):
+        r = client.get("/api/v1/documents/d1/download")
+        assert r.status_code == 401
+
     def test_create_link(self, client: TestClient, leader_headers: dict):
         r = client.post("/api/v1/documents/d1/link", headers=leader_headers)
         assert r.status_code == 200

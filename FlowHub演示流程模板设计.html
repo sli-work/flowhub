@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FlowHub 演示流程模板设计</title>
+<style>
+  :root {
+    --fh-blue: #2563eb; --fh-blue-dark: #1e40af; --expert-violet: #7c3aed;
+    --teal: #0d9488; --amber: #d97706; --red: #dc2626;
+    --slate-50: #f8fafc; --slate-100: #f1f5f9; --slate-200: #e2e8f0;
+    --slate-600: #475569; --slate-800: #1e293b; --slate-900: #0f172a;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif; background: var(--slate-50); color: var(--slate-800); line-height: 1.7; }
+  .page { max-width: 1080px; margin: 0 auto; padding: 0 32px 80px; }
+
+  .cover { background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 55%, #312e81 100%); color: #fff; padding: 80px 56px 64px; margin: 0 -32px 40px; position: relative; overflow: hidden; }
+  .cover::after { content: ""; position: absolute; right: -120px; top: -120px; width: 420px; height: 420px; border-radius: 50%; background: radial-gradient(circle, rgba(124,58,237,.35), transparent 70%); }
+  .cover .logo { display: inline-flex; align-items: center; gap: 10px; font-weight: 700; font-size: 18px; }
+  .cover .logo-dot { width: 34px; height: 34px; border-radius: 9px; background: linear-gradient(135deg,#3b82f6,#7c3aed); display:flex; align-items:center; justify-content:center; }
+  .cover h1 { font-size: 40px; font-weight: 800; margin: 24px 0 12px; }
+  .cover .sub { font-size: 17px; color: #c7d2fe; max-width: 760px; }
+  .cover .meta { margin-top: 28px; display: flex; gap: 24px; flex-wrap: wrap; font-size: 14px; color: #93c5fd; }
+  .cover .meta b { color: #fff; }
+
+  h2 { font-size: 26px; font-weight: 800; color: var(--slate-900); margin: 48px 0 8px; padding-bottom: 10px; border-bottom: 3px solid var(--fh-blue); display: inline-block; }
+  h3 { font-size: 19px; font-weight: 700; color: var(--slate-900); margin: 28px 0 10px; }
+  h4 { font-size: 15px; font-weight: 700; color: var(--fh-blue-dark); margin: 18px 0 8px; }
+  p { margin: 10px 0; }
+  .lead { font-size: 16px; color: var(--slate-600); }
+  .section-note { color: var(--slate-600); font-size: 13.5px; margin-bottom: 14px; }
+
+  .card { background: #fff; border: 1px solid var(--slate-200); border-radius: 14px; padding: 20px 24px; margin: 12px 0; box-shadow: 0 1px 3px rgba(15,23,42,.05); }
+  .tpl-card { border-left: 5px solid var(--fh-blue); }
+  .tpl-card.hl { border-left-color: var(--expert-violet); }
+
+  table { width: 100%; border-collapse: collapse; margin: 10px 0 20px; font-size: 13px; background: #fff; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--slate-200); vertical-align: top; }
+  th { background: var(--slate-100); color: var(--slate-900); font-weight: 700; white-space: nowrap; }
+  tr:hover td { background: #f8fafc; }
+
+  .badge { display: inline-block; padding: 1px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+  .b-green { background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; }
+  .b-blue { background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; }
+  .b-violet { background: #f5f3ff; color: #6d28d9; border: 1px solid #ddd6fe; }
+  .b-amber { background: #fffbeb; color: #b45309; border: 1px solid #fde68a; }
+  .b-slate { background: var(--slate-100); color: var(--slate-600); border: 1px solid var(--slate-200); }
+
+  .flow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 12px 0 8px; }
+  .flow-step { background: #fff; border: 1px solid var(--slate-200); border-radius: 10px; padding: 7px 13px; font-size: 13px; font-weight: 600; color: var(--slate-800); box-shadow: 0 1px 2px rgba(15,23,42,.06); white-space: nowrap; }
+  .flow-step.hl { border-color: var(--expert-violet); color: #5b21b6; background: #faf5ff; }
+  .flow-step.ai { border-color: var(--fh-blue); color: var(--fh-blue-dark); background: #eff6ff; }
+  .flow-arrow { color: var(--slate-400); font-weight: 700; }
+
+  .demo-note { border-left: 4px solid var(--teal); background: #f0fdfa; padding: 10px 16px; margin: 10px 0; border-radius: 0 10px 10px 0; font-size: 13.5px; color: #134e4a; }
+  .demo-note b { color: #0f766e; }
+  .tip { border-left: 4px solid var(--amber); background: #fffbeb; padding: 10px 16px; margin: 10px 0; border-radius: 0 10px 10px 0; font-size: 13.5px; color: #78350f; }
+
+  .toc { background: #fff; border: 1px solid var(--slate-200); border-radius: 14px; padding: 22px 28px; margin: 16px 0 32px; }
+  .toc h3 { margin: 0 0 10px; font-size: 15px; color: var(--slate-600); text-transform: uppercase; letter-spacing: 1px; }
+  .toc ol { padding-left: 22px; }
+  .toc li { margin: 5px 0; font-size: 14px; }
+  .toc a { color: var(--fh-blue-dark); text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 800px) { .grid-2 { grid-template-columns: 1fr; } }
+  .comb-card { background: #fff; border: 1px solid var(--slate-200); border-radius: 12px; padding: 16px 18px; }
+  .comb-card h4 { margin-top: 0; }
+  .comb-card p { font-size: 13.5px; color: var(--slate-600); margin: 6px 0 0; }
+
+  .footer { margin-top: 56px; padding-top: 22px; border-top: 1px solid var(--slate-200); color: var(--slate-600); font-size: 13px; text-align: center; }
+</style>
+</head>
+<body>
+
+<div class="cover">
+  <div class="logo"><span class="logo-dot">FH</span> FlowHub 演示流程模板设计</div>
+  <h1>4 套可落地演示流程模板</h1>
+  <p class="sub">基于系统画布真实配置项设计（节点类型 / 表单 Schema / 处理人 / SLA / Expert 绑定 / 决策分支），可直接照配。覆盖需求、变更、问题三类业务 + 非研发场景，融入人机协同与外部智能体接力核心卖点。</p>
+  <div class="meta">
+    <span>配套：<b>FlowHub 产品介绍与客户讲解</b></span>
+    <span>日期：<b>2026-08-27</b></span>
+    <span>用途：<b>客户现场演示</b></span>
+  </div>
+</div>
+
+<div class="page">
+
+<div class="toc">
+  <h3>Contents · 目录</h3>
+  <ol>
+    <li><a href="#quick">模板配置速查</a>（节点类型 / 配置字段 / 发布校验）</li>
+    <li><a href="#tpl1">模板 1：客户需求变更流程</a>（推荐首演）</li>
+    <li><a href="#tpl2">模板 2：合同审批流程</a>（多级审批 + AI 预审）</li>
+    <li><a href="#tpl3">模板 3：缺陷问题处理流程</a>（SLA + AI 诊断 + 外部智能体接力 ⭐）</li>
+    <li><a href="#tpl4">模板 4：新员工入职流程</a>（非研发场景 + 并行）</li>
+    <li><a href="#comb">演示组合建议</a>（15/45 分钟 · 按客户类型）</li>
+    <li><a href="#steps">录入步骤</a>（画布操作）</li>
+  </ol>
+</div>
+
+<h2 id="quick">〇、模板配置速查</h2>
+
+<h3>节点类型（画布 9 种）</h3>
+<table>
+  <tr><th style="width:16%">类型</th><th style="width:18%">含义</th><th>用途</th></tr>
+  <tr><td><code>start</code></td><td>开始</td><td>每个流程唯一入口，承载起始表单（startSchema）</td></tr>
+  <tr><td><code>task</code></td><td>任务</td><td>单人/角色处理，可绑表单 Schema、SLA、处理人</td></tr>
+  <tr><td><code>decision</code></td><td>决策</td><td>分支判断，按表单字段条件路由（eq / ne / contains）</td></tr>
+  <tr><td><code>parallel_split</code></td><td>并行分叉</td><td>拆成多路并行</td></tr>
+  <tr><td><code>parallel_join</code></td><td>并行汇合</td><td>多路汇合后流程收敛</td></tr>
+  <tr><td><code>acceptance</code></td><td>验收</td><td>结果验收（通过 / 不通过）</td></tr>
+  <tr><td><code>closure</code></td><td>闭环确认</td><td>流程闭环确认</td></tr>
+  <tr><td><code>timer</code></td><td>定时</td><td>定时触发 / 等待</td></tr>
+  <tr><td><code>end</code></td><td>结束</td><td>流程终点</td></tr>
+</table>
+
+<h3>节点配置字段（属性面板）</h3>
+<table>
+  <tr><th style="width:20%">字段</th><th>说明</th></tr>
+  <tr><td><b>处理人 handler</b></td><td>指定用户或按角色/技能匹配（如"开发人员-前端"）</td></tr>
+  <tr><td><b>SLA</b></td><td>节点时限（默认 24h），超时自动标记预警</td></tr>
+  <tr><td><b>表单 Schema</b></td><td>input / textarea / select / multiselect / radio / date / number / upload / file</td></tr>
+  <tr><td><b>Expert 绑定</b></td><td>节点挂载已发布的 Expert Deployment（AI 自动处理）</td></tr>
+  <tr><td><b>决策分支</b></td><td>{ 目标节点: { field, op: eq/ne/contains, value } } + 默认分支</td></tr>
+  <tr><td><b>输出 output</b></td><td>本节点产出说明（写入任务上下文，供下游继承）</td></tr>
+</table>
+<p class="tip"><b>发布前置校验（6 项）</b>：开始/结束节点存在 · 无孤立节点 · 决策分支条件完整 · 任务节点处理人已绑定 · Expert 节点已绑定已发布 Deployment。</p>
+
+<h2 id="tpl1">模板 1：客户需求变更流程（推荐首演）</h2>
+<div class="card tpl-card">
+  <p style="font-size:13.5px;"><span class="badge b-blue">requirement</span> <b>演示价值</b>：画布建模 + AI 辅助起草 + 决策分支 + 并行分叉 + 验收闭环——最能体现"流程引擎 × AI 专家"</p>
+  <h4>流程总览</h4>
+  <div class="flow">
+    <span class="flow-step">开始</span><span class="flow-arrow">→</span>
+    <span class="flow-step">需求受理</span><span class="flow-arrow">→</span>
+    <span class="flow-step ai">需求分析 · AI 辅助</span><span class="flow-arrow">→</span>
+    <span class="flow-step">技术评审 · 决策</span><span class="flow-arrow">→</span>
+    <span class="flow-step">开发实现 · 并行分叉</span><span class="flow-arrow">→</span>
+    <span class="flow-step">并行汇合</span><span class="flow-arrow">→</span>
+    <span class="flow-step">验收</span><span class="flow-arrow">→</span>
+    <span class="flow-step hl">闭环确认</span><span class="flow-arrow">→</span>
+    <span class="flow-step">结束</span>
+  </div>
+  <p style="font-size:12.5px; color:#64748b;">评审"打回" → 回退到需求分析重新走</p>
+  <h4>起始表单（startSchema）</h4>
+  <table>
+    <tr><th style="width:22%">字段</th><th style="width:14%">类型</th><th style="width:10%">必填</th><th>说明</th></tr>
+    <tr><td>需求标题</td><td>input</td><td>✅</td><td></td></tr>
+    <tr><td>需求描述</td><td>textarea</td><td>✅</td><td></td></tr>
+    <tr><td>优先级</td><td>radio</td><td>✅</td><td>P0 / P1 / P2 / P3</td></tr>
+    <tr><td>期望上线日期</td><td>date</td><td></td><td></td></tr>
+    <tr><td>涉及模块</td><td>multiselect</td><td></td><td>前端 / 后端 / 数据 / 文档</td></tr>
+  </table>
+  <h4>节点规格</h4>
+  <table>
+    <tr><th style="width:13%">节点</th><th style="width:12%">类型</th><th style="width:14%">处理人</th><th style="width:8%">SLA</th><th style="width:30%">表单字段</th><th>Expert / 分支</th></tr>
+    <tr><td>需求受理</td><td>task</td><td>项目经理</td><td>8h</td><td>需求来源(select)；受理结论(radio: 受理/打回)</td><td></td></tr>
+    <tr><td>需求分析</td><td>task</td><td>产品经理</td><td>24h</td><td>分析结论(textarea)；影响范围(multiselect)；方案要点(textarea)</td><td><span class="badge b-violet">Expert：需求分析师</span>（AI 汇总上下文、起草方案，人确认后采纳）</td></tr>
+    <tr><td>技术评审</td><td>decision</td><td>架构师</td><td>24h</td><td>评审结论(radio: 通过/打回/降级)；意见(textarea)</td><td>通过→开发实现；打回→需求分析；降级→开发实现；默认→开发实现</td></tr>
+    <tr><td>开发实现</td><td>parallel_split</td><td>—</td><td>—</td><td></td><td>两路：前端开发 / 后端开发</td></tr>
+    <tr><td>前端开发</td><td>task</td><td>开发-前端</td><td>48h</td><td>实现说明(textarea)；代码评审链接(input)</td><td></td></tr>
+    <tr><td>后端开发</td><td>task</td><td>开发-后端</td><td>48h</td><td>实现说明(textarea)；接口文档链接(input)</td><td></td></tr>
+    <tr><td>并行汇合</td><td>parallel_join</td><td>—</td><td>—</td><td></td><td></td></tr>
+    <tr><td>验收</td><td>acceptance</td><td>需求提出方</td><td>24h</td><td>验收结论(radio: 通过/不通过)；备注(textarea)</td><td></td></tr>
+    <tr><td>闭环确认</td><td>closure</td><td>项目经理</td><td>8h</td><td>闭环结论(radio: 确认关闭/需补充)；说明(textarea)</td><td></td></tr>
+  </table>
+  <div class="demo-note"><b>演示要点：</b>① 画布"拖拽建模 + 发布校验"，强调"流程是资产不是文档"；② 需求分析节点 AI 起草、人确认——现场点开人机协同；③ 评审选"打回"，流程回退重走——状态流转与留痕；④ 并行分叉两路推进、汇合收敛；⑤ 收尾看审计中心，人 + AI 全部动作可追溯。</div>
+</div>
+
+<h2 id="tpl2">模板 2：合同审批流程（多级审批 + AI 预审）</h2>
+<div class="card tpl-card">
+  <p style="font-size:13.5px;"><span class="badge b-blue">change</span> <b>演示价值</b>：多级审批链 + Expert 风险预审 + 通知触达——讲"AI 把关、人决策"</p>
+  <h4>流程总览</h4>
+  <div class="flow">
+    <span class="flow-step">开始</span><span class="flow-arrow">→</span>
+    <span class="flow-step">合同发起</span><span class="flow-arrow">→</span>
+    <span class="flow-step ai">法务预审 · AI 辅助</span><span class="flow-arrow">→</span>
+    <span class="flow-step">部门负责人审批</span><span class="flow-arrow">→</span>
+    <span class="flow-step">财务审批</span><span class="flow-arrow">→</span>
+    <span class="flow-step">法务终审</span><span class="flow-arrow">→</span>
+    <span class="flow-step hl">归档</span><span class="flow-arrow">→</span>
+    <span class="flow-step">结束</span>
+  </div>
+  <h4>起始表单（startSchema）</h4>
+  <table>
+    <tr><th style="width:22%">字段</th><th style="width:14%">类型</th><th style="width:10%">必填</th><th>说明</th></tr>
+    <tr><td>合同名称</td><td>input</td><td>✅</td><td></td></tr>
+    <tr><td>合同类型</td><td>select</td><td>✅</td><td>采购 / 销售 / 服务 / 保密</td></tr>
+    <tr><td>合同金额</td><td>number</td><td>✅</td><td>万元</td></tr>
+    <tr><td>对方单位</td><td>input</td><td>✅</td><td></td></tr>
+    <tr><td>合同期限</td><td>date</td><td>✅</td><td></td></tr>
+    <tr><td>合同文件</td><td>upload</td><td>✅</td><td>走文档校验链（扩展名/MIME/病毒扫描）</td></tr>
+    <tr><td>紧急程度</td><td>radio</td><td></td><td>普通 / 加急</td></tr>
+  </table>
+  <h4>节点规格</h4>
+  <table>
+    <tr><th style="width:15%">节点</th><th style="width:12%">类型</th><th style="width:15%">处理人</th><th style="width:8%">SLA</th><th style="width:34%">表单字段</th><th>Expert / 分支</th></tr>
+    <tr><td>合同发起</td><td>task</td><td>业务发起人</td><td>4h</td><td>合同要点(textarea)；风险自评(radio: 低/中/高)</td><td></td></tr>
+    <tr><td>法务预审</td><td>task</td><td>法务专员</td><td>24h</td><td>风险等级(radio)；风险条款(multiselect)；审查意见(textarea)</td><td><span class="badge b-violet">Expert：合同审查专家</span>（AI 摘要合同、识别风险条款，结果与人工表单同页呈现）</td></tr>
+    <tr><td>部门负责人审批</td><td>task</td><td>部门负责人</td><td>24h</td><td>审批结论(radio: 同意/退回)；意见(textarea)</td><td></td></tr>
+    <tr><td>财务审批</td><td>task</td><td>财务人员</td><td>24h</td><td>付款条款确认(radio)；预算匹配(radio)；意见(textarea)</td><td></td></tr>
+    <tr><td>法务终审</td><td>task</td><td>法务负责人</td><td>24h</td><td>终审结论(radio: 通过/打回)</td><td></td></tr>
+    <tr><td>归档</td><td>closure</td><td>合同管理员</td><td>8h</td><td>归档编号(input)；归档备注(textarea)</td><td></td></tr>
+  </table>
+  <div class="demo-note"><b>演示要点：</b>① 合同文件上传走校验链 + 病毒扫描 + L2 敏感级——文档中心联动；② 法务预审节点 AI 先出风险预审报告，法务在此基础上签字；③ 每级审批完成，通知中心实时推送到钉钉/企微并可跳转；④ 扩展：金额 &gt; 100 万可加决策分支"加签总经理"。</div>
+</div>
+
+<h2 id="tpl3">模板 3：缺陷问题处理流程（SLA + AI 诊断 + 外部智能体接力 ⭐）</h2>
+<div class="card tpl-card hl">
+  <p style="font-size:13.5px;"><span class="badge b-blue">issue</span> <b>演示价值</b>：⭐ 核心卖点三合一——SLA 超时预警、AI 自动诊断、<b>外部智能体接力节点处理</b></p>
+  <h4>流程总览</h4>
+  <div class="flow">
+    <span class="flow-step">开始</span><span class="flow-arrow">→</span>
+    <span class="flow-step">问题登记</span><span class="flow-arrow">→</span>
+    <span class="flow-step ai">AI 初步诊断 · 自动</span><span class="flow-arrow">→</span>
+    <span class="flow-step">人工复核 · 决策</span><span class="flow-arrow">→</span>
+    <span class="flow-step">内部修复 · 并行分叉</span><span class="flow-arrow">→</span>
+    <span class="flow-step">回归验证</span><span class="flow-arrow">→</span>
+    <span class="flow-step hl">关闭</span><span class="flow-arrow">→</span>
+    <span class="flow-step">结束</span>
+  </div>
+  <p style="font-size:12.5px; color:#64748b;">复核结论为"转外部智能体"时，走 ⭐ 外部智能体接力节点 → 回归验证</p>
+  <h4>起始表单（startSchema）</h4>
+  <table>
+    <tr><th style="width:22%">字段</th><th style="width:14%">类型</th><th style="width:10%">必填</th><th>说明</th></tr>
+    <tr><td>问题标题</td><td>input</td><td>✅</td><td></td></tr>
+    <tr><td>严重程度</td><td>radio</td><td>✅</td><td>P0 / P1 / P2 / P3</td></tr>
+    <tr><td>问题描述</td><td>textarea</td><td>✅</td><td></td></tr>
+    <tr><td>影响模块</td><td>multiselect</td><td></td><td></td></tr>
+    <tr><td>发生环境</td><td>select</td><td></td><td>生产 / 测试 / 预发布</td></tr>
+    <tr><td>截图 / 日志</td><td>upload</td><td></td><td></td></tr>
+  </table>
+  <h4>节点规格</h4>
+  <table>
+    <tr><th style="width:16%">节点</th><th style="width:12%">类型</th><th style="width:14%">处理人</th><th style="width:8%">SLA</th><th style="width:30%">表单字段</th><th>Expert / 分支</th></tr>
+    <tr><td>问题登记</td><td>task</td><td>运维 / 客服</td><td>2h</td><td>问题分类(select)；初步影响评估(radio: 高/中/低)</td><td></td></tr>
+    <tr><td>AI 初步诊断</td><td>task</td><td>—（AI 自动）</td><td>15min</td><td>诊断结论(textarea)；疑似根因(multiselect)；排查建议(textarea)；知识库引用</td><td><span class="badge b-violet">Expert：故障诊断专家</span>（检索知识库、生成诊断报告，直接执行）</td></tr>
+    <tr><td>人工复核</td><td>decision</td><td>技术负责人</td><td>4h</td><td>复核结论(radio: 内部修复/转外部智能体/关闭)；意见(textarea)</td><td>内部修复→修复任务；<b>转外部智能体→外部智能体接力</b>；关闭→结束；默认→修复任务</td></tr>
+    <tr><td>外部智能体接力</td><td>task</td><td>外部智能体（演示）</td><td>24h</td><td>处理结果(textarea)；回传说明(textarea)</td><td>⭐ 外部智能体通过 MCP 自动获取活动节点+继承上下文，处理后经 task.submit 自动回传，流程自动推进</td></tr>
+    <tr><td>修复任务</td><td>parallel_split</td><td>—</td><td>—</td><td></td><td>两路：模块 A 修复 / 模块 B 修复</td></tr>
+    <tr><td>模块 A 修复</td><td>task</td><td>开发-模块A</td><td>24h</td><td>修复说明(textarea)；验证步骤(textarea)</td><td></td></tr>
+    <tr><td>模块 B 修复</td><td>task</td><td>开发-模块B</td><td>24h</td><td>修复说明(textarea)；验证步骤(textarea)</td><td></td></tr>
+    <tr><td>回归验证</td><td>acceptance</td><td>问题提出人</td><td>24h</td><td>验证结论(radio: 通过/未修复)；备注(textarea)</td><td></td></tr>
+    <tr><td>关闭</td><td>closure</td><td>运维负责人</td><td>8h</td><td>关闭确认(radio)；复盘要点(textarea)</td><td></td></tr>
+  </table>
+  <div class="demo-note"><b>演示要点 ⭐：</b>① SLA 预警——AI 诊断节点 SLA 设 15 分钟，演示超时红标与"我的任务"预警；② AI 自动诊断——P0 问题进来 AI 直接产出带知识库引用的诊断报告，"AI 先干活"；③ 人工复核——技术负责人看报告后决策，"人把关"；④ <b>重头戏：外部智能体接力</b>——复核选"转外部智能体"，演示外部智能体拉取该节点上下文（活动节点 + 继承链条）→ 处理 → 自动回传结果 → 流程自动推进到回归验证。强调：上下文自动获取、结果自动回传、全程留痕，边界与内部专家一致。</div>
+</div>
+
+<h2 id="tpl4">模板 4：新员工入职流程（非研发场景 + 并行）</h2>
+<div class="card tpl-card">
+  <p style="font-size:13.5px;"><span class="badge b-blue">requirement</span> <b>演示价值</b>：业务人员也能建模；多部门并行 + 通知触达——展示平台普适性</p>
+  <h4>流程总览</h4>
+  <div class="flow">
+    <span class="flow-step">开始</span><span class="flow-arrow">→</span>
+    <span class="flow-step">入职申请</span><span class="flow-arrow">→</span>
+    <span class="flow-step">HR 审核</span><span class="flow-arrow">→</span>
+    <span class="flow-step">并行分叉<br><small style="color:#64748b;">IT 账号 / 行政工位 / 导师</small></span><span class="flow-arrow">→</span>
+    <span class="flow-step">并行汇合</span><span class="flow-arrow">→</span>
+    <span class="flow-step hl">入职确认</span><span class="flow-arrow">→</span>
+    <span class="flow-step">结束</span>
+  </div>
+  <h4>起始表单（startSchema）</h4>
+  <table>
+    <tr><th style="width:22%">字段</th><th style="width:14%">类型</th><th style="width:10%">必填</th><th>说明</th></tr>
+    <tr><td>姓名</td><td>input</td><td>✅</td><td></td></tr>
+    <tr><td>部门</td><td>select</td><td>✅</td><td>按组织同步的部门树</td></tr>
+    <tr><td>岗位</td><td>input</td><td>✅</td><td></td></tr>
+    <tr><td>职级</td><td>select</td><td>✅</td><td></td></tr>
+    <tr><td>入职日期</td><td>date</td><td>✅</td><td></td></tr>
+    <tr><td>联系方式</td><td>input</td><td>✅</td><td></td></tr>
+    <tr><td>Offer 文件</td><td>upload</td><td></td><td></td></tr>
+  </table>
+  <h4>节点规格</h4>
+  <table>
+    <tr><th style="width:16%">节点</th><th style="width:13%">类型</th><th style="width:15%">处理人</th><th style="width:8%">SLA</th><th>表单字段</th></tr>
+    <tr><td>入职申请</td><td>task</td><td>用人部门负责人</td><td>8h</td><td>招聘渠道(select)；薪酬范围(number)；期望到岗(input)</td></tr>
+    <tr><td>HR 审核</td><td>task</td><td>HR 专员</td><td>24h</td><td>背调结论(radio)；Offer 金额(number)；审核意见(textarea)</td></tr>
+    <tr><td>IT 账号开通</td><td>task</td><td>IT 支持</td><td>24h</td><td>企业邮箱(input 自动生成)；系统权限(multiselect: ERP/OA/代码库)</td></tr>
+    <tr><td>行政工位安排</td><td>task</td><td>行政专员</td><td>24h</td><td>工位号(input)；电脑型号(select)；门禁权限(radio)</td></tr>
+    <tr><td>导师分配</td><td>task</td><td>部门主管</td><td>8h</td><td>导师姓名(input)；培养计划(textarea)</td></tr>
+    <tr><td>入职确认</td><td>closure</td><td>HR 专员</td><td>8h</td><td>入职确认(radio)；资料检查表(multiselect)</td></tr>
+  </table>
+  <div class="demo-note"><b>演示要点：</b>① "这个流程不是研发搭的，是 HR 自己拖出来的"——强调零代码建模；② 三路并行（IT / 行政 / 导师）同时推进、汇合收敛；③ 每完成一步钉钉/企微通知直达当事人与 HR——通知中心四渠道。</div>
+</div>
+
+<h2 id="comb">演示组合建议</h2>
+<div class="grid-2">
+  <div class="comb-card">
+    <h4>⏱️ 15 分钟精华</h4>
+    <p>模板 1（首演）+ 模板 3（重头戏）。先让客户理解"流程 + AI 专家"基本盘，再用缺陷流程亮出 SLA、AI 诊断、外部智能体接力三板斧。</p>
+  </div>
+  <div class="comb-card">
+    <h4>⏱️ 45 分钟完整</h4>
+    <p>模板 1 → 2 → 3 → 4。建模（1）→ 审批与 AI 预审（2）→ 智能运维（3）→ 业务普适（4），从"技术场景"讲到"人人可用"。</p>
+  </div>
+  <div class="comb-card">
+    <h4>🏛️ 客户是管理层</h4>
+    <p>模板 2 + 模板 3。多级审批 + AI 把关 + 审计，讲"管得住、可追溯"。</p>
+  </div>
+  <div class="comb-card">
+    <h4>💻 客户是 IT / 技术</h4>
+    <p>模板 3 + 模板 1。外部智能体接力 + 画布建模，讲"开放、可集成"。</p>
+  </div>
+</div>
+
+<h2 id="steps">录入步骤（画布操作）</h2>
+<div class="card">
+  <ol style="padding-left:22px; font-size:14px; color:#475569;">
+    <li>「流程模板」→ 新建模板（选择类型）→ 打开发布前校验清单。</li>
+    <li>画布拖入节点 → 连线（开始 → … → 结束）。</li>
+    <li>每个 task / decision / acceptance / closure 节点：配置处理人（用户或角色/技能）、SLA、表单 Schema、输出说明。</li>
+    <li>需求分析 / 法务预审 / AI 诊断节点：在 Expert 中心确认对应 Expert 已发布，节点属性面板绑定其 Deployment。</li>
+    <li>决策节点：配置分支条件与默认分支。</li>
+    <li>点击"发布校验"，按提示补齐（处理人未绑定 / Expert 未绑定 / 分支不完整等），发布。</li>
+    <li>「项目列表」→ 绑定该模板 → 新建工作项 → 按 startSchema 填写 → 发起流程。</li>
+  </ol>
+</div>
+
+<div class="footer">
+  FlowHub 演示流程模板设计 · 基于画布真实配置项（CanvasNode 节点类型与 cfg 字段）· 讲解口径与《FlowHub 产品介绍与客户讲解》一致
+</div>
+
+</div>
+</body>
+</html>

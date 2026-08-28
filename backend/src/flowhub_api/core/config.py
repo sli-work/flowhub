@@ -41,7 +41,7 @@ class Settings(BaseSettings):
     bootstrap_admin_password: str = "Admin@123456"
     bootstrap_admin_name: str = "系统管理员"
 
-    # Agent 模型 API Key 加密（Fernet key 派生；留空回退 secret_key）
+    # Provider API Key 加密（Fernet key 派生；留空回退 secret_key）
     agent_key_encrypt_secret: str = ""
 
     # ---------- 通知渠道（docs/06）：钉钉 / 企微机器人 webhook + 邮件 SMTP ----------

@@ -1,5 +1,5 @@
 """领域模型：工作项 / 流程实例 / 任务（docs/01 §3-4、docs/04）。"""
-from sqlalchemy import JSON, Boolean, Enum, ForeignKey, Integer, String
+from sqlalchemy import JSON, Boolean, Enum, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from flowhub_api.db.session import Base
@@ -71,10 +71,18 @@ class TaskItem(Base):
     due: Mapped[str] = mapped_column(String(32), default="")
     sla_hours: Mapped[int] = mapped_column(Integer, default=24)
     overdue: Mapped[bool] = mapped_column(Boolean, default=False)
-    agent_pending: Mapped[bool] = mapped_column(Boolean, default=False)
+    expert_pending: Mapped[bool] = mapped_column(Boolean, default=False)
     source: Mapped[str | None] = mapped_column(String(128), nullable=True)
     # 提交时的表单值（节点 schema）
     form_values: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # 子任务拆分：parent_task_id 指向拆分时的父任务（普通列不加 FK，避免删除顺序约束）
+    parent_task_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    # 子线根任务：拆分得到的每条子线固定一个 root，后续流转/并行汇合按该 root 隔离
+    lineage_root_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    # 拆分子任务携带的需求说明；处理页「任务书」与 AI 简报优先展示
+    brief: Mapped[str] = mapped_column(Text, default="")
+    # 提交时验收清单勾选快照 {key: {text, checked}}，模板后续修改不影响历史审计
+    acceptance_checks: Mapped[dict] = mapped_column(JSON, default=dict)
 
     work_item: Mapped["WorkItem"] = relationship(back_populates="tasks")
 

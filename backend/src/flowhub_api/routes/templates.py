@@ -382,7 +382,7 @@ def _sync_tpl_nodes(tpl: GlobalTemplate, nodes: list) -> None:
 
 
 def _validate_canvas(payload: dict) -> list[dict]:
-    """发布校验核心（docs/04 §7）：开始/结束数量、入出边、悬空、回退自指、Agent 绑定。"""
+    """发布校验核心：开始/结束数量、入出边、悬空、回退自指、Expert Deployment 绑定。"""
     nodes = payload.get("nodes", [])
     edges = payload.get("edges", [])
     fallbacks = payload.get("fallbacks", [])
@@ -407,13 +407,24 @@ def _validate_canvas(payload: dict) -> list[dict]:
             errors.append({"node_id": f, "message": "回退边引用不存在的节点"})
         if f == t:
             errors.append({"node_id": f, "message": "回退不能指向自身"})
-    # Agent 绑定校验：handler=「Agent 自动」的节点必须绑定 Agent（docs/05 §5）
+    # Expert 自动节点必须绑定已发布的 Expert Deployment。
     for n in nodes:
         nid = n.get("id")
-        handler = (n.get("cfg") or {}).get("handler", "")
-        agent_cfg = (n.get("cfg") or {}).get("agent") or {}
-        if handler == "Agent 自动" and not agent_cfg.get("agentId"):
-            errors.append({"node_id": nid, "message": "「Agent 自动」节点必须绑定 Agent（属性面板配置）"})
+        cfg = n.get("cfg") or {}
+        handler = cfg.get("handler", "")
+        expert_cfg = cfg.get("expert") or {}
+        if handler == "Expert 自动" and not expert_cfg.get("expertDeploymentId"):
+            errors.append({"node_id": nid, "message": "「Expert 自动」节点必须绑定 Expert Deployment（属性面板配置）"})
+        # 子任务拆分约束：仅任务节点、单出边；AI 自动拆分必须绑定 Expert Deployment
+        split_mode = (cfg.get("split") or {}).get("mode", "off")
+        if split_mode in ("manual", "ai_assist", "ai_auto"):
+            label = n.get("label", nid)
+            if n.get("type") != "task":
+                errors.append({"node_id": nid, "message": f"「{label}」：仅任务类型节点支持子任务拆分"})
+            elif len([e for e in edges if e[0] == nid]) != 1:
+                errors.append({"node_id": nid, "message": f"「{label}」：拆分要求该节点只有一条后继分支（多分支请用并行分叉）"})
+            if split_mode == "ai_auto" and not expert_cfg.get("expertDeploymentId"):
+                errors.append({"node_id": nid, "message": f"「{label}」：AI 自动拆分必须绑定 Expert Deployment"})
     return errors
 
 
@@ -623,8 +634,20 @@ def _default_req_v3_canvas(vid: str) -> TemplateCanvas:
                "schema": [f("verdict", "评审结论", "select", True, {"options": [{"label": "通过", "value": "pass"}, {"label": "有条件通过", "value": "pass_with_cond"}, {"label": "不通过", "value": "reject"}]}),
                           f("opinion", "评审意见", "textarea", True, {"placeholder": "有条件通过时须写明条件"}),
                           f("record", "评审记录", "upload", False, {"hint": "会议纪要 / 签到 / 录音（可选）"})]},
+        "n2": {"typeLine": "TASK · 分析", "purpose": "澄清需求边界与验收口径，形成结构化分析结论。",
+               "handler": "人工", "fallback": "需求提交", "sla": "48 小时", "output": "需求分析结论",
+               "deliverable": {"instruction": "输出需求分析结论：背景、范围、非目标、关键风险。",
+                               "acceptance": [],
+                               "aiGuidance": "结合工作项背景补充遗漏的分析维度；结论需可直接用于拆分。"},
+               "split": {"mode": "ai_assist"},
+               "schema": [f("conclusion", "分析结论", "textarea", True, {"placeholder": "背景 / 范围 / 非目标 / 风险"})]},
         "n4": {"typeLine": "TASK · 子工作项", "purpose": "将需求拆分为可交付子工作项，父项仅在必需子项完成后才可继续。",
-               "handler": "人工", "fallback": "需求提交", "sla": "48 小时", "output": "子工作项",
+               "handler": "人工", "fallback": "需求提交", "sla": "48 小时",
+               "output": "子工作项",
+               "deliverable": {"instruction": "将需求按模块拆解为可独立交付的子工作项，说明各子项负责人建议与完成顺序；本节点之后进入并行开发分支。",
+                               "acceptance": [],
+                               "aiGuidance": ""},
+               "split": {"mode": "manual"},
                "schema": [f("subitems", "子项列表", "textarea", True, {"placeholder": "每行一个子工作项：名称 / 负责人 / 截止时间", "hint": "必需子项完成后父项才可继续（PRD §7.1）"}),
                           f("deps", "依赖关系", "textarea", False, {"placeholder": "子项间依赖，如 B 依赖 A"})]},
         "n5": {"typeLine": "TASK · 技能: backend", "purpose": "实现后端能力并提交交付物。", "handler": "人工", "fallback": "需求拆分", "sla": "72 小时", "output": "接口文档",

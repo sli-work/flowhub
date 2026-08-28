@@ -101,7 +101,7 @@ DEMO_WORK_ITEMS = [
 DEMO_TASKS = [
     {"id": "T-2026-0912", "wi": "REQ-2026-0241", "title": "订单中心：周末值班分派规则优化", "project": "订单中心",
      "node": "测试", "node_id": "n7", "type": "requirement", "priority": "P1", "status": "in_progress",
-     "assignee": "张伟", "due": "08-18 10:00", "sla": 48, "agent_pending": True},
+      "assignee": "张伟", "due": "08-18 10:00", "sla": 48, "expert_pending": True},
     {"id": "T-2026-0913", "wi": "ISSUE-2026-0520", "title": "生产环境：导出报表偶发超时 30s+", "project": "报表服务",
      "node": "二线分析", "node_id": "i3", "type": "issue", "priority": "P0", "status": "waiting_for_information",
      "assignee": "张伟", "due": "08-16 12:00", "sla": 24, "overdue": True},
@@ -116,7 +116,7 @@ DEMO_TASKS = [
      "assignee": "张伟", "due": "09-01 18:00", "sla": 48},
     {"id": "T-2026-0917", "wi": "REQ-2026-0255", "title": "Agent 操作确认记录导出", "project": "Agent 平台",
      "node": "需求提交", "node_id": "n1", "type": "requirement", "priority": "P2", "status": "pending_confirmation",
-     "assignee": "张伟", "due": "08-28 18:00", "sla": 48, "agent_pending": True},
+      "assignee": "张伟", "due": "08-28 18:00", "sla": 48, "expert_pending": True},
     {"id": "T-2026-0918", "wi": "ISSUE-2026-0517", "title": "文件预览偶现 403：短时链接过期", "project": "文档服务",
      "node": "验证", "node_id": "i6", "type": "issue", "priority": "P2", "status": "accepted",
      "assignee": "郑直", "due": "08-15 18:00", "sla": 24},
@@ -144,34 +144,6 @@ DEMO_DOCUMENTS = [
      "uploader": "张伟", "size": "240KB", "time": "08-12 11:28", "kind": "问题报告", "wi": "ISSUE-2026-0509"},
     {"id": "d10", "name": "分派规则伪代码.txt", "project": "订单中心", "version": "v1", "level": "L2", "scan": "已扫描",
      "uploader": "钱多多", "size": "8KB", "time": "08-15 15:47", "kind": "代码片段", "wi": "REQ-2026-0241"},
-]
-
-# ---------- Agent ----------
-DEMO_AGENTS = [
-    {"id": "a1", "name": "FlowBot-DA", "code": "agent_da_8f3k", "desc": "数据分析助手：读上下文、生成分析结论、填写表单",
-     "status": "active", "scope": "订单中心", "bindings": "REQ-2026-0238 · 需求分析", "owner": "张伟",
-     "calls": 482, "success_rate": 96.4, "avg_ms": 2400, "updated": "08-16"},
-    {"id": "a2", "name": "FlowBot-TEST", "code": "agent_test_x7q2", "desc": "测试助手：生成测试用例与缺陷建议",
-     "status": "active", "scope": "订单中心 / 工单平台", "bindings": "测试节点 · qa 技能", "owner": "李婷",
-     "calls": 316, "success_rate": 92.1, "avg_ms": 1800, "updated": "08-15"},
-    {"id": "a3", "name": "DocBot", "code": "agent_doc_2m9p", "desc": "文档助手：生成需求文档与验收记录草稿",
-     "status": "active", "scope": "全组织", "bindings": "需求提交 / 产品验收", "owner": "李婷",
-     "calls": 208, "success_rate": 98.0, "avg_ms": 3200, "updated": "08-14"},
-    {"id": "a4", "name": "NotifyProbe", "code": "agent_probe_5c1v", "desc": "通知探测：验证企微 / 钉钉可达性",
-     "status": "active", "scope": "通知服务", "bindings": "通知节点 · 定时探测", "owner": "郑直",
-     "calls": 1540, "success_rate": 99.8, "avg_ms": 620, "updated": "08-17"},
-    {"id": "a5", "name": "FlowBot-REPORT", "code": "agent_report_6h4d", "desc": "报表助手：生成导出与经营分析草稿",
-     "status": "pending", "scope": "报表服务", "bindings": "待绑定", "owner": "王强",
-     "calls": 0, "success_rate": 0, "avg_ms": 0, "updated": "08-16"},
-    {"id": "a6", "name": "Legacy-OCR", "code": "agent_ocr_9z8k", "desc": "旧版 OCR 识别（安全补丁 CVE-2026-0131 未完成）",
-     "status": "suspended", "scope": "文档服务", "bindings": "上传节点", "owner": "郑直",
-     "calls": 96, "success_rate": 71.5, "avg_ms": 5600, "updated": "08-10"},
-    {"id": "a7", "name": "Bot-2023-LEGACY", "code": "agent_legacy_a0b1", "desc": "已吊销：密钥泄露于外部日志",
-     "status": "revoked", "scope": "—", "bindings": "—", "owner": "李婷",
-     "calls": 12, "success_rate": 0, "avg_ms": 0, "updated": "07-30"},
-    {"id": "a8", "name": "FlowBot-SUMMARY", "code": "agent_summary_3d6e", "desc": "会议纪要 / 问题摘要助手（灰度 20%）",
-     "status": "active", "scope": "工单平台", "bindings": "分诊节点 · 摘要", "owner": "王强",
-     "calls": 74, "success_rate": 94.0, "avg_ms": 1500, "updated": "08-15"},
 ]
 
 # ---------- 通知 ----------

@@ -8,7 +8,7 @@ import { api, ApiError } from '../lib/api'
 import { PageHeader, Badge } from '../components/common'
 import { fieldTypeLabel } from '../components/schema-form'
 import { cn } from '../lib/utils'
-import type { CanvasNode, FormField, FormFieldType } from '../types'
+import type { CanvasNode, DeliverableAcceptanceItem, FormField, FormFieldType, NodeDeliverable, SplitMode } from '../types'
 
 /* 节点类型 → 视觉 */
 const nodeStyle: Record<CanvasNode['type'], { bg: string; text: string; fill: string; label: string }> = {
@@ -104,11 +104,11 @@ export function CanvasPage() {
   const [checkResult, setCheckResult] = useState<{ ok: boolean; msgs: string[] } | null>(null)
   const [locateFlash, setLocateFlash] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  /* 可绑定 Agent 列表（后端 active） */
-  const [agents, setAgents] = useState<{ id: string; name: string; code: string; agentType: string }[]>([])
+  /* 可绑定 Expert Deployment 列表（后端 active） */
+  const [deployments, setDeployments] = useState<{ id: string; name: string; environment: string; alias: string }[]>([])
   useEffect(() => {
-    api.get<{ items: { id: string; name: string; code: string; agentType: string; status: string }[] }>('/api/v1/agents')
-      .then((d) => setAgents(d.items.filter((a) => a.status === 'active')))
+    api.get<{ items: { id: string; name: string; environment: string; alias: string; status: string }[] }>('/api/v1/expert-deployments')
+      .then((d) => setDeployments(d.items.filter((item) => item.status === 'active')))
       .catch(() => {})
   }, [])
   /* 当前模板：默认需求流程 v3（侧栏进入），模板页点开对应模板时用 canvasTarget */
@@ -245,13 +245,49 @@ export function CanvasPage() {
     updateNodeCfg(selected.id, { schema: selected.cfg.schema.map((f, i) => (i === idx ? { ...f, ...patch } : f)) })
   const removeSchemaField = (idx: number) =>
     updateNodeCfg(selected.id, { schema: selected.cfg.schema.filter((_, i) => i !== idx) })
+  const moveSchemaField = (idx: number, dir: -1 | 1) => {
+    const next = [...selected.cfg.schema]
+    const target = idx + dir
+    if (target < 0 || target >= next.length) return
+    ;[next[idx], next[target]] = [next[target], next[idx]]
+    updateNodeCfg(selected.id, { schema: next })
+  }
   const addSchemaField = (label: string, type: FormFieldType) => {
     if (!label.trim()) { toast('请填写字段名称'); return }
+    const dup = selected.cfg.schema.some((f) => f.label.trim() === label.trim())
+    if (dup) { toast.error('已存在同名字段'); return }
     updateNodeCfg(selected.id, {
       schema: [...selected.cfg.schema, { key: `f${Date.now().toString(36)}`, label: label.trim(), type, required: false }],
     })
     toast.success(`已添加字段「${label.trim()}」`)
   }
+  const setOptionsText = (idx: number, text: string) => {
+    // 编辑态用文本承载（每行 显示文本=值），失焦/变更时解析为 options
+    const options = text.split('\n').filter((line) => line.trim()).map((line) => {
+      const [labelPart, valuePart] = line.split('=')
+      return { label: (labelPart ?? '').trim(), value: (valuePart ?? labelPart ?? '').trim() }
+    })
+    updateSchemaField(idx, { options })
+  }
+
+  /* ---------- 产出契约 / 拆分模式 ---------- */
+  const updateDeliverable = (patch: Partial<NodeDeliverable>) => {
+    const d = selected.cfg.deliverable
+    const base: NodeDeliverable = {
+      instruction: d?.instruction ?? '',
+      acceptance: d?.acceptance ?? [],
+      aiGuidance: d?.aiGuidance ?? '',
+      example: d?.example ?? '',
+    }
+    updateNodeCfg(selected.id, { deliverable: { ...base, ...patch } })
+  }
+  const addAcceptanceItem = () =>
+    updateDeliverable({ acceptance: [...(selected.cfg.deliverable?.acceptance ?? []), { key: `a${Date.now().toString(36)}`, text: '' }] })
+  const updateAcceptanceItem = (idx: number, patch: Partial<DeliverableAcceptanceItem>) =>
+    updateDeliverable({ acceptance: (selected.cfg.deliverable?.acceptance ?? []).map((item, i) => (i === idx ? { ...item, ...patch } : item)) })
+  const removeAcceptanceItem = (idx: number) =>
+    updateDeliverable({ acceptance: (selected.cfg.deliverable?.acceptance ?? []).filter((_, i) => i !== idx) })
+  const setSplitMode = (mode: SplitMode) => updateNodeCfg(selected.id, { split: { mode } })
 
   const addNode = (type?: CanvasNode['type']) => {
     const t = type ?? 'task'
@@ -758,7 +794,7 @@ export function CanvasPage() {
                   disabled={mode !== 'edit'}
                   value={selected.cfg.handler}
                   onChange={(e) => updateNodeCfg(selected.id, { handler: e.target.value })}>
-                  <option>人工 + Agent 可协助</option><option>人工</option><option>Agent 自动</option>
+                  <option>人工 + Expert 可协助</option><option>人工</option><option>Expert 自动</option>
                 </select>
               </div>
 
@@ -777,26 +813,44 @@ export function CanvasPage() {
                 </div>
                 <div className="space-y-1">
                   {selected.cfg.schema.map((f, i) => (
-                    <div key={f.key} className="flex items-center gap-2 rounded-md bg-slate-50 px-2.5 py-1.5 text-[12px] dark:bg-slate-800/60">
-                      <span className={cn('min-w-0 flex-1 truncate font-medium', f.required ? 'text-slate-700 dark:text-slate-200' : 'text-slate-500 dark:text-slate-400')}>
-                        {f.label}{f.required && <span className="text-red-500"> *</span>}
-                      </span>
-                      <span className="flex-none text-[10.5px] text-slate-400">{fieldTypeLabel[f.type]}</span>
-                      {mode === 'edit' && (
-                        <>
-                          <button
-                            title="切换必填/选填"
-                            onClick={() => updateSchemaField(i, { required: !f.required })}
-                            className={cn('flex-none rounded px-1.5 py-0.5 text-[10px] font-semibold transition-colors',
-                              f.required ? 'bg-red-50 text-red-500 dark:bg-red-500/15' : 'bg-slate-200 text-slate-400 hover:bg-slate-300 dark:bg-slate-700 dark:text-slate-500')}>
-                            {f.required ? '必填' : '选填'}
-                          </button>
-                          <button title="删除字段" onClick={() => removeSchemaField(i)} className="flex-none text-slate-300 transition-colors hover:text-red-500">
-                            <X className="h-3 w-3" />
-                          </button>
-                        </>
-                      )}
-                    </div>
+                    <details key={f.key} className="rounded-md bg-slate-50 dark:bg-slate-800/60">
+                      <summary className="flex cursor-pointer items-center gap-2 px-2.5 py-1.5 text-[12px] marker:content-none">
+                        <span className={cn('min-w-0 flex-1 truncate font-medium', f.required ? 'text-slate-700 dark:text-slate-200' : 'text-slate-500 dark:text-slate-400')}>
+                          {f.label}{f.required && <span className="text-red-500"> *</span>}
+                        </span>
+                        <span className="flex-none text-[10.5px] text-slate-400">{fieldTypeLabel[f.type]}</span>
+                        {mode === 'edit' && (
+                          <>
+                            <button title="上移" onClick={(e) => { e.preventDefault(); moveSchemaField(i, -1) }} className="flex-none text-slate-300 hover:text-blue-500">↑</button>
+                            <button title="下移" onClick={(e) => { e.preventDefault(); moveSchemaField(i, 1) }} className="flex-none text-slate-300 hover:text-blue-500">↓</button>
+                            <button
+                              title="切换必填/选填"
+                              onClick={(e) => { e.preventDefault(); updateSchemaField(i, { required: !f.required }) }}
+                              className={cn('flex-none rounded px-1.5 py-0.5 text-[10px] font-semibold transition-colors',
+                                f.required ? 'bg-red-50 text-red-500 dark:bg-red-500/15' : 'bg-slate-200 text-slate-400 hover:bg-slate-300 dark:bg-slate-700 dark:text-slate-500')}>
+                              {f.required ? '必填' : '选填'}
+                            </button>
+                            <button title="删除字段" onClick={(e) => { e.preventDefault(); removeSchemaField(i) }} className="flex-none text-slate-300 transition-colors hover:text-red-500">
+                              <X className="h-3 w-3" />
+                            </button>
+                          </>
+                        )}
+                      </summary>
+                      <div className="space-y-1.5 border-t border-slate-200 px-2.5 py-2 dark:border-slate-700">
+                        <input className="h-7 w-full rounded border border-slate-300 bg-white px-1.5 text-[11.5px] outline-none focus:border-blue-400 disabled:bg-slate-100 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200"
+                          value={f.placeholder ?? ''} disabled={mode !== 'edit'} placeholder="占位提示（placeholder）"
+                          onChange={(e) => updateSchemaField(i, { placeholder: e.target.value })} />
+                        <input className="h-7 w-full rounded border border-slate-300 bg-white px-1.5 text-[11.5px] outline-none focus:border-blue-400 disabled:bg-slate-100 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200"
+                          value={f.hint ?? ''} disabled={mode !== 'edit'} placeholder="字段说明（hint）"
+                          onChange={(e) => updateSchemaField(i, { hint: e.target.value })} />
+                        {(f.type === 'select' || f.type === 'multiselect' || f.type === 'radio') && (
+                          <textarea className="min-h-[44px] w-full rounded border border-slate-300 bg-white p-1.5 text-[11.5px] outline-none focus:border-blue-400 disabled:bg-slate-100 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200"
+                            value={(f.options ?? []).map((o) => o.value === o.label ? o.label : `${o.label}=${o.value}`).join('\n')}
+                            disabled={mode !== 'edit'} placeholder={'选项，每行一项：显示文本=值\n如：通过=pass'}
+                            onChange={(e) => setOptionsText(i, e.target.value)} />
+                        )}
+                      </div>
+                    </details>
                   ))}
                   {selected.cfg.schema.length === 0 && (
                     <div className="rounded-md border border-dashed border-slate-300 px-2.5 py-2 text-center text-[11.5px] text-slate-400 dark:border-slate-700">
@@ -809,11 +863,93 @@ export function CanvasPage() {
                 )}
               </div>
               <div>
-                <label className="mb-1 block text-[12px] font-medium text-slate-500 dark:text-slate-400">必填产出物</label>
-                <input className="h-9 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm outline-none focus:border-blue-500 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:disabled:bg-slate-800/50"
-                  value={selected.cfg.output} disabled={mode !== 'edit'}
-                  onChange={(e) => updateNodeCfg(selected.id, { output: e.target.value })} />
+                <div className="mb-1 flex items-center justify-between">
+                  <label className="text-[12px] font-medium text-slate-500 dark:text-slate-400">产出契约（任务书 / AI 简报共用）</label>
+                </div>
+                {(() => {
+                  const d = selected.cfg.deliverable
+                  const dv: NodeDeliverable = {
+                    instruction: d?.instruction ?? (selected.cfg.output && selected.cfg.output !== '待配置' ? selected.cfg.output : ''),
+                    acceptance: d?.acceptance ?? [],
+                    aiGuidance: d?.aiGuidance ?? '',
+                    example: d?.example ?? '',
+                  }
+                  return (
+                    <div className="space-y-2 rounded-lg border border-slate-200 bg-slate-50/60 p-3 dark:border-slate-700 dark:bg-slate-800/40">
+                      <div>
+                        <label className="mb-1 block text-[11px] font-medium text-slate-400">产出要求说明（到达节点时展示给处理人与 AI）</label>
+                        <textarea className="min-h-[52px] w-full rounded-md border border-slate-300 bg-white p-2 text-[12px] outline-none focus:border-blue-500 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                          value={dv.instruction} disabled={mode !== 'edit'}
+                          placeholder="本节点要求产出的内容、口径与边界…"
+                          onChange={(e) => updateDeliverable({ instruction: e.target.value })} />
+                      </div>
+                      <div>
+                        <div className="mb-1 flex items-center justify-between">
+                          <label className="text-[11px] font-medium text-slate-400">验收标准（提交前必须逐条勾选确认）</label>
+                          {mode === 'edit' && <button className="inline-flex items-center gap-0.5 text-[11px] font-medium text-blue-600 hover:underline" onClick={addAcceptanceItem}><Plus className="h-3 w-3" />添加</button>}
+                        </div>
+                        <div className="space-y-1">
+                          {dv.acceptance.map((item, i) => (
+                            <div key={item.key} className="space-y-1 rounded-md bg-white px-2 py-1.5 dark:bg-slate-900">
+                              <div className="flex items-center gap-1.5">
+                                <span className="flex-none text-[10px] font-semibold text-slate-400">{i + 1}.</span>
+                                <input className="min-w-0 flex-1 rounded border border-transparent bg-transparent px-1 py-0.5 text-[12px] outline-none focus:border-blue-400 disabled:text-slate-500 dark:text-slate-200"
+                                  value={item.text} disabled={mode !== 'edit'} placeholder="验收条目…"
+                                  onChange={(e) => updateAcceptanceItem(i, { text: e.target.value })} />
+                                {mode === 'edit' && <button onClick={() => removeAcceptanceItem(i)} className="flex-none text-slate-300 hover:text-red-500"><X className="h-3 w-3" /></button>}
+                              </div>
+                              <input className="w-full rounded border border-transparent bg-transparent px-1 pb-0.5 text-[10.5px] text-slate-400 outline-none focus:border-blue-400 disabled:text-slate-500"
+                                value={item.hint ?? ''} disabled={mode !== 'edit'} placeholder="验证方式 / 证据提示（可选）"
+                                onChange={(e) => updateAcceptanceItem(i, { hint: e.target.value })} />
+                            </div>
+                          ))}
+                          {!dv.acceptance.length && (
+                            <div className="rounded-md border border-dashed border-slate-300 px-2 py-1.5 text-center text-[11px] text-slate-400 dark:border-slate-700">
+                              未配置验收标准（不强制勾选）
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-[11px] font-medium text-slate-400">AI 执行指引（仅写给 Expert 的补充指令与边界）</label>
+                        <textarea className="min-h-[44px] w-full rounded-md border border-slate-300 bg-white p-2 text-[12px] outline-none focus:border-blue-500 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                          value={dv.aiGuidance ?? ''} disabled={mode !== 'edit'} placeholder="例如：引用上游表单结论；不得编造数据…"
+                          onChange={(e) => updateDeliverable({ aiGuidance: e.target.value })} />
+                      </div>
+                      {mode === 'edit' ? (
+                        <div>
+                          <label className="mb-1 block text-[11px] font-medium text-slate-400">参考示例（可选，展开填写）</label>
+                          <textarea className="min-h-[40px] w-full rounded-md border border-slate-300 bg-white p-2 text-[12px] outline-none focus:border-blue-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                            value={dv.example ?? ''} placeholder="符合要求的产出示例…"
+                            onChange={(e) => updateDeliverable({ example: e.target.value })} />
+                        </div>
+                      ) : (
+                        dv.example && <p className="truncate text-[11px] text-slate-400">示例：{dv.example}</p>
+                      )}
+                    </div>
+                  )
+                })()}
               </div>
+
+              {/* 子任务拆分模式（仅任务节点）：拆分后子任务在下一节点独立流转 */}
+              {selected.type === 'task' && (
+                <div>
+                  <label className="mb-1 block text-[12px] font-medium text-slate-500 dark:text-slate-400">子任务拆分</label>
+                  <select className="h-9 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm outline-none focus:border-blue-500 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:disabled:bg-slate-800/50"
+                    disabled={mode !== 'edit'}
+                    value={selected.cfg.split?.mode ?? 'off'}
+                    onChange={(e) => setSplitMode(e.target.value as SplitMode)}>
+                    <option value="off">关闭（不可拆分）</option>
+                    <option value="manual">人工拆分（处理人手动拆）</option>
+                    <option value="ai_assist">AI 建议 + 人工确认（推荐）</option>
+                    <option value="ai_auto">Expert 自动拆分（需绑定 Expert Deployment）</option>
+                  </select>
+                  <p className="mt-1 text-[10.5px] leading-snug text-slate-400">
+                    拆分后子任务在下一节点独立流转；要求本节点只有一条后继分支{(selected.cfg.split?.mode ?? 'off') === 'ai_auto' && '，且需在下方绑定 Expert Deployment'}
+                    {['ai_assist', 'ai_auto'].includes(selected.cfg.split?.mode ?? 'off') && (selected.cfg.deliverable?.instruction ?? selected.cfg.output) ? '' : '；建议先填写产出契约说明拆分口径'}
+                  </p>
+                </div>
+              )}
 
               {/* 回退目标（编辑模式） */}
               {mode === 'edit' && (
@@ -940,42 +1076,42 @@ export function CanvasPage() {
 
               <div className="border-t border-slate-100 pt-3 dark:border-slate-800">
                 <div className="mb-2 flex items-center justify-between">
-                  <span className="text-[12px] font-semibold text-slate-500 dark:text-slate-400">Agent 能力（节点级）</span>
-                  {mode === 'edit' && <Badge tone={selected.cfg.agent?.agentId ? 'suc' : 'gry'} className="!px-1.5 !text-[10px]">{selected.cfg.agent?.agentId ? '已绑定' : '未绑定'}</Badge>}
+                  <span className="text-[12px] font-semibold text-slate-500 dark:text-slate-400">Expert Deployment（节点级）</span>
+                  {mode === 'edit' && <Badge tone={selected.cfg.expert?.expertDeploymentId ? 'suc' : 'gry'} className="!px-1.5 !text-[10px]">{selected.cfg.expert?.expertDeploymentId ? '已绑定' : '未绑定'}</Badge>}
                 </div>
                 {mode === 'edit' ? (
                   <div className="space-y-2">
                     <select
                       className="h-8 w-full rounded-md border border-slate-300 bg-white px-2 text-[12px] outline-none focus:border-blue-500 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200"
-                      value={selected.cfg.agent?.agentId ?? ''}
-                      onChange={(e) => {
-                        const agentId = e.target.value
-                        updateNodeCfg(selected.id, { agent: agentId ? { agentId, caps: {} } : undefined })
-                      }}>
-                      <option value="">不绑定 Agent（仅人工处理）</option>
-                      {agents.map((a) => (
-                        <option key={a.id} value={a.id}>{a.name}（{a.agentType || a.code}）</option>
-                      ))}
-                    </select>
-                    {selected.cfg.agent?.agentId ? (
-                      <p className="text-[11px] leading-relaxed text-slate-400">
-                        已绑定 Agent；节点级能力沿用 Agent 自身能力边界（direct/confirm/forbid）。
-                        {selected.cfg.handler === 'Agent 自动' && <span className="text-amber-600 dark:text-amber-400">「Agent 自动」节点流转时后台自动调用。</span>}
-                      </p>
-                    ) : (
-                      <p className="text-[11px] leading-relaxed text-slate-400">绑定 Agent 后，流转到该节点时可按能力边界调用（需在 Agent 管理中激活）。</p>
+                       value={selected.cfg.expert?.expertDeploymentId ?? ''}
+                       onChange={(e) => {
+                         const expertDeploymentId = e.target.value
+                         updateNodeCfg(selected.id, { expert: expertDeploymentId ? { expertDeploymentId } : undefined })
+                       }}>
+                       <option value="">不绑定 Expert（仅人工处理）</option>
+                       {deployments.map((deployment) => (
+                         <option key={deployment.id} value={deployment.id}>{deployment.name}（{deployment.environment} · {deployment.alias || '无别名'}）</option>
+                       ))}
+                     </select>
+                     {selected.cfg.expert?.expertDeploymentId ? (
+                       <p className="text-[11px] leading-relaxed text-slate-400">
+                         已绑定 Expert Deployment；运行固定使用其发布版本，由 LangGraph 执行。
+                         {selected.cfg.handler === 'Expert 自动' && <span className="text-amber-600 dark:text-amber-400">「Expert 自动」节点流转时自动创建 Run，写操作将在审批处中断。</span>}
+                       </p>
+                     ) : (
+                       <p className="text-[11px] leading-relaxed text-slate-400">绑定已发布的 Expert Deployment 后，流转到该节点时将创建可追溯 Run。</p>
                     )}
                   </div>
                 ) : (
                   <div className="flex flex-wrap gap-1.5">
-                    {selected.cfg.agent?.agentId ? (
-                      <span className="cap-tag cap-confirm">{agents.find((a) => a.id === selected.cfg.agent?.agentId)?.name ?? selected.cfg.agent.agentId} · 已绑定</span>
-                    ) : (
-                      <span className="cap-tag cap-forbid">未绑定 Agent</span>
+                     {selected.cfg.expert?.expertDeploymentId ? (
+                       <span className="cap-tag cap-confirm">{deployments.find((item) => item.id === selected.cfg.expert?.expertDeploymentId)?.name ?? selected.cfg.expert.expertDeploymentId} · 已绑定</span>
+                     ) : (
+                       <span className="cap-tag cap-forbid">未绑定 Expert Deployment</span>
                     )}
                   </div>
                 )}
-                <p className="mt-2 text-[11px] leading-relaxed text-slate-400">节点配置只能限制 Agent，不能扩大授权用户权限（PRD §8.3）。</p>
+                 <p className="mt-2 text-[11px] leading-relaxed text-slate-400">节点配置只能限制 Expert 运行范围，不能扩大授权用户权限。</p>
               </div>
 
               {mode === 'edit' ? (

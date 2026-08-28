@@ -28,13 +28,18 @@ function TaskRow({ t }: { t: TaskItem }) {
           <span className="font-mono text-[11.5px] text-slate-400">{t.wiId}</span>
           <span className="text-[14px] font-medium text-slate-800 dark:text-slate-100">{t.title}</span>
           {priorityBadge(t.priority)}
-          {t.agentPending && <Badge tone="pur" dot>Agent 待确认</Badge>}
+          {t.expertPending && <Badge tone="pur" dot>Expert 待审批</Badge>}
           {(t as TaskItem & { frozen?: boolean }).frozen && <Badge tone="blk">冻结</Badge>}
         </div>
         <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-slate-400 dark:text-slate-500">
           <span className="inline-flex items-center gap-1 text-blue-600 dark:text-blue-400">
             <GitCommitHorizontal className="h-3.5 w-3.5" />{t.node}
           </span>
+          {t.parentTaskId && (
+            <span className="inline-flex items-center gap-0.5 font-medium text-violet-500" title={`父任务 ${t.parentTaskId}`}>
+              ↳ 子任务
+            </span>
+          )}
           <span>项目：{t.project}</span>
           <span className={cn('inline-flex items-center gap-1', t.overdue ? 'font-medium text-red-500' : '')}>
             <Clock className="h-3.5 w-3.5" />{t.overdue ? `已超时 · ${t.due}` : `截止 ${t.due}`}
@@ -104,7 +109,7 @@ export function MyTasksPage() {
 
   const pending = tasks.filter((t) => !['completed', 'cancelled'].includes(t.status)).length
   const overdue = tasks.filter((t) => t.overdue).length
-  const agentPending = tasks.filter((t) => t.agentPending).length
+  const expertPending = tasks.filter((t) => t.expertPending).length
 
   return (
     <div className="page-container">
@@ -122,7 +127,7 @@ export function MyTasksPage() {
       <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
         <KpiCard label="待我处理" value={pending + (taskCounter % 3)} delta="+1" up icon={<LayoutGrid className="h-4 w-4" />} tone="blue" />
         <KpiCard label="已超时" value={overdue} delta="+0" up={false} icon={<Clock className="h-4 w-4" />} tone="red" />
-        <KpiCard label="Agent 待确认" value={agentPending} delta="—" icon={<Bot className="h-4 w-4" />} tone="violet" />
+        <KpiCard label="Expert 待审批" value={expertPending} delta="—" icon={<Bot className="h-4 w-4" />} tone="violet" />
         <KpiCard label="今日完成" value={tasks.filter((t) => t.status === 'completed').length} delta="+1" up icon={<Inbox className="h-4 w-4" />} tone="green" />
       </div>
 
@@ -180,7 +185,7 @@ export function MyTasksPage() {
               {[
                 { label: '流程模板', page: 'templates' as const },
                 { label: '上传文档', page: 'docs' as const },
-                { label: 'Agent 授权', page: 'agents' as const },
+
                 { label: '领导看板', page: 'dashboard' as const },
               ].map((q) => (
                 <button key={q.label} onClick={() => navigate(q.page)}

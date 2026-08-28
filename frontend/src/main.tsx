@@ -5,13 +5,16 @@ import { Toaster } from './components/ui/sonner'
 import './index.css'
 import App from './App.tsx'
 import { AppProvider } from './store/app-store'
+import { ExpertOsProvider } from './store/expert-os-store'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <ThemeProvider attribute="class" defaultTheme="light" enableSystem={false} disableTransitionOnChange>
       <AppProvider>
-        <App />
-        <Toaster position="bottom-right" richColors closeButton />
+        <ExpertOsProvider>
+          <App />
+          <Toaster position="bottom-right" richColors closeButton />
+        </ExpertOsProvider>
       </AppProvider>
     </ThemeProvider>
   </StrictMode>,

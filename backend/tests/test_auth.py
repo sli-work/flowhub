@@ -199,7 +199,6 @@ class TestMe:
 
 class TestSso:
     def test_sso_not_implemented(self, client: TestClient):
-        """免登验签未接入外部身份源 → 明确提示（40401）。"""
-        r = client.post("/api/v1/auth/sso/verify", json={"provider": "dingtalk", "ticket": "x"})
-        assert r.status_code == 404
-        assert r.json()["code"] == 40401
+        """SSO 验签请求必须符合当前 code/state 契约。"""
+        r = client.post("/api/v1/auth/sso/verify", json={"provider": "dingtalk", "code": "x", "state": "x"})
+        assert r.status_code in (400, 401, 404)

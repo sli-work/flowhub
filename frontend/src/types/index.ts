@@ -2,7 +2,10 @@
 
 export type PageId =
   | 'tasks' | 'notif' | 'dashboard' | 'projects' | 'workitem' | 'node'
-  | 'templates' | 'canvas' | 'docs' | 'agents' | 'org' | 'matrix' | 'audit' | 'channel'
+  | 'templates' | 'canvas' | 'docs' | 'org' | 'matrix' | 'audit' | 'channel'
+  | 'os-overview' | 'aichat' | 'expert-center' | 'skill-center' | 'mcp-center'
+  | 'provider-center' | 'knowledge' | 'memory' | 'runtime-center' | 'approvals' | 'external-tools'
+  | 'expert-editor'
 
 export type RoleKey = 'leader' | 'org' | 'dev' | 'sales'
 
@@ -60,8 +63,11 @@ export interface TaskItem {
   due: string
   slaHours: number
   overdue?: boolean
-  agentPending?: boolean
+  expertPending?: boolean
   source?: string
+  /** 子任务拆分：父任务 id / 子任务携带的需求说明 */
+  parentTaskId?: string | null
+  brief?: string
   /** 项目归档冻结：任务仅可查看，不可流转 */
   frozen?: boolean
 }
@@ -142,6 +148,18 @@ export interface FormField {
   options?: FormFieldOption[]
 }
 
+/** 节点产出契约：人（任务书）与 AI（运行简报）消费同一份定义 */
+export interface DeliverableAcceptanceItem { key: string; text: string; hint?: string }
+export interface NodeDeliverable {
+  instruction: string
+  acceptance: DeliverableAcceptanceItem[]
+  aiGuidance?: string
+  example?: string
+}
+export type SplitMode = 'off' | 'manual' | 'ai_assist' | 'ai_auto'
+/** 提交时的验收勾选快照（含条目文本，模板后续修改不影响历史审计） */
+export type AcceptanceChecks = Record<string, { text: string; checked: boolean }>
+
 export interface CanvasNode {
   id: string
   label: string
@@ -158,9 +176,12 @@ export interface CanvasNode {
     fallback: string
     sla: string
     schema: FormField[]
+    /** @deprecated 已被 deliverable.instruction 取代（读取处懒迁移兼容） */
     output: string
-    /** 节点级 Agent 绑定（docs/05 §5）：handler=「Agent 自动」时必填 agentId */
-    agent?: { agentId: string; caps: Record<string, string> }
+    deliverable?: NodeDeliverable
+    split?: { mode: SplitMode }
+    /** 节点级 Expert Deployment 绑定：Expert 自动节点必须指定已发布 Deployment。 */
+    expert?: { expertDeploymentId: string }
     /** 决策节点分支条件：{ 目标节点id: {field, op(eq/ne/contains), value} } + 默认分支 */
     branches?: Record<string, { field: string; op: string; value: string }>
     defaultBranch?: string
@@ -198,18 +219,115 @@ export interface Agent {
   systemPrompt?: string
 }
 
-/** 客户端工具配置（第一类）：opencode 等。api_key 永不回显。 */
-export interface AgentTool {
+export type ExpertStatus = 'draft' | 'testing' | 'published' | 'suspended' | 'archived'
+export type SkillStatus = 'draft' | 'testing' | 'published' | 'archived'
+export type RunStatus = 'queued' | 'running' | 'interrupted' | 'succeeded' | 'failed' | 'cancelled'
+export type ApprovalStatus = 'pending' | 'approved' | 'rejected' | 'expired'
+
+export interface ExpertRecord {
+  id: string; name: string; slug: string; kind: 'builtin' | 'custom'; owner: string
+  status: ExpertStatus; version: string; description: string; skills: string[]
+  deployments: number; calls: number; successRate: number; lastRun: string; updated: string
+  currentVersionId?: string
+}
+
+export interface ExpertConfig {
+  versionId?: string
+  systemPrompt: string
+  providerId: string
+  model: string
+  knowledgeBaseIds: string[]
+  testedRevision: number | null
+  revision: number
+}
+
+export interface DeploymentRecord {
   id: string
+  expertId: string
+  expertVersion: string
   name: string
-  engine: 'opencode' | 'api'
-  provider?: string
-  model?: string
-  models?: string[]
-  baseUrl?: string
-  desc?: string
-  status: string
-  createdAt?: string
+  environment: 'test' | 'prod'
+  alias: string
+  status: 'active' | 'suspended'
+  createdAt: string
+}
+
+export interface ExpertOsState {
+  schemaVersion: 1
+  /** 服务端首刷是否完成：编辑器水合必须等它，避免用到过期的本地镜像配置 */
+  serverSynced?: boolean
+  experts: ExpertRecord[]
+  configs: Record<string, ExpertConfig>
+  deployments: DeploymentRecord[]
+  skills: SkillRecord[]
+  mcpServers: McpServerRecord[]
+  mcpTools: McpToolRecord[]
+  providers: ProviderRecord[]
+  knowledgeBases: KnowledgeBaseRecord[]
+  memories: MemoryRecord[]
+  runs: RunRecord[]
+  approvals: ApprovalRecord[]
+  chatSessions: ChatSession[]
+}
+
+export interface SkillRecord {
+  id: string; name: string; slug: string; description: string; status: SkillStatus
+  version: string; owner: string; tools: number; boundExperts: number; subgraph: boolean; updated: string
+  packageType?: 'tar' | 'zip'; filename?: string; sizeBytes?: number
+}
+
+export interface McpToolRecord {
+  id: string; name: string; server: string; serverId?: string; description?: string; inputSchema?: Record<string, unknown>
+  risk: 'read' | 'generate' | 'write_draft' | 'write_commit' | 'critical'
+  approval: 'none' | 'required' | 'administrator_only'; status: 'discovered' | 'approved' | 'disabled'; bindings: number; enabled?: boolean
+}
+
+export interface McpServerRecord {
+  id: string; name: string; direction: 'native' | 'inbound' | 'outbound'; transport: string
+  endpoint: string; status: 'active' | 'unhealthy' | 'disabled'; tools: McpToolRecord[] | number; approvedTools: number; health: string; description?: string; authType?: string; updatedAt?: string
+}
+
+export interface ProviderRecord {
+  id: string; name: string; engine: 'opencode' | 'api'; provider: string; baseUrl: string
+  status: 'healthy' | 'degraded' | 'disabled'; models: string[]
+  /** 与模型列表同序的具体条目（id = LlmProviderModel id），用于按 providerModelId 反查归属 */
+  modelEntries?: { id: string; model: string }[]
+  credential: 'configured' | 'missing'; latency: string
+  maxContextTokens?: number
+}
+
+export interface KnowledgeBaseRecord {
+  id: string; name: string; description: string; documents: number; chunks: number
+  status: 'indexed' | 'indexing' | 'attention'; sensitivity: string; updated: string
+}
+
+export interface MemoryRecord {
+  id: string; namespace: 'expert' | 'task' | 'run'; owner: string; content: string
+  sensitivity: 'normal' | 'sensitive'; status: 'active' | 'archived'; expires: string; source: string
+}
+
+export interface RuntimeEvent {
+  id: string; kind: 'trace' | 'tool' | 'citation' | 'approval'; title: string; status: string
+  detail: string; duration?: string; risk?: string; locator?: string
+}
+
+export interface RunRecord {
+  id: string; session: string; expert: string; version: string; deployment: string
+  status: RunStatus; duration: string; traceId: string; started: string; events: RuntimeEvent[]
+  output?: string; error?: string
+}
+
+export interface ApprovalRecord {
+  id: string; runId: string; action: string; tool: string; expert: string; risk: 'write_commit' | 'critical'
+  scope: string; requester: string; expires: string; requested: string; status: ApprovalStatus
+}
+
+export interface ChatMessage {
+  id: string; role: 'user' | 'assistant' | 'system'; content: string; time: string; events?: RuntimeEvent[]
+}
+
+export interface ChatSession {
+  id: string; title: string; expertId?: string; status: 'active' | 'idle'; updated: string; messages: ChatMessage[]
 }
 
 /** 用户 access key（外部 Agent MCP/Skill 接入凭证）。明文仅创建时展示一次。 */

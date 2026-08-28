@@ -10,20 +10,6 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 logger = logging.getLogger(__name__)
 
-# 表 → 需要保证存在的列（SQL 类型 / 默认值）
-_AGENT_COLUMNS: dict[str, str] = {
-    "engine": "VARCHAR(16) DEFAULT 'opencode'",
-    "provider": "VARCHAR(32) DEFAULT ''",
-    "model": "VARCHAR(64) DEFAULT ''",
-    "agent_type": "VARCHAR(32) DEFAULT ''",
-    "secret_hash": "VARCHAR(128) DEFAULT ''",
-    "api_key": "VARCHAR(512) DEFAULT ''",
-    "base_url": "VARCHAR(255) DEFAULT ''",
-    "system_prompt": "TEXT DEFAULT ''",
-    "tool_id": "VARCHAR(32) DEFAULT ''",
-}
-
-
 async def _existing_columns(conn: AsyncConnection, table: str) -> set[str]:
     rows = await conn.execute(text(
         "SELECT column_name FROM information_schema.columns WHERE table_name = :t"
@@ -32,33 +18,136 @@ async def _existing_columns(conn: AsyncConnection, table: str) -> set[str]:
 
 
 async def migrate(conn: AsyncConnection) -> None:
-    """在 create_all 之后、seed 之前调用。已有表补列：agents 引擎列 + agent_models.desc。"""
-    existing = await _existing_columns(conn, "agents")
-    for col, ddl in _AGENT_COLUMNS.items():
-        if col in existing:
-            continue
-        await conn.execute(text(f'ALTER TABLE agents ADD COLUMN "{col}" {ddl}'))
-        logger.info("migrate: agents.%s 已补充", col)
-    # agent_models.desc：模型描述（可视化创建 Agent 时展示）
-    if "desc" not in await _existing_columns(conn, "agent_models"):
-        await conn.execute(text('ALTER TABLE agent_models ADD COLUMN "desc" VARCHAR(255) DEFAULT \'\''))
-        logger.info("migrate: agent_models.desc 已补充")
-    # agent_models.base_url：模型默认 OpenAI 兼容 endpoint
-    if "base_url" not in await _existing_columns(conn, "agent_models"):
-        await conn.execute(text('ALTER TABLE agent_models ADD COLUMN "base_url" VARCHAR(255) DEFAULT \'\''))
-        logger.info("migrate: agent_models.base_url 已补充")
-    # agent_types.system_prompt：类型默认系统提示词模板
-    if "system_prompt" not in await _existing_columns(conn, "agent_types"):
-        await conn.execute(text('ALTER TABLE agent_types ADD COLUMN "system_prompt" TEXT DEFAULT \'\''))
-        logger.info("migrate: agent_types.system_prompt 已补充")
-    type_cols = await _existing_columns(conn, "agent_types")
-    for col, ddl in {"provider": "VARCHAR(32) DEFAULT ''", "model": "VARCHAR(64) DEFAULT ''"}.items():
-        if col not in type_cols:
-            await conn.execute(text(f'ALTER TABLE agent_types ADD COLUMN "{col}" {ddl}'))
-            logger.info("migrate: agent_types.%s 已补充", col)
-    if "models" not in await _existing_columns(conn, "agent_tools"):
-        await conn.execute(text("ALTER TABLE agent_tools ADD COLUMN \"models\" JSONB DEFAULT '[]'"))
-        logger.info("migrate: agent_tools.models 已补充")
+    """Apply compatibility migrations for active FlowHub tables only."""
+    # Explicitly remove the retired Agent runtime tables. Expert Runtime owns
+    # versions, runs, events, and approvals now; these tables have no consumers.
+    for table in ("agent_confirm_requests", "agent_suggestions", "agent_invocations", "agent_capabilities", "agents", "agent_tools", "agent_models", "agent_types"):
+        await conn.execute(text(f'DROP TABLE IF EXISTS "{table}" CASCADE'))
+    task_columns = await _existing_columns(conn, "tasks")
+    if "agent_pending" in task_columns and "expert_pending" not in task_columns:
+        await conn.execute(text('ALTER TABLE tasks RENAME COLUMN "agent_pending" TO "expert_pending"'))
+        logger.info("migrate: retired task pending column renamed to expert_pending")
+    # 子任务拆分与产出契约：父任务链接 / 子任务需求说明 / 验收勾选快照
+    task_columns_to_add = {
+        "parent_task_id": "VARCHAR(40)",
+        "lineage_root_id": "VARCHAR(40)",
+        "brief": "TEXT DEFAULT ''",
+        "acceptance_checks": "JSON DEFAULT '{}'",
+    }
+    for column, ddl in task_columns_to_add.items():
+        if task_columns and column not in task_columns:
+            await conn.execute(text(f'ALTER TABLE tasks ADD COLUMN "{column}" {ddl}'))
+            logger.info("migrate: tasks.%s added", column)
+    expert_columns = await _existing_columns(conn, "experts")
+    expert_columns_to_add = {
+        "description": "TEXT DEFAULT ''",
+        "owner_id": "VARCHAR(32)",
+        "current_version_id": "VARCHAR(32)",
+        "created_at": "VARCHAR(40) DEFAULT ''",
+        "updated_at": "VARCHAR(40) DEFAULT ''",
+    }
+    for column, ddl in expert_columns_to_add.items():
+        if column not in expert_columns:
+            await conn.execute(text(f'ALTER TABLE experts ADD COLUMN "{column}" {ddl}'))
+            logger.info("migrate: experts.%s added", column)
+    version_columns = await _existing_columns(conn, "expert_versions")
+    version_columns_to_add = {
+        "provider_model_id": "VARCHAR(32)",
+        "provider_snapshot": "JSON DEFAULT '{}'",
+        "skills": "JSON DEFAULT '[]'",
+        "knowledge_base_ids": "JSON DEFAULT '[]'",
+        "tool_policies": "JSON DEFAULT '{}'",
+        "validation": "JSON DEFAULT '{}'",
+        "tested_at": "VARCHAR(40) DEFAULT ''",
+        "created_by": "VARCHAR(32)",
+        "created_at": "VARCHAR(40) DEFAULT ''",
+    }
+    for column, ddl in version_columns_to_add.items():
+        if column not in version_columns:
+            await conn.execute(text(f'ALTER TABLE expert_versions ADD COLUMN "{column}" {ddl}'))
+            logger.info("migrate: expert_versions.%s added", column)
+    deployment_columns = await _existing_columns(conn, "expert_deployments")
+    for column, ddl in {
+        "environment": "VARCHAR(16) DEFAULT 'test'",
+        "alias": "VARCHAR(96) DEFAULT ''",
+        "workflow_binding_json": "JSON NOT NULL DEFAULT '{}'",
+        "provider_override_json": "JSON NOT NULL DEFAULT '{}'",
+    }.items():
+        if column not in deployment_columns:
+            await conn.execute(text(f'ALTER TABLE expert_deployments ADD COLUMN "{column}" {ddl}'))
+            logger.info("migrate: expert_deployments.%s added", column)
+    provider_columns = await _existing_columns(conn, "llm_providers")
+    if "max_context_tokens" not in provider_columns:
+        await conn.execute(text('ALTER TABLE llm_providers ADD COLUMN "max_context_tokens" INTEGER DEFAULT 1000000'))
+        logger.info("migrate: llm_providers.max_context_tokens added")
+    chat_columns = await _existing_columns(conn, "expert_chat_sessions")
+    if "provider_model_id" not in chat_columns:
+        await conn.execute(text('ALTER TABLE expert_chat_sessions ADD COLUMN "provider_model_id" VARCHAR(32)'))
+        logger.info("migrate: expert_chat_sessions.provider_model_id added")
+    if "expert_version_id" not in chat_columns:
+        await conn.execute(text('ALTER TABLE expert_chat_sessions ADD COLUMN "expert_version_id" VARCHAR(32)'))
+        logger.info("migrate: expert_chat_sessions.expert_version_id added")
+    if "compaction_sequence" not in chat_columns:
+        await conn.execute(text('ALTER TABLE expert_chat_sessions ADD COLUMN "compaction_sequence" INTEGER DEFAULT 0'))
+        logger.info("migrate: expert_chat_sessions.compaction_sequence added")
+    if "compaction_summary" not in chat_columns:
+        await conn.execute(text('ALTER TABLE expert_chat_sessions ADD COLUMN "compaction_summary" TEXT DEFAULT \'\''))
+        logger.info("migrate: expert_chat_sessions.compaction_summary added")
+    run_columns = await _existing_columns(conn, "expert_runs")
+    if run_columns and "task_id" not in run_columns:
+        await conn.execute(text('ALTER TABLE expert_runs ADD COLUMN "task_id" VARCHAR(40)'))
+        logger.info("migrate: expert_runs.task_id added")
+    message_columns = await _existing_columns(conn, "expert_chat_messages")
+    if "tool_trace" not in message_columns:
+        await conn.execute(text("ALTER TABLE expert_chat_messages ADD COLUMN \"tool_trace\" JSON DEFAULT '[]'"))
+        logger.info("migrate: expert_chat_messages.tool_trace added")
+    if "files" not in message_columns:
+        await conn.execute(text("ALTER TABLE expert_chat_messages ADD COLUMN \"files\" JSON DEFAULT '[]'"))
+        logger.info("migrate: expert_chat_messages.files added")
+    key_columns = await _existing_columns(conn, "user_api_keys")
+    if key_columns and "key_ciphertext" not in key_columns:
+        await conn.execute(text('ALTER TABLE user_api_keys ADD COLUMN "key_ciphertext" VARCHAR(512) DEFAULT \'\''))
+        logger.info("migrate: user_api_keys.key_ciphertext added")
+    skill_columns = await _existing_columns(conn, "expert_skills")
+    if skill_columns and "deleted" not in skill_columns:
+        await conn.execute(text('ALTER TABLE expert_skills ADD COLUMN "deleted" BOOLEAN DEFAULT FALSE'))
+        logger.info("migrate: expert_skills.deleted added")
+    mcp_columns = await _existing_columns(conn, "mcp_servers")
+    mcp_columns_to_add = {
+        "description": "TEXT DEFAULT ''",
+        "direction": "VARCHAR(16) DEFAULT 'outbound'",
+        "transport": "VARCHAR(32) DEFAULT 'streamable-http'",
+        "endpoint": "VARCHAR(512) DEFAULT ''",
+        "auth_type": "VARCHAR(24) DEFAULT 'none'",
+        "credentials": "VARCHAR(2048) DEFAULT ''",
+        "status": "VARCHAR(16) DEFAULT 'unhealthy'",
+        "health": "VARCHAR(64) DEFAULT '未检测'",
+        "deleted": "BOOLEAN DEFAULT FALSE",
+        "created_by": "VARCHAR(32) DEFAULT ''",
+        "created_at": "VARCHAR(40) DEFAULT ''",
+        "updated_at": "VARCHAR(40) DEFAULT ''",
+    }
+    for column, ddl in mcp_columns_to_add.items():
+        if mcp_columns and column not in mcp_columns:
+            await conn.execute(text(f'ALTER TABLE mcp_servers ADD COLUMN "{column}" {ddl}'))
+            logger.info("migrate: mcp_servers.%s added", column)
+    mcp_tool_columns = await _existing_columns(conn, "mcp_tools")
+    mcp_tool_columns_to_add = {
+        "server_id": "VARCHAR(32) DEFAULT ''",
+        "name": "VARCHAR(160) DEFAULT ''",
+        "description": "TEXT DEFAULT ''",
+        "input_schema": "JSON DEFAULT '{}'",
+        "risk": "VARCHAR(24) DEFAULT 'read'",
+        "approval": "VARCHAR(24) DEFAULT 'none'",
+        "status": "VARCHAR(24) DEFAULT 'discovered'",
+        "enabled": "BOOLEAN DEFAULT TRUE",
+        "created_at": "VARCHAR(40) DEFAULT ''",
+        "updated_at": "VARCHAR(40) DEFAULT ''",
+    }
+    for column, ddl in mcp_tool_columns_to_add.items():
+        if mcp_tool_columns and column not in mcp_tool_columns:
+            await conn.execute(text(f'ALTER TABLE mcp_tools ADD COLUMN "{column}" {ddl}'))
+            logger.info("migrate: mcp_tools.%s added", column)
     # notifications.wi_id / task_id：通知关联业务对象（点击通知跳转到对应工作项/任务）
     ntf_cols = await _existing_columns(conn, "notifications")
     if "wi_id" not in ntf_cols:

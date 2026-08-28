@@ -121,4 +121,28 @@
 
   /* 导航分组标题 */
   .sb-grp { @apply px-3 pt-5 pb-2 text-[11px] font-medium tracking-wider text-slate-500; }
+
+  /* assistant-ui Markdown content: keep rich output readable without changing
+     the primitive renderer or allowing long code/table blocks to overflow. */
+  .aui-markdown { @apply min-w-0 leading-7; }
+  .aui-markdown > :first-child { @apply mt-0; }
+  .aui-markdown > :last-child { @apply mb-0; }
+  .aui-markdown h1 { @apply mb-3 mt-6 text-xl font-semibold leading-tight; }
+  .aui-markdown h2 { @apply mb-2.5 mt-5 text-lg font-semibold leading-tight; }
+  .aui-markdown h3 { @apply mb-2 mt-4 text-base font-semibold leading-tight; }
+  .aui-markdown p { @apply my-3; }
+  .aui-markdown ul { @apply my-3 list-disc space-y-1 pl-6; }
+  .aui-markdown ol { @apply my-3 list-decimal space-y-1 pl-6; }
+  .aui-markdown li > p { @apply my-0; }
+  .aui-markdown blockquote { @apply my-4 border-l-4 border-blue-300 pl-4 text-slate-500 dark:border-blue-500/60 dark:text-slate-400; }
+  .aui-markdown a { @apply break-words text-blue-600 underline decoration-blue-300 underline-offset-2 hover:text-blue-700 dark:text-blue-300 dark:decoration-blue-500/60 dark:hover:text-blue-200; }
+  .aui-markdown code:not(pre code) { @apply rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[0.9em] text-violet-700 dark:bg-slate-800 dark:text-violet-300; }
+  .aui-markdown pre { @apply my-4 max-w-full overflow-x-auto rounded-lg border border-slate-200 bg-slate-950 p-4 text-[12px] leading-6 text-slate-100 dark:border-slate-700; }
+  .aui-markdown pre code { @apply bg-transparent p-0 font-mono text-inherit; }
+  .aui-markdown table { @apply my-4 block max-w-full overflow-x-auto border-collapse text-left text-[12px]; }
+  .aui-markdown th { @apply whitespace-nowrap border border-slate-200 bg-slate-50 px-3 py-2 font-semibold dark:border-slate-700 dark:bg-slate-800; }
+  .aui-markdown td { @apply min-w-[96px] border border-slate-200 px-3 py-2 align-top dark:border-slate-700; }
+  .aui-markdown tr:nth-child(even) td { @apply bg-slate-50/70 dark:bg-slate-800/40; }
+  .aui-markdown hr { @apply my-5 border-slate-200 dark:border-slate-700; }
+  .aui-markdown input[type='checkbox'] { @apply mr-2 align-middle accent-blue-600; }
 }

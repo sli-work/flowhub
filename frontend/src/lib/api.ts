@@ -58,7 +58,7 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function request<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   const token = getToken()
   if (token) headers.Authorization = `Bearer ${token}`
@@ -67,6 +67,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     method,
     headers,
     body: body === undefined ? undefined : JSON.stringify(body),
+    signal,
   })
 
   let payload: { code: number; message: string; data: T }
@@ -84,9 +85,28 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return payload.data
 }
 
+/** 二进制下载（带 Bearer；401 时与 request 同样清理会话） */
+export async function getBlob(path: string, signal?: AbortSignal): Promise<Blob> {
+  const headers: Record<string, string> = {}
+  const token = getToken()
+  if (token) headers.Authorization = `Bearer ${token}`
+  const resp = await fetch(path, { headers, signal })
+  if (resp.status === 401) setToken(null)
+  if (!resp.ok) {
+    let message = `下载失败（HTTP ${resp.status}）`
+    try {
+      const payload = await resp.json()
+      if (payload?.message) message = payload.message
+    } catch { /* 二进制或空响应体 */ }
+    throw new ApiError(resp.status, message, resp.status)
+  }
+  return resp.blob()
+}
+
 export const api = {
   get: <T>(path: string) => request<T>('GET', path),
-  post: <T>(path: string, body?: unknown) => request<T>('POST', path, body),
+  getBlob,
+  post: <T>(path: string, body?: unknown, signal?: AbortSignal) => request<T>('POST', path, body, signal),
   patch: <T>(path: string, body?: unknown) => request<T>('PATCH', path, body),
   put: <T>(path: string, body?: unknown) => request<T>('PUT', path, body),
   del: <T>(path: string) => request<T>('DELETE', path),

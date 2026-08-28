@@ -1,4 +1,4 @@
-"""FlowHub MCP Server（外部 Agent 接入）。
+"""FlowHub MCP Server（外部客户端接入）。
 
 - FastMCP（SSE 传输），挂载到 FastAPI：`app.mount("/api/v1/mcp", mcp_starlette_app())`
 - 认证：纯 ASGI 中间件解析 `Authorization: Bearer <access_key>` → get_current_user_by_key
@@ -16,7 +16,7 @@ from mcp.server.fastmcp import FastMCP
 
 from flowhub_api.db.session import SessionFactory
 from flowhub_api.models import DocItem, TaskItem, User, WorkItem
-from flowhub_api.services.agent_runner import now_iso
+from flowhub_api.services.time import now_iso
 
 _current_user: contextvars.ContextVar[User] = contextvars.ContextVar("flowhub_mcp_user")
 
@@ -50,7 +50,7 @@ def _task_summary(t: TaskItem) -> dict:
     return {
         "id": t.id, "title": t.title, "project": t.project, "node": t.node,
         "node_id": t.node_id, "status": t.status, "assignee": t.assignee,
-        "due": t.due, "priority": t.priority, "agentPending": t.agent_pending,
+        "due": t.due, "priority": t.priority, "expertPending": t.expert_pending,
     }
 
 

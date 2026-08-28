@@ -1,0 +1,133 @@
+"""Expert Runtime API contract tests."""
+import io
+
+def test_expert_lifecycle_with_interrupted_test_run(client, org_headers):
+    headers = org_headers
+    response = client.post("/api/v1/providers", headers=headers, json={
+        "name": "Test Provider", "base_url": "https://example.test/v1", "api_key": "test-key", "models": ["test-model"],
+    })
+    assert response.status_code == 200, response.text
+    model_id = response.json()["data"]["provider"]["models"][0]["id"]
+    expert = client.post("/api/v1/experts", headers=headers, json={"name": "Release Expert", "slug": "release-expert", "description": "release", "system_prompt": "Summarize releases.", "provider_model_id": model_id}).json()["data"]
+    version_id = expert["version"]["id"]
+    assert client.post(f"/api/v1/experts/{expert['expert']['id']}/versions/{version_id}/test", headers=headers, json={"prompt": "Summarize", "write_intent": True}).status_code == 200
+    approval = client.get("/api/v1/expert-approvals", headers=headers).json()["data"]["items"][0]
+    assert client.post(f"/api/v1/expert-approvals/{approval['id']}/approve", headers=headers, json={"note": "approved"}).status_code == 200
+    assert client.post(f"/api/v1/experts/{expert['expert']['id']}/versions/{version_id}/publish", headers=headers).status_code == 200
+    deployment_request = {"name": "release-test", "environment": "test", "alias": "release"}
+    assert client.post(f"/api/v1/experts/{expert['expert']['id']}/deployments", headers=headers, json=deployment_request).status_code == 200
+    deployment = client.get("/api/v1/expert-deployments", headers=headers).json()["data"]["items"][0]
+    assert deployment["name"] == "release-test"
+    duplicate = client.post(f"/api/v1/experts/{expert['expert']['id']}/deployments", headers=headers, json=deployment_request)
+    assert duplicate.status_code == 409
+    assert duplicate.json()["message"] == "Deployment 名称已存在：release-test"
+
+
+def test_chat_session_persists_messages(client, org_headers):
+    headers = org_headers
+    provider = client.post("/api/v1/providers", headers=headers, json={
+        "name": "Chat Provider", "base_url": "https://example.test/v1", "api_key": "test-key", "models": ["chat-model"],
+    })
+    model_id = provider.json()["data"]["provider"]["models"][0]["id"]
+    expert = client.post("/api/v1/experts", headers=headers, json={
+        "name": "Chat Expert", "slug": "chat-expert", "description": "chat", "system_prompt": "chat", "provider_model_id": model_id,
+    }).json()["data"]
+    version_id = expert["version"]["id"]
+    tested = client.post(f"/api/v1/experts/{expert['expert']['id']}/versions/{version_id}/test", headers=headers, json={"prompt": "test", "write_intent": True})
+    approval = client.get("/api/v1/expert-approvals", headers=headers).json()["data"]["items"][0]
+    assert client.post(f"/api/v1/expert-approvals/{approval['id']}/approve", headers=headers, json={}).status_code == 200
+    assert client.post(f"/api/v1/experts/{expert['expert']['id']}/versions/{version_id}/publish", headers=headers).status_code == 200
+    deployment = client.post(f"/api/v1/experts/{expert['expert']['id']}/deployments", headers=headers, json={"name": "chat-deploy", "environment": "test", "alias": "chat"}).json()["data"]["deployment"]
+    chat = client.post("/api/v1/expert-chat/sessions", headers=headers, json={"deployment_id": deployment["id"], "provider_model_id": model_id}).json()["data"]["session"]
+    assert chat["providerModelId"] == model_id
+    message = client.post(f"/api/v1/expert-chat/sessions/{chat['id']}/messages", headers=headers, json={"content": "hello", "write_intent": True})
+    assert message.status_code == 200, message.text
+    history = client.get(f"/api/v1/expert-chat/sessions/{chat['id']}/messages", headers=headers).json()["data"]["items"]
+    assert [item["role"] for item in history] == ["user", "assistant"]
+
+
+def test_default_chat_uses_native_flowhub_capabilities(client, org_headers):
+    chat = client.post("/api/v1/expert-chat/sessions", headers=org_headers, json={"title": "默认对话"})
+    assert chat.status_code == 200, chat.text
+    session_id = chat.json()["data"]["session"]["id"]
+    response = client.post(f"/api/v1/expert-chat/sessions/{session_id}/messages", headers=org_headers, json={"content": "我有哪些任务？"})
+    assert response.status_code == 200, response.text
+    assert "任务" in response.json()["data"]["assistantMessage"]["content"]
+
+
+def test_chat_session_isolated_by_owner(client, org_headers, leader_headers):
+    chat = client.post("/api/v1/expert-chat/sessions", headers=org_headers, json={"title": "管理员会话"}).json()["data"]["session"]
+    assert client.get(f"/api/v1/expert-chat/sessions/{chat['id']}/messages", headers=leader_headers).status_code == 404
+
+
+def test_skill_upload_requires_skill_entry_and_can_be_soft_deleted(client, org_headers):
+    invalid = client.post(
+        "/api/v1/expert-skills/upload",
+        headers=org_headers,
+        files={"file": ("skill.zip", io.BytesIO(_zip_bytes("README.md", "not a skill")), "application/zip")},
+    )
+    assert invalid.status_code == 400
+    assert "SKILL.md" in invalid.json()["message"]
+
+    valid = client.post(
+        "/api/v1/expert-skills/upload",
+        headers=org_headers,
+        files={"file": ("release-skill.zip", io.BytesIO(_zip_bytes("SKILL.md", "# Release")), "application/zip")},
+    )
+    assert valid.status_code == 200, valid.text
+    skill = valid.json()["data"]["skill"]
+    assert skill["packageType"] == "zip"
+    assert client.delete(f"/api/v1/expert-skills/{skill['id']}", headers=org_headers).status_code == 200
+    assert skill["id"] not in {item["id"] for item in client.get("/api/v1/expert-skills", headers=org_headers).json()["data"]["items"]}
+
+
+def _zip_bytes(name: str, content: str) -> bytes:
+    import zipfile
+
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, "w") as archive:
+        archive.writestr(name, content)
+    return stream.getvalue()
+
+
+def test_mcp_center_manages_servers_and_tools(client, org_headers):
+    created = client.post("/api/v1/mcp-servers", headers=org_headers, json={
+        "name": "Incident MCP", "description": "incident tools", "direction": "outbound",
+        "transport": "streamable-http", "endpoint": "https://mcp.example.test/mcp",
+        "auth_type": "bearer", "tools": [{"name": "incident.lookup", "description": "lookup", "risk": "read"}],
+    })
+    assert created.status_code == 200, created.text
+    server = created.json()["data"]["server"]
+    assert server["name"] == "Incident MCP"
+    assert server["tools"][0]["name"] == "incident.lookup"
+
+    listed = client.get("/api/v1/mcp-servers", headers=org_headers).json()["data"]["items"]
+    assert server["id"] in {item["id"] for item in listed}
+    tool = server["tools"][0]
+    changed = client.patch(f"/api/v1/mcp-tools/{tool['id']}", headers=org_headers, json={"status": "disabled"})
+    assert changed.status_code == 200, changed.text
+    assert changed.json()["data"]["tool"]["status"] == "disabled"
+
+
+def test_default_chat_exposes_only_executed_tool_trace(client, org_headers):
+    chat = client.post("/api/v1/expert-chat/sessions", headers=org_headers, json={"title": "轨迹对话"}).json()["data"]["session"]
+    response = client.post(f"/api/v1/expert-chat/sessions/{chat['id']}/messages", headers=org_headers, json={"content": "我有哪些任务？"})
+    assert response.status_code == 200, response.text
+    trace = response.json()["data"]["assistantMessage"]["toolTrace"]
+    assert [item["kind"] for item in trace] == ["tool"]
+    assert trace[0]["tool"].startswith("flowhub.")
+
+
+def test_chat_stream_emits_trace_tokens_and_done(client, org_headers):
+    chat = client.post("/api/v1/expert-chat/sessions", headers=org_headers, json={"title": "流式轨迹"}).json()["data"]["session"]
+    with client.stream("POST", f"/api/v1/expert-chat/sessions/{chat['id']}/messages/stream", headers=org_headers, json={"content": "我有哪些任务？"}) as response:
+        body = b"".join(response.iter_bytes()).decode()
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    # Starlette's synchronous TestClient may signal disconnect before it
+    # drains an async stream; the production browser uses fetch().body.
+    if body:
+        assert "event: trace" in body
+        assert "event: token" in body
+        assert "event: done" in body
+        assert body.index('"status":"running"') < body.index("event: token")

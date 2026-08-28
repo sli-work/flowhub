@@ -79,7 +79,7 @@ async def get_work_item(
             "id": inst.id, "templateId": inst.template_id, "version": inst.version,
             "currentNode": inst.current_node, "state": inst.state,
         },
-        "tasks": [{"id": t.id, "node": t.node, "nodeId": t.node_id, "status": t.status, "assignee": t.assignee, "due": t.due, "agentPending": t.agent_pending} for t in tasks],
+        "tasks": [{"id": t.id, "node": t.node, "nodeId": t.node_id, "status": t.status, "assignee": t.assignee, "due": t.due, "expertPending": t.expert_pending, "title": t.title, "parentTaskId": t.parent_task_id, "lineageRootId": t.lineage_root_id} for t in tasks],
     })
 
 

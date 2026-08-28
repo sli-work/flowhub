@@ -20,7 +20,7 @@ export function DashboardPage() {
     { label: '运行中流程', value: 0 },
     { label: '已关闭工作项', value: 0 },
     { label: '超时任务', value: 0 },
-    { label: 'Agent 待确认', value: 0 },
+    { label: 'Expert 待审批', value: 0 },
   ])
   const [typeSplit, setTypeSplit] = useState<{ name: string; value: number; color: string }[]>([])
   const [timeoutTop, setTimeoutTop] = useState<{ name: string; v: string }[]>([])

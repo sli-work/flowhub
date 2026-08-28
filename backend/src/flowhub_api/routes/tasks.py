@@ -9,7 +9,7 @@ from flowhub_api.authz.authorizer import build_authorizer, get_current_user
 from flowhub_api.core.response import BizCode, BizError, ok
 from flowhub_api.db.session import get_db
 from flowhub_api.models import GlobalTemplate, Project, TaskItem, User
-from flowhub_api.schemas.api import TaskActionReq
+from flowhub_api.schemas.api import TaskActionReq, TaskSplitReq
 from flowhub_api.services.audit import AuditService
 from flowhub_api.services.workflow import WorkflowService
 
@@ -21,7 +21,8 @@ def _brief(t: TaskItem) -> dict:
         "id": t.id, "title": t.title, "wiId": t.wi_id, "project": t.project,
         "node": t.node, "nodeId": t.node_id, "type": t.type, "priority": t.priority, "status": t.status,
         "assignee": t.assignee, "due": t.due, "slaHours": t.sla_hours,
-        "overdue": t.overdue, "agentPending": t.agent_pending, "source": t.source,
+        "overdue": t.overdue, "expertPending": t.expert_pending, "source": t.source,
+        "parentTaskId": t.parent_task_id, "lineageRootId": t.lineage_root_id, "brief": t.brief or "",
     }
 
 
@@ -80,14 +81,9 @@ async def get_task(
     frozen = (await session.execute(
         select(_WI.id).where(_WI.id == t.wi_id, _WI.status == "archived")
     )).first() is not None
-    # Agent 建议（docs/02 §7.2）：该任务关联的 Agent 产出（含已应用/已拒绝，前端可展示状态）
-    from flowhub_api.models import AgentSuggestion
-
-    suggestions = (await session.execute(
-        select(AgentSuggestion)
-        .where(AgentSuggestion.task_id == task_id)
-        .order_by(AgentSuggestion.time.desc())
-    )).scalars().all()
+    # Expert Run is the execution record. Task-level suggestions are now
+    # represented by linked Expert Run output rather than a parallel Agent table.
+    suggestions = []
     # 继承上下文（上游 chain）：起始节点表单 + 已完成前序节点的表单值（数据可见性 = 当前任务 + 已执行链）
     from flowhub_api.models import GlobalTemplate, TaskAppend, TemplateCanvas, WorkItem, WorkflowInstance
 
@@ -95,15 +91,21 @@ async def get_task(
     upstream: list[dict] = []
     start_node_ids: set = set()
     schema_map: dict[str, list] = {}
+    # 节点 → 表单 schema 映射：与引擎同源（最新 published 画布），保证任务书/表单/校验三者一致
+    node_cfg: dict = {}
     if wi is not None:
-        # 节点 → 表单 schema 映射（取自该实例绑定的模板版本画布，用于前端渲染补充表单）
         inst = (await session.execute(
             select(WorkflowInstance).where(WorkflowInstance.work_item_id == wi.id)
         )).scalar_one_or_none()
         if inst is not None:
-            canvas = await session.get(TemplateCanvas, f"{inst.template_id}:{inst.version}")
-            for n in (canvas.nodes if canvas and canvas.nodes else []):
-                schema_map[n.get("id", "")] = (n.get("cfg") or {}).get("schema") or []
+            service = WorkflowService(session)
+            tpl = await session.get(GlobalTemplate, inst.template_id)
+            if tpl is not None:
+                latest_nodes = await service.latest_published_canvas_nodes(tpl)
+                for n in latest_nodes:
+                    schema_map[n.get("id", "")] = (n.get("cfg") or {}).get("schema") or []
+                if t.node_id:
+                    node_cfg = next((n.get("cfg") or {}) for n in latest_nodes if n.get("id") == t.node_id) if any(n.get("id") == t.node_id for n in latest_nodes) else (await service._node_cfg_of(tpl, t.node_id) or {})
         appends = (await session.execute(
             select(TaskAppend).where(TaskAppend.wi_id == wi.id).order_by(TaskAppend.time)
         )).scalars().all()
@@ -152,14 +154,37 @@ async def get_task(
                     "schema": schema_map.get(dt.node_id, []),
                     "appends": appends_by_task.get(dt.id, []),
                 })
+    parent_task = await session.get(TaskItem, t.parent_task_id) if t.parent_task_id else None
+    subtasks = (await session.execute(
+        select(TaskItem).where(TaskItem.parent_task_id == t.id).order_by(TaskItem.id)
+    )).scalars().all()
+    # 关联的 Expert Run（Expert 自动/协助填充产生）
+    from flowhub_api.models import ExpertRun
+
+    linked_runs = (await session.execute(
+        select(ExpertRun).where(ExpertRun.task_id == t.id).order_by(ExpertRun.id.desc()).limit(3)
+    )).scalars().all()
     return ok({
-        "task": {**_brief(t), "frozen": frozen},
+        "task": {**_brief(t), "frozen": frozen, "acceptanceChecks": t.acceptance_checks or {}},
         "upstream": upstream,
-        "suggestions": [{
-            "id": sg.id, "agentId": sg.agent_id, "taskId": sg.task_id, "nodeId": sg.node_id,
-            "title": sg.title, "body": sg.body, "status": sg.status, "time": sg.time,
-            "appliedAt": sg.applied_at, "data": sg.data,
-        } for sg in suggestions],
+        "parent": _brief(parent_task) if parent_task else None,
+        "subtasks": [
+            {"id": s.id, "title": s.title, "node": s.node, "status": s.status, "assignee": s.assignee, "due": s.due}
+            for s in subtasks
+        ],
+        # 引擎视角的节点配置（最新 published）：任务书/表单/拆分与流转校验同源
+        "nodeCfg": {
+            "purpose": node_cfg.get("purpose", ""),
+            "handler": node_cfg.get("handler", ""),
+            "sla": node_cfg.get("sla", ""),
+            "schema": node_cfg.get("schema") or [],
+            "deliverable": node_cfg.get("deliverable") or {},
+            "split": node_cfg.get("split") or {"mode": "off"},
+        },
+        "expertRuns": [
+            {"id": r.id, "status": r.status, "output": (r.output or "")[:600], "error": r.error, "startedAt": r.started_at}
+            for r in linked_runs
+        ],
     })
 
 
@@ -344,14 +369,32 @@ async def task_action(
 
     if body.action == "submit":
         auth.require("task:submit")
-        # Agent 自动节点：必须先批准确认请求，禁止直接提交（绕过 Agent 参与）
+        # Expert 自动节点：必须先批准 LangGraph Approval，禁止绕过受治理写入。
         if t.status == "pending_confirmation":
             raise BizError(
                 BizCode.DUPLICATE_OPERATION,
-                "该节点由 Agent 自动处理，需先批准 Agent 确认请求后才能提交",
+                "该节点由 Expert 自动处理，需先批准 Expert Approval 后才能提交",
                 http_status=409,
             )
         t.form_values = body.form_values or {}
+        # 验收清单勾选快照随提交落库（引擎在 advance 中强制全部勾选后才会流转）
+        t.acceptance_checks = body.acceptance_checks or {}
+        # 表单附件回填工作项关联：与发起流程时的 _attachment_ids 同语义，防止文档游离
+        from flowhub_api.models import DocItem
+
+        attachment_ids = [
+            v.get("id") for v in (body.form_values or {}).values()
+            if isinstance(v, dict) and isinstance(v.get("id"), str)
+        ] + [
+            ref.get("id") for v in (body.form_values or {}).values() if isinstance(v, list)
+            for ref in v if isinstance(ref, dict) and isinstance(ref.get("id"), str)
+        ]
+        if attachment_ids:
+            docs = (await session.execute(
+                select(DocItem).where(DocItem.id.in_(attachment_ids), DocItem.wi.is_(None))
+            )).scalars().all()
+            for d in docs:
+                d.wi = t.wi_id
         # 推进流程：需要项目 + 模板定位主边
         project = (await session.execute(select(Project).where(Project.name == t.project))).scalar_one_or_none()
         tpl = None
@@ -403,3 +446,167 @@ async def task_action(
         return ok({"task": _brief(t)}, "补充信息请求已发送：SLA 暂停计时")
 
     raise BizError(BizCode.VALIDATION, f"未知动作：{body.action}")
+
+
+async def _resolve_task_template(session: AsyncSession, t: TaskItem) -> tuple[Project | None, GlobalTemplate | None]:
+    """按任务所属项目解析激活的模板绑定（拆分/AI 建议共用）。"""
+    project = (await session.execute(select(Project).where(Project.name == t.project))).scalar_one_or_none()
+    tpl = None
+    if project:
+        binding = next((b for b in project.template_bindings if b.status == "active"), None)
+        if binding:
+            tpl = await session.get(GlobalTemplate, binding.template_id)
+    return project, tpl
+
+
+@router.post("/{task_id}/split")
+async def split_task(
+    task_id: str,
+    body: TaskSplitReq,
+    user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_db)],
+):
+    """把当前任务拆分为多个子任务：父任务完成，子任务在下一节点独立流转。"""
+    auth = build_authorizer(user)
+    auth.require("task:submit")
+    t = await session.get(TaskItem, task_id)
+    if t is None:
+        raise BizError(BizCode.NOT_FOUND, "任务不存在")
+    from flowhub_api.models import WorkItem as _WI
+
+    if (await session.execute(select(_WI.id).where(_WI.id == t.wi_id, _WI.status == "archived"))).first():
+        raise BizError(BizCode.FORBIDDEN, "流程已冻结（项目归档），不可拆分", http_status=403)
+    if t.status in ("completed", "cancelled"):
+        raise BizError(BizCode.DUPLICATE_OPERATION, "任务已处理，不可再拆分", http_status=409)
+    # 权限：节点处理人 / 工作项创建人或负责人 / 系统管理员
+    wi_row = await session.get(_WI, t.wi_id)
+    allowed = (
+        t.assignee == user.name
+        or user.name == "系统管理员"
+        or (wi_row is not None and user.name in (wi_row.creator, wi_row.assignee))
+    )
+    if not allowed:
+        raise BizError(BizCode.PERM_DENIED, f"仅节点「{t.node}」的处理人或工作项负责人可拆分", http_status=403)
+    project, tpl = await _resolve_task_template(session, t)
+    if not project or not tpl:
+        raise BizError(BizCode.VALIDATION, "未找到项目与模板绑定，无法拆分", http_status=422)
+    service = WorkflowService(session)
+    children = [c.model_dump() for c in body.children]
+    created = await service.split_task(t, project, tpl, children, user)
+    await session.commit()
+    return ok({
+        "parent": _brief(t),
+        "children": [_brief(c) for c in created],
+    }, f"已拆分为 {len(created)} 个子任务，均在下一节点独立流转")
+
+
+@router.post("/{task_id}/ai-fill")
+async def ai_fill_task(
+    task_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Expert 协助填充：人工确认后，按任务书 + 节点 schema 生成全部字段值（含文档生成上传），回填表单供人审核。"""
+    t = await session.get(TaskItem, task_id)
+    if t is None:
+        raise BizError(BizCode.NOT_FOUND, "任务不存在")
+    from flowhub_api.models import WorkItem as _WI
+
+    if (await session.execute(select(_WI.id).where(_WI.id == t.wi_id, _WI.status == "archived"))).first():
+        raise BizError(BizCode.FORBIDDEN, "流程已冻结（项目归档），不可 AI 填充", http_status=403)
+    if t.status in ("completed", "cancelled"):
+        raise BizError(BizCode.DUPLICATE_OPERATION, "任务已处理，无需填充", http_status=409)
+    wi_row = await session.get(_WI, t.wi_id)
+    allowed = (
+        t.assignee == user.name
+        or user.name == "系统管理员"
+        or (wi_row is not None and user.name in (wi_row.creator, wi_row.assignee))
+    )
+    if not allowed:
+        raise BizError(BizCode.PERM_DENIED, f"仅节点「{t.node}」的处理人或工作项负责人可使用 Expert 填充", http_status=403)
+    project, tpl = await _resolve_task_template(session, t)
+    if not project or not tpl:
+        raise BizError(BizCode.VALIDATION, "未找到项目与模板绑定", http_status=422)
+    service = WorkflowService(session)
+    cfg = await service._node_cfg_of(tpl, t.node_id) or {}
+    schema = cfg.get("schema") or []
+    if not schema:
+        raise BizError(BizCode.VALIDATION, "该节点未配置表单字段，无需 AI 填充", http_status=422)
+    deployment_id = ((cfg.get("expert") or {}).get("expertDeploymentId")) or ""
+    if not deployment_id:
+        raise BizError(BizCode.FLOW_VALIDATE, "该节点未绑定 Expert Deployment，无法 AI 填充；请在画布中绑定或手动填写", http_status=422)
+    brief = await service.build_task_brief(t, tpl)
+    from flowhub_api.services.expert_runtime import build_schema_output_instruction, generate_task_form_values
+
+    instruction = build_schema_output_instruction(schema)
+    prompt = brief + ("\n\n" + instruction if instruction else "")
+    run, values, warnings = await generate_task_form_values(
+        session, task=t, schema=schema, prompt=prompt, user=user, deployment_id=deployment_id,
+    )
+    if run.status != "succeeded":
+        raise BizError(BizCode.FLOW_VALIDATE, warnings[0] if warnings else "Expert 运行未成功，请稍后重试或手动填写", http_status=422)
+    await AuditService(session).record(
+        actor=user.name, action="task:ai_fill", target=f"{t.id} · {t.node}", result="success",
+        after={"runId": run.id, "fields": list(values.keys()), "warnings": warnings[:5]},
+    )
+    await session.commit()
+    return ok({"values": values, "warnings": warnings, "runId": run.id}, "Expert 已生成表单草稿，请审核后提交")
+
+
+@router.post("/{task_id}/split-suggest")
+async def split_suggest(
+    task_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_db)],
+):
+    """AI 拆分建议：用节点绑定的 Expert Deployment 模型 + 任务书生成结构化建议（人确认后才创建）。"""
+    t = await session.get(TaskItem, task_id)
+    if t is None:
+        raise BizError(BizCode.NOT_FOUND, "任务不存在")
+    project, tpl = await _resolve_task_template(session, t)
+    if not project or not tpl:
+        raise BizError(BizCode.VALIDATION, "未找到项目与模板绑定", http_status=422)
+    service = WorkflowService(session)
+    cfg = await service._node_cfg_of(tpl, t.node_id) or {}
+    if (cfg.get("split") or {}).get("mode", "off") not in ("ai_assist", "ai_auto"):
+        raise BizError(BizCode.VALIDATION, "该节点未开启 AI 拆分建议（请在画布中配置拆分模式）", http_status=422)
+    # 模型来源：节点绑定的 Expert Deployment 固定版本中的 provider model
+    deployment_id = ((cfg.get("expert") or {}).get("expertDeploymentId")) or ""
+    provider_model_id = ""
+    if deployment_id:
+        from flowhub_api.models import ExpertDeployment, ExpertVersion
+
+        dep = await session.get(ExpertDeployment, deployment_id)
+        ver = await session.get(ExpertVersion, dep.expert_version_id) if dep else None
+        provider_model_id = (ver.provider_model_id or "") if ver else ""
+    if not provider_model_id:
+        raise BizError(BizCode.FLOW_VALIDATE, "该节点未绑定可用的 Expert Deployment 模型；请先在画布中绑定或手动填写拆分", http_status=422)
+    brief = await service.build_task_brief(t, tpl)
+    instruction = (
+        brief
+        + "\n\n## 本轮指令\n基于以上任务书判断本节点应拆分为哪些子任务。"
+        + "只输出一个 JSON 数组，不要输出其他文字，格式："
+        + '[{"title":"子任务标题(<=30字)","note":"该子任务的具体要求说明","assignee_hint":"建议负责人或角色"}]'
+    )
+    from flowhub_api.services.expert_runtime import run_native_flowhub_chat
+
+    raw, _trace = await run_native_flowhub_chat(session, instruction, user, provider_model_id)
+    import json as _json
+    import re as _re
+
+    proposals: list[dict] = []
+    parse_error = ""
+    try:
+        match = _re.search(r"\[.*\]", raw, _re.S)
+        parsed = _json.loads(match.group(0)) if match else []
+        proposals = [
+            {"title": str(p.get("title", ""))[:120], "note": str(p.get("note", "")), "assigneeHint": str(p.get("assignee_hint", ""))}
+            for p in parsed if isinstance(p, dict) and str(p.get("title", "")).strip()
+        ]
+        if not proposals:
+            parse_error = "模型未返回有效拆分项"
+    except Exception:  # noqa: BLE001
+        parse_error = "模型返回内容无法解析为 JSON"
+    await AuditService(session).record(actor=user.name, action="task:split_suggest", target=t.id, result="success")
+    await session.commit()
+    return ok({"proposals": proposals, "raw": raw if parse_error else "", "parseError": parse_error})

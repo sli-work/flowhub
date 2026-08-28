@@ -16,7 +16,7 @@ _settings = get_settings()
 # 改用 pool_recycle 定期回收空闲连接（30 分钟），避免复用已断开的连接。
 engine = create_async_engine(
     _settings.sqlalchemy_url,
-    echo=_settings.debug,
+    echo=False,
     pool_pre_ping=False,
     pool_recycle=1800,
 )

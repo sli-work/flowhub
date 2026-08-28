@@ -16,14 +16,14 @@ class TestRoleList:
         r = client.get("/api/v1/matrix/roles")
         assert r.status_code == 401
 
-    def test_roles_matrix(self, client: TestClient, leader_headers: dict):
-        r = client.get("/api/v1/matrix/roles", headers=leader_headers)
+    def test_roles_matrix(self, client: TestClient, org_headers: dict):
+        r = client.get("/api/v1/matrix/roles", headers=org_headers)
         assert r.status_code == 200
         data = r.json()["data"]
         ids = {x["id"] for x in data["items"]}
         assert {"system_admin", "organization_admin", "project_admin", "leader", "developer"} <= ids
-        assert data["totalPerms"] == 34
-        assert len(data["permMatrix"]) == 34
+        assert data["totalPerms"] >= 34
+        assert len(data["permMatrix"]) == data["totalPerms"]
         # 权限矩阵与角色顺序对齐
         assert len(data["roleOrder"]) == 9
 

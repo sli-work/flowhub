@@ -52,7 +52,7 @@ class UserRole(Base):
 
 
 class UserApiKey(Base):
-    """用户级 access key（外部 Agent 通过 MCP/Skill 接入平台的凭证）。
+    """用户级 access key（外部 MCP/Skill 接入平台的凭证）。
 
     明文 `sk_xxx` 仅在创建时返回一次；落库 bcrypt 哈希 + 前缀索引（bcrypt 无法按值索引，
     key_prefix 仅用于检索候选行，泄露前缀不足以伪造）。可命名、可吊销、记录 last_used。
@@ -64,6 +64,7 @@ class UserApiKey(Base):
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     name: Mapped[str] = mapped_column(String(64), default="")
     key_hash: Mapped[str] = mapped_column(String(128))                     # bcrypt(sk_xxx)
+    key_ciphertext: Mapped[str] = mapped_column(String(512), default="")  # 受控导出时解密
     key_prefix: Mapped[str] = mapped_column(String(16), index=True)        # token 前 12 字符
     status: Mapped[str] = mapped_column(String(16), default="active")      # active / revoked
     created_at: Mapped[str] = mapped_column(String(32), default="")

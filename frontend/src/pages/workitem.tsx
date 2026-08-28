@@ -2,9 +2,11 @@ import { useEffect, useRef, useState } from 'react'
 import { ArrowLeft, Paperclip, Tag, Calendar, User, Target, Inbox } from 'lucide-react'
 import { useApp, toast } from '../store/app-store'
 import { api, ApiError, getToken } from '../lib/api'
+import { cn } from '../lib/utils'
 import {
   Badge, DocRow, SectionCard, Timeline, wiStatusBadge, priorityBadge, EmptyState, type Tone,
 } from '../components/common'
+import { DocumentViewerDrawer } from '../components/document-viewer-drawer'
 import type { WorkItem } from '../types'
 
 const labelTone: Record<string, Tone> = {
@@ -18,9 +20,17 @@ export function WorkItemPage() {
   const [wi, setWi] = useState<WorkItem | null>(null)
   const [instance, setInstance] = useState<{ id: string; templateId: string; version: string; currentNode: string; state: string } | null>(null)
   const [startValues, setStartValues] = useState<Record<string, unknown>>({})
-  const [taskList, setTaskList] = useState<{ id: string; node: string; status: string; assignee: string; due: string }[]>([])
+  const [taskList, setTaskList] = useState<{ id: string; title?: string; node: string; status: string; assignee: string; due: string; parentTaskId?: string | null }[]>([])
   const fileRef = useRef<HTMLInputElement>(null)
-  const [docs, setDocs] = useState<{ id: string; name: string; kind: string; size: string; version: string; level: string; uploader: string }[]>([])
+  const [docs, setDocs] = useState<{ id: string; name: string; kind: string; size: string; version: string; level: string; uploader: string; time?: string }[]>([])
+  const [viewer, setViewer] = useState<{ open: boolean; initialId?: string }>({ open: false })
+
+  const refreshDocs = () => {
+    if (!activeWiId) return
+    api.get<{ items: { id: string; name: string; kind: string; size: string; version: string; level: string; uploader: string; time?: string }[] }>(`/api/v1/documents?wi=${activeWiId}&page_size=100`)
+      .then((dd) => setDocs(dd.items))
+      .catch(() => {})
+  }
   /* 处理历史时间线：来自后端工作项详情任务（GET /work-items/{id} 返回 tasks） */
   const [timeline, setTimeline] = useState<{ id: string; time: string; title: string; desc: string; by: string; kind: string }[]>([])
 
@@ -36,8 +46,8 @@ export function WorkItemPage() {
         })))
       })
       .catch(() => { /* 后端不可用：保持占位 */ })
-    api.get<{ items: { id: string; name: string; kind: string; size: string; version: string; level: string; uploader: string }[] }>(`/api/v1/documents?wi=${activeWiId}`)
-      .then((dd) => { if (dd.items.length) setDocs(dd.items) })
+    api.get<{ items: { id: string; name: string; kind: string; size: string; version: string; level: string; uploader: string; time?: string }[] }>(`/api/v1/documents?wi=${activeWiId}&page_size=100`)
+      .then((dd) => setDocs(dd.items))
       .catch(() => {})
   }, [activeWiId, navigate])
 
@@ -66,21 +76,15 @@ export function WorkItemPage() {
       const payload = await resp.json()
       if (!resp.ok || payload.code !== 0) throw new ApiError(payload.code ?? resp.status, payload.message || '上传失败', resp.status)
       toast.success(`上传成功：${payload.data.doc.name}（校验通过并入库）`)
+      refreshDocs()
     } catch (e) {
       toast.error(e instanceof ApiError ? e.message : '上传失败')
     }
   }
 
   /* 文档短时链接：POST /documents/{id}/link */
-  const openDocLink = async (d: (typeof docs)[number]) => {
-    try {
-      const r = await api.post<{ link: string; expire: string }>(`/api/v1/documents/${d.id}/link`)
-      toast.success(`文档权限代理校验通过，已生成短时链接（${r.expire}）`)
-      if (r.link) window.open(r.link, '_blank')
-    } catch (e) {
-      toast.error(e instanceof ApiError ? e.message : '生成链接失败')
-    }
-  }
+  /* 文档点击 → 统一预览抽屉（下载按钮在抽屉内） */
+  const openViewer = (d: (typeof docs)[number]) => setViewer({ open: true, initialId: d.id })
 
   return (
     <div className="page-container">
@@ -146,7 +150,7 @@ export function WorkItemPage() {
               {docs.map((d) => (
                 <DocRow key={d.id} name={d.name} kind={d.kind} tone="info"
                   meta={<>{d.size} · {d.version} · {d.level} · {d.uploader}</>}
-                  onClick={() => openDocLink(d)} />
+                  onClick={() => openViewer(d)} />
               ))}
             </div>
           </SectionCard>
@@ -160,21 +164,43 @@ export function WorkItemPage() {
         <div className="space-y-5">
           <SectionCard title="流程任务" extra={<Badge tone="info">{taskList.length} 个</Badge>}>
             <div className="space-y-2">
-              {taskList.map((t) => {
-                const done = ['completed', 'cancelled'].includes(t.status)
-                return (
-                  <div key={t.id} className="flex items-center gap-3 rounded-lg border border-slate-200 p-3 dark:border-slate-700">
-                    <span className={done ? 'text-emerald-500' : 'text-blue-500'}>
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-[12.5px] font-medium text-slate-700 dark:text-slate-200">节点「{t.node}」</div>
-                      <div className="text-[11px] text-slate-400">{t.id} · 处理人 {t.assignee} · 截止 {t.due}</div>
+              {(() => {
+                // 树形展示：主线任务在前，子任务（parentTaskId）缩进挂在父任务之后
+                const childrenOf = (id: string) => taskList.filter((t) => t.parentTaskId === id)
+                const render = (t: (typeof taskList)[number], depth: number) => {
+                  const done = ['completed', 'cancelled'].includes(t.status)
+                  return (
+                    <div key={t.id}>
+                      <div
+                        className={cn('flex items-center gap-3 rounded-lg border p-3', depth > 0 ? 'border-dashed' : 'border-slate-200 dark:border-slate-700', depth > 0 && 'ml-5 dark:border-slate-700')}
+                        style={depth > 0 ? { borderColor: undefined } : undefined}
+                      >
+                        <span className={done ? 'text-emerald-500' : 'text-blue-500'}>
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-[12.5px] font-medium text-slate-700 dark:text-slate-200">
+                            {depth > 0 && <span className="mr-1 text-[10.5px] font-semibold text-violet-500">↳ 子线</span>}节点「{t.node}」
+                          </div>
+                          <div className="text-[11px] text-slate-400">{t.id} · 处理人 {t.assignee} · 截止 {t.due}</div>
+                        </div>
+                        <Badge tone={done ? 'suc' : 'warn'}>{t.status}</Badge>
+                      </div>
+                      {childrenOf(t.id).map((c) => render(c, depth + 1))}
                     </div>
-                    <Badge tone={done ? 'suc' : 'warn'}>{t.status}</Badge>
-                  </div>
-                )
-              })}
+                  )
+                }
+                const shown = new Set<string>()
+                const ordered: typeof taskList = []
+                // 先按原顺序铺主线，再把各自的子线紧随其后（保持时间序）
+                for (const t of taskList) {
+                  if (t.parentTaskId) continue
+                  ordered.push(t)
+                  for (const c of taskList) if (c.parentTaskId === t.id) { ordered.push(c); shown.add(c.id) }
+                }
+                for (const t of taskList) if (!shown.has(t.id) && !ordered.includes(t)) ordered.push(t)
+                return ordered.map((t) => render(t, t.parentTaskId ? 1 : 0))
+              })()}
               {taskList.length === 0 && <EmptyState title="暂无流程任务" desc="工作项已创建，任务将按流程节点生成" />}
             </div>
           </SectionCard>
@@ -186,6 +212,7 @@ export function WorkItemPage() {
           </SectionCard>
         </div>
       </div>
+      <DocumentViewerDrawer open={viewer.open} docs={docs} initialDocId={viewer.initialId} onClose={() => setViewer({ open: false })} />
     </div>
   )
 }

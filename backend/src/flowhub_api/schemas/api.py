@@ -100,106 +100,114 @@ class TaskActionReq(BaseModel):
     to_node_id: str | None = None
     to_user_id: str | None = None
     reason: str | None = None
+    # 提交时验收清单勾选快照 {key: {text, checked}}（有验收标准的节点强制全部勾选）
+    acceptance_checks: dict = {}
 
 
-# ---------- Agent ----------
-class AgentRegisterReq(BaseModel):
-    name: str
-    desc: str = ""
-    scope: str = ""
-    capabilities: list[str] = []
-    # 新链路：工具+类型（第一类/第二类配置）
-    tool_id: str = ""                 # 客户端工具（agent_tools.id）；空=旧逻辑
-    agent_type: str = ""              # 类型 code（带出系统提示词模板）
-    system_prompt: str = ""           # 默认系统提示词（描述即提示词）
-    # 旧链路字段（无 tool_id 时兼容；api 引擎必填）
-    engine: str = "opencode"          # opencode（CLI 引擎）/ api（API Key 直连）
-    provider: str = ""
-    model: str = ""
+class TaskSplitChild(BaseModel):
+    title: str = Field(min_length=1, max_length=120)
+    note: str = ""
+    assignee: str = ""
+    due_hours: int = 48
+
+
+class TaskSplitReq(BaseModel):
+    children: list[TaskSplitChild] = Field(min_length=1, max_length=10)
+
+
+# ---------- Expert Runtime ----------
+class ProviderReq(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+    base_url: str = Field(min_length=1, max_length=255)
     api_key: str = ""
-    base_url: str = ""
-
-
-class AgentUpdateReq(BaseModel):
-    name: str
-    agent_type: str = ""
-    provider: str
-    model: str
-    system_prompt: str = ""
-
-
-class AgentToolReq(BaseModel):
-    name: str
-    engine: str = "opencode"          # opencode（CLI 引擎）/ api（API Key 直连）
-    provider: str = ""
-    model: str = ""
     models: list[str] = []
-    base_url: str = ""
-    api_key: str = ""
-    desc: str = ""
+    max_context_tokens: int = Field(default=1_000_000, ge=8_000, le=10_000_000)  # 模型最大上下文窗口（token），压缩预算取 80%
 
 
-class TestConnectionReq(BaseModel):
-    base_url: str
-    api_key: str
-    model: str
+class ProviderTestReq(BaseModel):
+    base_url: str = Field(min_length=1, max_length=255)
+    api_key: str = Field(min_length=1)
+    model: str = Field(min_length=1, max_length=128)
 
 
-class OpencodeApplyReq(BaseModel):
-    provider: str
-    api_key: str
-    kind: str = "api"          # api / oauth
-    base_url: str = ""         # OpenAI 兼容端点（自定义 provider 必填）
-    models: list[str] = []     # 该 provider 下模型列表（可空=用内置列表）
-
-
-class AgentAuthorizeReq(BaseModel):
-    user_ids: list[str] = []
-    capabilities: dict[str, str] | None = None  # {name: mode}
-
-
-class AgentBindReq(BaseModel):
-    scope: str = ""
-    bindings: str = ""
-    capabilities: dict[str, str] | None = None
-
-
-class AgentConfirmReq(BaseModel):
-    action: str
-    op_scope: str = ""
-    expire_minutes: int = 120
-
-
-class AgentInvokeReq(BaseModel):
-    capability: str
-    provider: str = ""
+class ExpertCreateReq(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    slug: str = Field(pattern=r"^[a-z][a-z0-9-]{0,95}$")
+    description: str = ""
+    system_prompt: str = ""
+    provider_model_id: str = ""
     model: str = ""
-    action: str = ""
-    prompt: str = ""
-    task_id: str | None = None
-    node_id: str | None = None
-    wi_id: str | None = None
-    op_scope: str = ""
-    expire_minutes: int = 120
+    skills: list[str] = []
+    knowledge_base_ids: list[str] = []
+    tool_policies: dict[str, str] = {}
 
 
-class ConfirmDecisionReq(BaseModel):
+class ExpertVersionReq(BaseModel):
+    description: str = ""
+    system_prompt: str = ""
+    provider_model_id: str = ""
+    model: str = ""
+    skills: list[str] = []
+    knowledge_base_ids: list[str] = []
+    tool_policies: dict[str, str] = {}
+
+
+class DeploymentReq(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    environment: str = Field(pattern=r"^(test|prod)$")
+    alias: str = ""
+
+
+class ExpertRunReq(BaseModel):
+    deployment_id: str = ""
+    prompt: str = Field(min_length=1)
+    write_intent: bool = False
+
+
+class McpToolReq(BaseModel):
+    name: str = Field(min_length=1, max_length=160)
+    description: str = ""
+    input_schema: dict = {}
+    risk: str = "read"
+    approval: str = "none"
+
+
+class McpServerReq(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    description: str = ""
+    direction: str = "outbound"
+    transport: str = "streamable-http"
+    endpoint: str = ""
+    auth_type: str = "none"
+    credentials: str = ""
+    tools: list[McpToolReq] = []
+
+
+class McpToolUpdateReq(BaseModel):
+    status: str | None = None
+    enabled: bool | None = None
+    risk: str | None = None
+    approval: str | None = None
+
+
+class ApprovalDecisionReq(BaseModel):
     note: str = ""
 
 
-class AgentModelReq(BaseModel):
-    provider: str
-    model: str
-    label: str = ""
-    desc: str = ""
-    base_url: str = ""   # OpenAI 兼容 endpoint（含 /v1）
+class ExpertChatSessionReq(BaseModel):
+    deployment_id: str = ""
+    provider_model_id: str = ""
+    version_id: str = ""  # 绑定指定 Expert Version（编辑器草稿测试会话），deployment 存在时忽略
+    title: str = "新会话"
 
 
-class AgentTypeReq(BaseModel):
-    code: str
-    label: str
-    desc: str = ""
-    default_caps: dict = {}
-    system_prompt: str = ""
-    provider: str = ""
-    model: str = ""
+class ExpertChatSessionRenameReq(BaseModel):
+    """会话更新：title 重命名；expert_id/provider_model_id 变更绑定（传入则更新，空串清除绑定）。"""
+    title: str | None = Field(default=None, min_length=1, max_length=160)
+    expert_id: str = ""
+    provider_model_id: str = ""
+
+
+class ExpertChatMessageReq(BaseModel):
+    content: str = Field(min_length=1)
+    write_intent: bool = False

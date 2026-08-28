@@ -12,9 +12,9 @@ def _uniq(prefix: str) -> str:
 
 
 class TestOrgOverview:
-    def test_overview_public(self, client: TestClient):
-        """org/overview 无鉴权依赖，但应正常返回统计。"""
-        r = client.get("/api/v1/org/overview")
+    def test_overview_requires_auth(self, client: TestClient, leader_headers: dict):
+        """组织概览属于业务数据，必须认证后返回统计。"""
+        r = client.get("/api/v1/org/overview", headers=leader_headers)
         assert r.status_code == 200
         data = r.json()["data"]
         assert data["users"] >= 1
