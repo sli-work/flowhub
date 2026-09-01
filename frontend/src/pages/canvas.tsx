@@ -613,39 +613,32 @@ export function CanvasPage() {
 
   /* ---------- 渲染辅助 ---------- */
   const pos = (id: string) => nodes.find((n) => n.id === id)!
-  /** 节点四边锚点：按目标方位选最合适的出入点，换行/回向的边不再横穿节点 */
-  const anchor = (n: CanvasNode, side: 'out' | 'in', other: CanvasNode) => {
-    const cx = n.x + n.width / 2, cy = n.y + n.height / 2
-    const ocx = other.x + other.width / 2, ocy = other.y + other.height / 2
-    const dx = ocx - cx, dy = ocy - cy
-    // 目标在右方（或正右/右下/右上）→ 右出右入；左方 → 左侧；主要垂直偏移 → 底/顶
-    if (Math.abs(dy) > Math.abs(dx) * 1.4) {
-      // 近似垂直关系：下行从底部出、顶部入；上行反向（蛇形换行典型形态）
-      if (dy > 0) return side === 'out' ? { x: cx, y: n.y + n.height } : { x: ocx, y: other.y }
-      return side === 'out' ? { x: cx, y: n.y } : { x: ocx, y: other.y + other.height }
-    }
-    if (dx >= 0) return side === 'out' ? { x: n.x + n.width, y: cy } : { x: other.x, y: ocy }
-    // 回向边（目标在左上/左下）：出边从底部绕行，入边进左侧
-    return side === 'out' ? { x: cx, y: n.y + n.height } : { x: other.x, y: ocy }
-  }
   const edgeD = (a: string, b: string, offset = 0) => {
     const A = pos(a), B = pos(b)
     if (!A || !B) return ''
-    const p1 = anchor(A, 'out', B), p2 = anchor(B, 'in', A)
-    const mx = (p1.x + p2.x) / 2
-    if (Math.abs(p1.y - p2.y) < 8 || Math.abs(p1.x - p2.x) < 8) {
-      // 近似直线：微弯即可
-      const my = (p1.y + p2.y) / 2 + offset
-      return `M ${p1.x} ${p1.y} C ${(p1.x + p2.x) / 2} ${my}, ${(p1.x + p2.x) / 2} ${my}, ${p2.x} ${p2.y}`
+    const acx = A.x + A.width / 2, acy = A.y + A.height / 2
+    const bcx = B.x + B.width / 2, bcy = B.y + B.height / 2
+    const dx = bcx - acx, dy = bcy - acy
+    let p1: { x: number; y: number }, p2: { x: number; y: number }
+    if (Math.abs(dy) > Math.abs(dx) * 1.4) {
+      // 近似垂直（蛇形换行）：下行从源底部出、目标顶部入；上行反之
+      if (dy > 0) { p1 = { x: acx, y: A.y + A.height }; p2 = { x: bcx, y: B.y } }
+      else { p1 = { x: acx, y: A.y }; p2 = { x: bcx, y: B.y + B.height } }
+    } else if (dx >= 0) {
+      // 右向流：源右侧出、目标左侧入
+      p1 = { x: A.x + A.width, y: acy }; p2 = { x: B.x, y: bcy }
+    } else {
+      // 回向（目标在左）：源底部绕行出、目标左侧入，避免横穿中间节点
+      p1 = { x: acx, y: A.y + A.height }; p2 = { x: B.x, y: bcy }
     }
-    // 同向水平流：水平贝塞尔；垂直流：垂直贝塞尔（控制点随 offset 平移）
-    if (Math.abs(dy0(p1, p2)) < Math.abs(p1.x - p2.x)) {
+    // 贝塞尔朝向按跨度主轴选择；offset 平移控制点（拖弯）
+    if (Math.abs(p1.x - p2.x) >= Math.abs(p1.y - p2.y)) {
+      const mx = (p1.x + p2.x) / 2
       return `M ${p1.x} ${p1.y} C ${mx} ${p1.y + offset}, ${mx} ${p2.y + offset}, ${p2.x} ${p2.y}`
     }
     const my = (p1.y + p2.y) / 2 + offset
     return `M ${p1.x} ${p1.y} C ${p1.x} ${my}, ${p2.x} ${my}, ${p2.x} ${p2.y}`
   }
-  const dy0 = (p1: { x: number; y: number }, p2: { x: number; y: number }) => p2.y - p1.y
   const fbD = (a: string, b: string) => {
     const A = pos(a), B = pos(b)
     if (!A || !B) return ''
