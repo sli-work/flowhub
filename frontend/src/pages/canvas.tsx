@@ -482,6 +482,8 @@ export function CanvasPage() {
 
   /* ---------- 拖连线落点高亮 ---------- */
   const [dropTarget, setDropTarget] = useState<string | null>(null)
+  /* 悬停节点：显示删除按钮 */
+  const [hoverNodeId, setHoverNodeId] = useState<string | null>(null)
 
   const onWinMove = (e: PointerEvent) => {
     const d = drag.current
@@ -492,8 +494,9 @@ export function CanvasPage() {
       const ny = Math.round((d.oy + (p.y - d.start.y)) / 8) * 8
       updateNode(d.id, { x: Math.max(8, Math.min(W - NODE_W - 8, nx)), y: Math.max(8, Math.min(H - NODE_H - 8, ny)) })
     } else {
-      d.cur = p
-      const hit = hitNodeRef(p)
+      // 连线磁吸：指针靠近目标节点（含 16px 外扩热区）时吸附到其左侧端口，松手即连
+      const hit = hitNodeRef(p, 16)
+      d.cur = hit ? { x: hit.x, y: hit.y + hit.height / 2 } : p
       setDropTarget(hit && hit.id !== d.id ? hit.id : null)
     }
   }
@@ -502,13 +505,13 @@ export function CanvasPage() {
     if (!d) return
     const p = toSvg({ clientX: e.clientX, clientY: e.clientY })
     if (d.kind === 'link') {
-      const target = hitNodeRef(p)
+      const target = hitNodeRef(p, 16)
       if (target && target.id !== d.id) {
         addEdge(d.id, target.id)
       } else if (target) {
         toast('不能连接到自身节点')
       } else {
-        toast('未命中节点：从节点右侧蓝点拖到目标节点上松手')
+        toast('未命中节点：从节点右侧蓝点拖出，靠近目标节点会自动吸附，松手完成连线')
       }
       setDropTarget(null)
     }
@@ -541,8 +544,8 @@ export function CanvasPage() {
     setSelectedId(n.id)
     setSelectedEdge(null)
   }
-  const hitNodeRef = (p: { x: number; y: number }) =>
-    nodesRef.current.find((n) => p.x >= n.x && p.x <= n.x + NODE_W && p.y >= n.y && p.y <= n.y + NODE_H)
+  const hitNodeRef = (p: { x: number; y: number }, pad = 0) =>
+    nodesRef.current.find((n) => p.x >= n.x - pad && p.x <= n.x + n.width + pad && p.y >= n.y - pad && p.y <= n.y + n.height + pad)
 
   /* ---------- 键盘删除 ---------- */
   useEffect(() => {
@@ -716,6 +719,9 @@ export function CanvasPage() {
                 <marker id="arrow-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
                   <path d="M 0 0 L 10 5 L 0 10 z" fill="#F87171" />
                 </marker>
+                <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M 0 0 L 10 5 L 0 10 z" fill="#10B981" />
+                </marker>
               </defs>
 
               {/* 网格背景（编辑模式） */}
@@ -750,11 +756,22 @@ export function CanvasPage() {
                 )
               })}
 
-              {/* 临时连线（拖拽中） */}
+              {/* 临时连线（拖拽中）：磁吸时吸附线 + 跟随提示 */}
               {drag.current?.kind === 'link' && drag.current.cur && (() => {
                 const d = drag.current!
+                const cur = d.cur!
+                const snapped = !!dropTarget
                 return (
-                  <path d={`M ${d.ox} ${d.oy} L ${d.cur!.x} ${d.cur!.y}`} fill="none" stroke="#2563EB" strokeWidth="1.8" strokeDasharray="4 3" markerEnd="url(#arrow-blue)" />
+                  <g pointerEvents="none">
+                    <path d={`M ${d.ox} ${d.oy} L ${cur.x} ${cur.y}`} fill="none"
+                      stroke={snapped ? '#10B981' : '#2563EB'} strokeWidth={snapped ? 2.4 : 1.8} strokeDasharray={snapped ? undefined : '4 3'} markerEnd={snapped ? 'url(#arrow-green)' : 'url(#arrow-blue)'} />
+                    <g transform={`translate(${(d.ox + cur.x) / 2}, ${(d.oy + cur.y) / 2 - 16})`}>
+                      <rect x={-54} y={-11} width={108} height={20} rx={10} fill={snapped ? '#059669' : '#1D4ED8'} opacity={0.92} />
+                      <text x={0} y={3} fontSize="10.5" textAnchor="middle" fill="white" fontWeight="600">
+                        {snapped ? '松手完成连线' : '拖到目标节点附近'}
+                      </text>
+                    </g>
+                  </g>
                 )
               })()}
 
@@ -769,6 +786,8 @@ export function CanvasPage() {
                 return (
                   <g key={n.id} className="canvas-node select-none"
                     onPointerDown={(e) => onNodePointerDown(e, n)}
+                    onPointerEnter={() => setHoverNodeId(n.id)}
+                    onPointerLeave={() => setHoverNodeId((cur) => (cur === n.id ? null : cur))}
                     onClick={(e) => { e.stopPropagation(); setSelectedId(n.id); setSelectedEdge(null) }}>
                     <rect x={n.x} y={n.y} width={n.width} height={n.height} rx={10}
                       className={cn('node-body transition-all',
@@ -791,23 +810,27 @@ export function CanvasPage() {
                     {located && (
                       <text x={n.x + n.width - 8} y={n.y - 6} fontSize="9" fontWeight="600" textAnchor="end" fill="#EF4444" pointerEvents="none">问题节点</text>
                     )}
-                    {/* 端口（编辑模式）：右侧输出 */}
+                    {/* 端口（编辑模式）：右侧输出；拖线接近的节点端口高亮放大提示可落点 */}
                     {mode === 'edit' && (
                       <>
-                        <circle cx={n.x + n.width} cy={n.y + n.height / 2} r={12} fill="transparent" className="node-port-hit" style={{ cursor: 'crosshair' }}
+                        <circle cx={n.x + n.width} cy={n.y + n.height / 2} r={16} fill="transparent" className="node-port-hit" style={{ cursor: 'crosshair' }}
                           onPointerDown={(e) => onPortPointerDown(e, n)}>
-                          <title>拖动连线到目标节点</title>
+                          <title>从这里拖出连线到目标节点（靠近会自动吸附）</title>
                         </circle>
-                        <circle cx={n.x + n.width} cy={n.y + n.height / 2} r={6} fill="#2563EB" stroke="white" strokeWidth="1.6" pointerEvents="none" className="node-port" />
+                        <circle cx={n.x + n.width} cy={n.y + n.height / 2}
+                          r={dropping ? 9 : n.id === drag.current?.id ? 7.5 : 6}
+                          fill={dropping ? '#10B981' : '#2563EB'} stroke="white" strokeWidth={1.6} pointerEvents="none"
+                          className={dropping ? 'node-port animate-pulse' : 'node-port'} />
                         <circle cx={n.x} cy={n.y + n.height / 2} r={5} fill="#CBD5E1" opacity="0.6" pointerEvents="none" />
                       </>
                     )}
-                    {/* 选中节点：删除按钮（编辑模式） */}
-                    {mode === 'edit' && sel && n.type !== 'start' && n.type !== 'end' && (
-                      <g className="cursor-pointer" onClick={(e) => { e.stopPropagation(); deleteNode(n.id) }}>
-                        <circle cx={n.x + n.width - 8} cy={n.y - 8} r={9} fill="#DC2626" />
-                        <path d={`M ${n.x + n.width - 12} ${n.y - 12} l 8 8 M ${n.x + n.width - 4} ${n.y - 12} l -8 8`} stroke="white" strokeWidth="1.8" strokeLinecap="round" />
-                        <title>删除节点（Delete）</title>
+                    {/* 节点删除按钮（编辑模式）：选中常显，悬停节点也显示，热区放大 */}
+                    {mode === 'edit' && n.type !== 'start' && n.type !== 'end' && (sel || hoverNodeId === n.id) && (
+                      <g className="cursor-pointer" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); deleteNode(n.id) }}>
+                        <circle cx={n.x + n.width - 8} cy={n.y - 8} r={11} fill="transparent" />
+                        <circle cx={n.x + n.width - 8} cy={n.y - 8} r={9} fill={sel ? '#DC2626' : '#EF4444'} opacity={sel ? 1 : 0.75} />
+                        <path d={`M ${n.x + n.width - 12} ${n.y - 12} l 8 8 M ${n.x + n.width - 4} ${n.y - 12} l -8 8`} stroke="white" strokeWidth="1.8" strokeLinecap="round" pointerEvents="none" />
+                        <title>删除节点「{n.label}」及其关联连线（Delete）</title>
                       </g>
                     )}
                   </g>
@@ -1147,6 +1170,14 @@ export function CanvasPage() {
                     )}
                   </div>
                 </div>
+              )}
+
+              {/* 删除节点（属性面板入口，编辑模式；start/end 不可删） */}
+              {mode === 'edit' && selected.type !== 'start' && selected.type !== 'end' && (
+                <button className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[12.5px] font-medium text-red-600 transition-colors hover:bg-red-100 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-400 dark:hover:bg-red-500/20"
+                  onClick={() => { if (window.confirm(`删除节点「${selected.label}」及其关联连线？`)) deleteNode(selected.id) }}>
+                  <Trash2 className="h-4 w-4" />删除此节点（含关联连线）
+                </button>
               )}
 
               {/* 节点类型差异配置：不同类型节点提供不同操作（决策分支 / 定时时长 / 并行分支数） */}
