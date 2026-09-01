@@ -576,9 +576,9 @@ export function CanvasPage() {
       msgs.push('缺少结束节点')
       problems.push({ title: '缺少结束节点', nodeId: '', desc: '流程必须包含至少 1 个结束节点' })
     }
-    if (starts.length === 1 && (edges.some(([, b]) => b === starts[0].id) || fallbacks.some(([, b]) => b === starts[0].id))) {
-      msgs.push('开始节点不允许有入边')
-      problems.push({ title: '开始节点存在入边', nodeId: starts[0].id, desc: '开始节点不允许有任何入边（主线/回退均不允许）' })
+    if (starts.length === 1 && edges.some(([, b]) => b === starts[0].id)) {
+      msgs.push('开始节点不允许有主线入边')
+      problems.push({ title: '开始节点存在主线入边', nodeId: starts[0].id, desc: '开始节点不允许有主线入边；回退到开始节点（驳回重提）是允许的' })
     }
     if (ends.length > 0 && (edges.some(([a]) => ends.some((en) => en.id === a)) || fallbacks.some(([a]) => ends.some((en) => en.id === a)))) {
       msgs.push('结束节点不允许有出边')
