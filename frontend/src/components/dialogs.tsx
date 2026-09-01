@@ -735,12 +735,92 @@ export function CreateWorkItemDialog({ onClose }: { onClose: () => void }) {
   )
 }
 
+/* ============ 发布校验（画布「发布校验」按钮）：调后端校验接口，问题清单 + 定位跳转 ============ */
+function ValidateDialog() {
+  const { closeDialog, canvasTarget, setCheckProblems, locateCanvasNode, openCanvas } = useApp()
+  const tplId = canvasTarget?.templateId ?? 'tpl-req'
+  const tplName = canvasTarget?.templateName ?? '需求流程'
+  const version = canvasTarget?.version ?? 'v3'
+  const [busy, setBusy] = useState(true)
+  const [result, setResult] = useState<{ ok: boolean; errors: { node_id: string; message: string }[] } | null>(null)
+  const [error, setError] = useState('')
+
+  const run = () => {
+    setBusy(true)
+    setError('')
+    api.get<{ nodes: unknown[]; edges: unknown[]; fallbacks: unknown[] }>(`/api/v1/templates/${tplId}/versions/${version}/canvas`)
+      .then((canvas) => api.post<{ ok: boolean; errors: { node_id: string; message: string }[] }>(
+        `/api/v1/templates/${tplId}/versions/${version}/canvas/validate`,
+        { nodes: canvas.nodes, edges: canvas.edges, fallbacks: canvas.fallbacks },
+      ))
+      .then((data) => {
+        setResult(data)
+        setCheckProblems((data.errors ?? []).map((e) => ({ title: e.message, nodeId: e.node_id, desc: e.message })))
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : '校验请求失败'))
+      .finally(() => setBusy(false))
+  }
+  useEffect(() => { run() }, []) // eslint-disable-line react-hooks/exhaustive-deps -- 打开即校验一次
+
+  const locate = (nodeId: string) => {
+    closeDialog()
+    openCanvas(tplId, tplName, version)
+    locateCanvasNode(nodeId)
+  }
+
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) closeDialog() }}>
+      <DialogContent className="sm:max-w-[520px]">
+        <DialogHeader>
+          <DialogTitle className="text-[15px]">发布校验 · {tplName} {version}</DialogTitle>
+        </DialogHeader>
+        {busy && <p className="py-6 text-center text-[12.5px] text-slate-400">正在校验画布拓扑与节点配置…</p>}
+        {!busy && error && (
+          <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-[12px] text-red-600 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300">{error}</div>
+        )}
+        {!busy && result && (
+          <div className="space-y-3">
+            {result.ok ? (
+              <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-[12.5px] text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300">
+                ✓ 校验通过：开始/结束节点、入出边、悬空、回退与 Expert 绑定均合法，可执行「发布」。
+              </div>
+            ) : (
+              <>
+                <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-[12.5px] text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300">
+                  ✗ 发现 {result.errors.length} 个阻断问题，修复后才能发布：
+                </div>
+                <div className="max-h-[280px] space-y-1.5 overflow-y-auto">
+                  {result.errors.map((e, i) => (
+                    <div key={i} className="flex items-start gap-2 rounded-lg border border-slate-200 px-3 py-2 dark:border-slate-700">
+                      <span className="mt-1.5 h-1.5 w-1.5 flex-none rounded-full bg-red-400" />
+                      <span className="flex-1 text-[12px] leading-relaxed text-slate-600 dark:text-slate-300">{e.message}</span>
+                      {e.node_id && e.node_id !== '—' && (
+                        <button className="flex-none text-[11px] font-medium text-blue-600 hover:underline" onClick={() => locate(e.node_id)}>定位</button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <p className="text-[11px] text-slate-400">「定位」跳转到画布并高亮问题节点。</p>
+              </>
+            )}
+          </div>
+        )}
+        <DialogFooter className="gap-2">
+          <Button variant="outline" onClick={closeDialog}>关闭</Button>
+          <Button disabled={busy} onClick={run}>重新校验</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 /* ============ 注册表 ============ */
 const DIALOGS: Record<string, () => React.ReactElement> = {
   submit: SubmitDialog,
   return: ReturnDialog,
   transfer: TransferDialog,
   expertApproval: ExpertApprovalDialog,
+  validate: ValidateDialog,
 }
 
 export function DialogHost() {
