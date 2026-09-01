@@ -34,7 +34,7 @@ export function DocumentsPage() {
   const [level, setLevel] = useState('')
   const [scan, setScan] = useState('')
   const [page, setPage] = useState(1)
-  const PAGE_SIZE = 5
+  const PAGE_SIZE = 20
   const searched = list.filter((d) =>
     (!name || d.name.includes(name)) && (!proj || d.project.includes(proj)) &&
     (!level || d.level === level) && (!scan || d.scan === scan))

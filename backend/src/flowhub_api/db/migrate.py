@@ -38,6 +38,15 @@ async def migrate(conn: AsyncConnection) -> None:
         if task_columns and column not in task_columns:
             await conn.execute(text(f'ALTER TABLE tasks ADD COLUMN "{column}" {ddl}'))
             logger.info("migrate: tasks.%s added", column)
+    # tasks.created_at：列表"最新创建"排序用（TaskItem 无任何时间列）；从 id 内嵌时间戳回填
+    if task_columns and "created_at" not in task_columns:
+        await conn.execute(text('ALTER TABLE tasks ADD COLUMN "created_at" VARCHAR(40) DEFAULT \'\''))
+        await conn.execute(text(
+            "UPDATE tasks SET created_at = to_char("
+            "to_timestamp(substring(id from 3 for 14), 'YYYYMMDDHH24MISS'), 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') "
+            "WHERE created_at = '' AND id ~ '^T-[0-9]{20}-'"
+        ))
+        logger.info("migrate: tasks.created_at added & backfilled")
     expert_columns = await _existing_columns(conn, "experts")
     expert_columns_to_add = {
         "description": "TEXT DEFAULT ''",
@@ -93,6 +102,9 @@ async def migrate(conn: AsyncConnection) -> None:
     if "compaction_summary" not in chat_columns:
         await conn.execute(text('ALTER TABLE expert_chat_sessions ADD COLUMN "compaction_summary" TEXT DEFAULT \'\''))
         logger.info("migrate: expert_chat_sessions.compaction_summary added")
+    if "project_name" not in chat_columns:
+        await conn.execute(text('ALTER TABLE expert_chat_sessions ADD COLUMN "project_name" VARCHAR(160)'))
+        logger.info("migrate: expert_chat_sessions.project_name added")
     run_columns = await _existing_columns(conn, "expert_runs")
     if run_columns and "task_id" not in run_columns:
         await conn.execute(text('ALTER TABLE expert_runs ADD COLUMN "task_id" VARCHAR(40)'))

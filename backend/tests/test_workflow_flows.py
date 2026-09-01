@@ -372,6 +372,50 @@ class TestIdempotency:
         assert r2.status_code == 409
         assert r2.json()["code"] == 40902
 
+    def test_advance_dedupes_open_task_at_next_node(self, client: TestClient, leader_token: str, org_admin_token: str):
+        """引擎级幂等兜底：绕过 HTTP 守卫的重复 advance（旧实例/多实例写入）不得在相同节点生成重复待办。
+        回归：重复提交曾在「方案设计」节点给同一处理人生成 5 条重复任务。"""
+        import asyncio
+        import os
+
+        from sqlalchemy import select
+        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+        from sqlalchemy.orm import selectinload
+
+        headers = auth_headers(leader_token)
+        pid = _make_project(client, auth_headers(org_admin_token), "tpl-req", "v3", [])
+        wi_id = _create_wi(client, headers, pid, "tpl-req", _uniq("幂等推进"))
+        n2_task_id = _get_open_tasks(client, headers, wi_id)[0]["id"]
+
+        async def _re_advance():
+            """模拟绕过守卫的重复提交：把 n2 任务改回 assigned 后再次 advance。"""
+            engine = create_async_engine(os.environ["DATABASE_URL"])
+            Session = async_sessionmaker(engine, expire_on_commit=False)
+            try:
+                from flowhub_api.models import GlobalTemplate, Project, TaskItem
+                from flowhub_api.services.workflow import WorkflowService
+
+                async with Session() as s:
+                    t = await s.get(TaskItem, n2_task_id)
+                    assert t is not None
+                    t.status = "assigned"
+                    t.form_values = {"conclusion": "分析完成"}
+                    project = (await s.execute(
+                        select(Project).options(selectinload(Project.template_bindings)).where(Project.id == pid)
+                    )).scalar_one()
+                    binding = next(b for b in project.template_bindings if b.status == "active")
+                    tpl = await s.get(GlobalTemplate, binding.template_id)
+                    await WorkflowService(s).advance(t, project, tpl)
+                    await s.commit()
+            finally:
+                await engine.dispose()
+
+        asyncio.run(_re_advance())
+
+        detail = client.get(f"/api/v1/work-items/{wi_id}", headers=headers).json()["data"]
+        n3_open = [t for t in detail["tasks"] if t["nodeId"] == "n3" and t["status"] not in ("completed", "cancelled")]
+        assert len(n3_open) == 1, f"同节点不应生成重复任务: {[t['id'] for t in n3_open]}"
+
     def test_claim_completed_task_blocked(self, client: TestClient, leader_token: str, org_admin_token: str):
         headers = auth_headers(leader_token)
         pid = _make_project(client, auth_headers(org_admin_token), "tpl-req", "v3", [])
@@ -577,3 +621,42 @@ class TestSubtaskSplit:
         r = client.post(f"/api/v1/tasks/{task_id}/split", headers=headers,
                         json={"children": [{"title": "x"}]})
         assert r.status_code == 422, "未开启拆分的节点应拒绝"
+
+
+# ==================== 13. 决策节点未配置条件 → 并行分叉 ====================
+class TestDecisionWithoutConditions:
+    def test_decision_without_conditions_forks_all_branches(self, client: TestClient, org_admin_token: str):
+        """决策节点多条出边但未配置分支条件 → 全部分支生成任务（并行分叉），
+        不再静默走默认边导致汇合节点永久等待（回归：drcc 流程后端开发被跳过、测试节点卡等待）。"""
+        headers = auth_headers(org_admin_token)
+        tpl = client.post("/api/v1/templates", headers=headers, json={"name": f"决策分叉-{_uniq('')}", "type": "requirement"}).json()["data"]["template"]
+        nodes = [
+            {"id": "n1", "label": "需求提交", "type": "start", "x": 24, "y": 24, "width": 118, "height": 56,
+             "cfg": {"typeLine": "START", "handler": "系统", "schema": [{"key": "title", "label": "标题", "type": "input", "required": True}]}},
+            {"id": "n2", "label": "技术评审", "type": "decision", "x": 200, "y": 24, "width": 118, "height": 56,
+             "cfg": {"typeLine": "DECISION", "handler": "架构师", "schema": [{"key": "verdict", "label": "结论", "type": "select", "required": True,
+                     "options": [{"label": "通过", "value": "pass"}]}]}},
+            {"id": "n3", "label": "前端开发", "type": "task", "x": 376, "y": 0, "width": 118, "height": 56,
+             "cfg": {"typeLine": "TASK", "handler": "人工", "schema": [{"key": "impl", "label": "实现", "type": "input", "required": True}]}},
+            {"id": "n4", "label": "后端开发", "type": "task", "x": 376, "y": 96, "width": 118, "height": 56,
+             "cfg": {"typeLine": "TASK", "handler": "人工", "schema": [{"key": "impl", "label": "实现", "type": "input", "required": True}]}},
+            {"id": "n5", "label": "联调测试", "type": "end", "x": 552, "y": 48, "width": 118, "height": 56,
+             "cfg": {"typeLine": "END", "handler": "系统", "schema": []}},
+        ]
+        edges = [["n1", "n2"], ["n2", "n3"], ["n2", "n4"], ["n3", "n5"], ["n4", "n5"]]
+        r = client.post(f"/api/v1/templates/{tpl['id']}/versions/save-and-publish", headers=headers,
+                        json={"nodes": nodes, "edges": edges, "fallbacks": []})
+        assert r.status_code == 200, r.text
+        pid = _make_project(client, headers, tpl["id"], "v1", [])
+        wi_id = _create_wi(client, headers, pid, tpl["id"], _uniq("决策分叉"))
+
+        detail = client.get(f"/api/v1/work-items/{wi_id}", headers=headers).json()["data"]
+        review = next(t for t in detail["tasks"] if t["nodeId"] == "n2")
+        r2 = client.post(f"/api/v1/tasks/{review['id']}/actions", headers=headers,
+                         json={"action": "submit", "form_values": {"verdict": "pass"}})
+        assert r2.status_code == 200, r2.text
+        assert r2.json()["data"]["parallel"] is True, "未配置条件的决策节点应并行分叉"
+        nodes_after = {t["nodeId"]: t["status"] for t in
+                       client.get(f"/api/v1/work-items/{wi_id}", headers=headers).json()["data"]["tasks"]}
+        assert nodes_after.get("n3") == "assigned" and nodes_after.get("n4") == "assigned", \
+            f"两个分支都应生成任务: {nodes_after}"

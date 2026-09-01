@@ -2,18 +2,32 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from flowhub_api.authz.authorizer import build_authorizer, get_current_user
 from flowhub_api.core.response import BizCode, BizError, ok
 from flowhub_api.db.session import get_db
 from flowhub_api.models import GlobalTemplate, Project, TaskItem, User
-from flowhub_api.schemas.api import TaskActionReq, TaskSplitReq
+from flowhub_api.schemas.api import TaskActionReq, TaskAdoptRunReq, TaskSplitReq
 from flowhub_api.services.audit import AuditService
 from flowhub_api.services.workflow import WorkflowService
 
 router = APIRouter(prefix="/api/v1/tasks", tags=["tasks"])
+
+# 状态分组（10 个状态全覆盖）：列表 Tab 与计数聚合共用
+STATUS_GROUPS = {
+    "todo": ("assigned", "accepted", "returned", "transferred"),   # 转办后待新处理人认领，归待处理
+    "doing": ("in_progress", "waiting_for_information", "pending_confirmation"),
+    "submitted": ("submitted",),
+    "done": ("completed", "cancelled"),
+}
+
+# 优先级排序权重（priority 为 PG enum，需显式 == 比较，不能用 case(value=) 的 varchar 等值）
+_PRIORITY_ORDER = case(
+    (TaskItem.priority == "P0", 0), (TaskItem.priority == "P1", 1),
+    (TaskItem.priority == "P2", 2), (TaskItem.priority == "P3", 3), else_=9,
+)
 
 
 def _brief(t: TaskItem) -> dict:
@@ -23,6 +37,7 @@ def _brief(t: TaskItem) -> dict:
         "assignee": t.assignee, "due": t.due, "slaHours": t.sla_hours,
         "overdue": t.overdue, "expertPending": t.expert_pending, "source": t.source,
         "parentTaskId": t.parent_task_id, "lineageRootId": t.lineage_root_id, "brief": t.brief or "",
+        "createdAt": t.created_at,
     }
 
 
@@ -31,39 +46,79 @@ async def list_tasks(
     session: Annotated[AsyncSession, Depends(get_db)],
     user: Annotated[User, Depends(get_current_user)],
     status: str = "", node: str = "", assignee: str = "", priority: str = "", project: str = "",
+    q: str = "", status_group: str = "", sort: str = "default",
     page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100),
 ):
-    stmt = select(TaskItem)
+    conds = []
     if status:
-        stmt = stmt.where(TaskItem.status == status)
+        conds.append(TaskItem.status == status)
+    if status_group in STATUS_GROUPS:
+        conds.append(TaskItem.status.in_(STATUS_GROUPS[status_group]))
     if node:
-        stmt = stmt.where(TaskItem.node.contains(node))
+        conds.append(TaskItem.node.contains(node))
     if project:
-        stmt = stmt.where(TaskItem.project.contains(project))
+        conds.append(TaskItem.project.contains(project))
     if assignee:
-        stmt = stmt.where(TaskItem.assignee == assignee)
+        conds.append(TaskItem.assignee == assignee)
     elif user.name != "系统管理员":
         # 普通用户仅见自己名下的任务；系统管理员可查看全部任务（全局视角）
-        stmt = stmt.where(TaskItem.assignee == user.name)
+        conds.append(TaskItem.assignee == user.name)
     if priority:
-        stmt = stmt.where(TaskItem.priority == priority)
-    # 排序：未完成优先（待办在前），同状态按时间倒序（刚创建/刚完成的起始节点任务也能靠前可见）
-    from sqlalchemy import case
+        conds.append(TaskItem.priority == priority)
+    if q:
+        conds.append(TaskItem.title.contains(q))
+    base = select(TaskItem).where(*conds)
 
-    stmt = stmt.order_by(
-        case((TaskItem.status.in_(["completed", "cancelled"]), 1), else_=0),
-        TaskItem.id.collate("C").desc(),
-    )
-    total = len((await session.execute(stmt)).scalars().all())
-    rows = (await session.execute(stmt.offset((page - 1) * page_size).limit(page_size))).scalars().all()
-    # 冻结标记：任务所属工作项已归档（项目归档冻结）→ 前端显示「冻结」并禁操作
+    # 冻结：所属工作项已归档（项目归档冻结）→ 排序沉底 + 前端「冻结」标记
     from flowhub_api.models import WorkItem
 
-    archived_wis = {x[0] for x in (await session.execute(select(WorkItem.id).where(WorkItem.status == "archived"))).all()}
+    archived_subq = select(WorkItem.id).where(WorkItem.status == "archived")
+    frozen_last = case((TaskItem.wi_id.in_(archived_subq), 1), else_=0)
+    # 排序：未完成优先（待办在前），同状态按时间倒序；冻结任务一律排最后；created 为纯时间线倒序
+    open_first = case((TaskItem.status.in_(["completed", "cancelled"]), 1), else_=0)
+    if sort == "created":
+        stmt = base.order_by(TaskItem.created_at.collate("C").desc(), TaskItem.id.collate("C").desc())
+    elif sort == "priority":
+        stmt = base.order_by(frozen_last, open_first, _PRIORITY_ORDER.asc(), TaskItem.id.collate("C").desc())
+    elif sort == "due":
+        # due 为零填充 "%m-%d" 展示串，同年内字典序即时间序；先超时、再临期
+        stmt = base.order_by(frozen_last, open_first, TaskItem.overdue.desc(), TaskItem.due.collate("C").asc(), TaskItem.id.collate("C").desc())
+    else:
+        stmt = base.order_by(frozen_last, open_first, TaskItem.id.collate("C").desc())
+    total = (await session.execute(select(func.count()).select_from(base.subquery()))).scalar() or 0
+    rows = (await session.execute(stmt.offset((page - 1) * page_size).limit(page_size))).scalars().all()
+    archived_wis = {x[0] for x in (await session.execute(archived_subq)).all()}
     items = [_brief(t) for t in rows]
     for it in items:
         it["frozen"] = it["wiId"] in archived_wis
-    return ok({"items": items, "total": total, "page": page, "page_size": page_size})
+    # Tab 计数 / KPI 聚合：与列表同一过滤范围（不含 status/status_group/q），一条 SQL 出 7 个计数
+    stats_where = []
+    if node:
+        stats_where.append(TaskItem.node.contains(node))
+    if project:
+        stats_where.append(TaskItem.project.contains(project))
+    if assignee:
+        stats_where.append(TaskItem.assignee == assignee)
+    elif user.name != "系统管理员":
+        stats_where.append(TaskItem.assignee == user.name)
+    if priority:
+        stats_where.append(TaskItem.priority == priority)
+    all_count, todo, doing, submitted, done, overdue_n, expert_n = (await session.execute(
+        select(
+            func.count(TaskItem.id),
+            func.count(TaskItem.id).filter(TaskItem.status.in_(STATUS_GROUPS["todo"])),
+            func.count(TaskItem.id).filter(TaskItem.status.in_(STATUS_GROUPS["doing"])),
+            func.count(TaskItem.id).filter(TaskItem.status.in_(STATUS_GROUPS["submitted"])),
+            func.count(TaskItem.id).filter(TaskItem.status.in_(STATUS_GROUPS["done"])),
+            func.count(TaskItem.id).filter(TaskItem.overdue.is_(True)),
+            func.count(TaskItem.id).filter(TaskItem.expert_pending.is_(True)),
+        ).where(*stats_where)
+    )).one()
+    stats = {
+        "all": all_count, "todo": todo, "doing": doing, "submitted": submitted, "done": done,
+        "open": all_count - done, "overdue": overdue_n, "expertPending": expert_n,
+    }
+    return ok({"items": items, "total": total, "page": page, "page_size": page_size, "stats": stats})
 
 
 @router.get("/{task_id}")
@@ -309,7 +364,11 @@ async def task_action(
     session: Annotated[AsyncSession, Depends(get_db)],
 ):
     auth = build_authorizer(user)
-    t = await session.get(TaskItem, task_id)
+    # 行锁加载：并发重复提交时第二个请求阻塞到第一个事务提交，再按最新状态命中幂等守卫 409
+    # （否则两请求都读到未完成的旧状态，双双通过守卫产生重复流转）
+    t = (await session.execute(
+        select(TaskItem).where(TaskItem.id == task_id).with_for_update()
+    )).scalar_one_or_none()
     if t is None:
         raise BizError(BizCode.NOT_FOUND, "任务不存在")
 
@@ -373,69 +432,38 @@ async def task_action(
         if t.status == "pending_confirmation":
             raise BizError(
                 BizCode.DUPLICATE_OPERATION,
-                "该节点由 Expert 自动处理，需先批准 Expert Approval 后才能提交",
+                "Expert 正在自动处理该节点，完成后会自动采纳并流转，无需人工提交",
                 http_status=409,
             )
         t.form_values = body.form_values or {}
         # 验收清单勾选快照随提交落库（引擎在 advance 中强制全部勾选后才会流转）
         t.acceptance_checks = body.acceptance_checks or {}
-        # 表单附件回填工作项关联：与发起流程时的 _attachment_ids 同语义，防止文档游离
-        from flowhub_api.models import DocItem
-
-        attachment_ids = [
-            v.get("id") for v in (body.form_values or {}).values()
-            if isinstance(v, dict) and isinstance(v.get("id"), str)
-        ] + [
-            ref.get("id") for v in (body.form_values or {}).values() if isinstance(v, list)
-            for ref in v if isinstance(ref, dict) and isinstance(ref.get("id"), str)
-        ]
-        if attachment_ids:
-            docs = (await session.execute(
-                select(DocItem).where(DocItem.id.in_(attachment_ids), DocItem.wi.is_(None))
-            )).scalars().all()
-            for d in docs:
-                d.wi = t.wi_id
-        # 推进流程：需要项目 + 模板定位主边
-        project = (await session.execute(select(Project).where(Project.name == t.project))).scalar_one_or_none()
-        tpl = None
-        if project:
-            binding = next((b for b in project.template_bindings if b.status == "active"), None)
-            if binding:
-                tpl = await session.get(GlobalTemplate, binding.template_id)
-        if project and tpl:
-            service = WorkflowService(session)
-            result = await service.advance(t, project, tpl)
-            await AuditService(session).record(
-                actor=user.name, action="task:submit", target=f"{t.id} · {t.node}", result="success",
-                after={"next": result["next_node"].get("label") if result["next_node"] else None,
-                       "assignees": [a["name"] for a in result["next_assignees"]]},
-            )
-            await session.commit()
-            nxt_task = result.get("task") or (result.get("tasks") or [None])[0]
-            next_tasks = [
-                {"id": x.id, "node": x.node, "status": x.status, "assignee": x.assignee}
-                for x in (result.get("tasks") or ([nxt_task] if nxt_task else []))
-            ]
-            if result.get("parallel"):
-                msg = f"提交成功：已并行拆分 {len(next_tasks)} 个分支任务"
-            elif result.get("waiting_join"):
-                msg = "提交成功：等待其他并行分支完成后自动汇合"
-            else:
-                msg = "提交成功：已自动流转至下一节点并分配处理人"
-            return ok({
-                "task": _brief(t),
-                "next_node": result["next_node"],
-                "next_assignees": result["next_assignees"],
-                "next_task_id": nxt_task.id if nxt_task else None,
-                "next_tasks": next_tasks,
-                "parallel": bool(result.get("parallel")),
-                "waiting_join": bool(result.get("waiting_join")),
-                "closed": bool(result.get("closed")),
-            }, msg)
-        # 无项目绑定 → 仅标记完成
-        t.status = "completed"
+        service = WorkflowService(session)
+        result = await service.submit_and_advance(t, body.form_values, body.acceptance_checks, user)
         await session.commit()
-        return ok({"task": _brief(t)}, "提交成功")
+        nxt_task = result.get("task") or (result.get("tasks") or [None])[0]
+        next_tasks = [
+            {"id": x.id, "node": x.node, "status": x.status, "assignee": x.assignee}
+            for x in (result.get("tasks") or ([nxt_task] if nxt_task else []))
+        ]
+        if result.get("parallel"):
+            msg = f"提交成功：已并行拆分 {len(next_tasks)} 个分支任务"
+        elif result.get("waiting_join"):
+            msg = "提交成功：等待其他并行分支完成后自动汇合"
+        elif result.get("next_node"):
+            msg = "提交成功：已自动流转至下一节点并分配处理人"
+        else:
+            return ok({"task": _brief(t)}, "提交成功")
+        return ok({
+            "task": _brief(t),
+            "next_node": result["next_node"],
+            "next_assignees": result["next_assignees"],
+            "next_task_id": nxt_task.id if nxt_task else None,
+            "next_tasks": next_tasks,
+            "parallel": bool(result.get("parallel")),
+            "waiting_join": bool(result.get("waiting_join")),
+            "closed": bool(result.get("closed")),
+        }, msg)
 
     if body.action == "request_info":
         t.status = "waiting_for_information"
@@ -500,20 +528,12 @@ async def split_task(
     }, f"已拆分为 {len(created)} 个子任务，均在下一节点独立流转")
 
 
-@router.post("/{task_id}/ai-fill")
-async def ai_fill_task(
-    task_id: str,
-    user: Annotated[User, Depends(get_current_user)],
-    session: Annotated[AsyncSession, Depends(get_db)],
-):
-    """Expert 协助填充：人工确认后，按任务书 + 节点 schema 生成全部字段值（含文档生成上传），回填表单供人审核。"""
-    t = await session.get(TaskItem, task_id)
-    if t is None:
-        raise BizError(BizCode.NOT_FOUND, "任务不存在")
+async def _expert_fill_guard(session: AsyncSession, t: TaskItem, user: User) -> tuple[Project, GlobalTemplate, dict]:
+    """Expert 填充/采纳共用守卫：冻结校验 + 状态校验 + 处理人权限 + 节点 schema/deployment 配置。"""
     from flowhub_api.models import WorkItem as _WI
 
     if (await session.execute(select(_WI.id).where(_WI.id == t.wi_id, _WI.status == "archived"))).first():
-        raise BizError(BizCode.FORBIDDEN, "流程已冻结（项目归档），不可 AI 填充", http_status=403)
+        raise BizError(BizCode.FORBIDDEN, "流程已冻结（项目归档），不可操作", http_status=403)
     if t.status in ("completed", "cancelled"):
         raise BizError(BizCode.DUPLICATE_OPERATION, "任务已处理，无需填充", http_status=409)
     wi_row = await session.get(_WI, t.wi_id)
@@ -523,18 +543,35 @@ async def ai_fill_task(
         or (wi_row is not None and user.name in (wi_row.creator, wi_row.assignee))
     )
     if not allowed:
-        raise BizError(BizCode.PERM_DENIED, f"仅节点「{t.node}」的处理人或工作项负责人可使用 Expert 填充", http_status=403)
+        raise BizError(BizCode.PERM_DENIED, f"仅节点「{t.node}」的处理人或工作项负责人可操作", http_status=403)
     project, tpl = await _resolve_task_template(session, t)
     if not project or not tpl:
         raise BizError(BizCode.VALIDATION, "未找到项目与模板绑定", http_status=422)
     service = WorkflowService(session)
     cfg = await service._node_cfg_of(tpl, t.node_id) or {}
-    schema = cfg.get("schema") or []
-    if not schema:
+    if not (cfg.get("schema") or []):
         raise BizError(BizCode.VALIDATION, "该节点未配置表单字段，无需 AI 填充", http_status=422)
-    deployment_id = ((cfg.get("expert") or {}).get("expertDeploymentId")) or ""
-    if not deployment_id:
+    if not ((cfg.get("expert") or {}).get("expertDeploymentId") or ""):
         raise BizError(BizCode.FLOW_VALIDATE, "该节点未绑定 Expert Deployment，无法 AI 填充；请在画布中绑定或手动填写", http_status=422)
+    return project, tpl, cfg
+
+
+@router.post("/{task_id}/ai-fill")
+async def ai_fill_task(
+    task_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Expert 协助填充（重新生成）：新建 Run 按任务书 + 节点 schema 生成全部字段值，回填表单供人审核。
+
+    任务到达时引擎已自动触发一次 Run——优先用「采纳」入口（adopt-run）复用其产出；本接口用于失败重试或重新生成。"""
+    t = await session.get(TaskItem, task_id)
+    if t is None:
+        raise BizError(BizCode.NOT_FOUND, "任务不存在")
+    project, tpl, cfg = await _expert_fill_guard(session, t, user)
+    schema = cfg.get("schema") or []
+    deployment_id = (cfg.get("expert") or {}).get("expertDeploymentId") or ""
+    service = WorkflowService(session)
     brief = await service.build_task_brief(t, tpl)
     from flowhub_api.services.expert_runtime import build_schema_output_instruction, generate_task_form_values
 
@@ -551,6 +588,43 @@ async def ai_fill_task(
     )
     await session.commit()
     return ok({"values": values, "warnings": warnings, "runId": run.id}, "Expert 已生成表单草稿，请审核后提交")
+
+
+@router.post("/{task_id}/adopt-run")
+async def adopt_run(
+    task_id: str,
+    body: TaskAdoptRunReq,
+    user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_db)],
+):
+    """采纳 Expert Run 产出：把指定 run 的输出解析为节点表单值（upload 字段自动生成文档），回填表单供人审核后提交。
+
+    协助节点的标准路径：任务到达时引擎已自动创建 Run → 任务页展示 Run 状态 → 成功后点「采纳」回填，无需重复触发模型。"""
+    from flowhub_api.models import ExpertRun
+
+    t = await session.get(TaskItem, task_id)
+    if t is None:
+        raise BizError(BizCode.NOT_FOUND, "任务不存在")
+    _, _, cfg = await _expert_fill_guard(session, t, user)
+    run = (await session.execute(
+        select(ExpertRun).where(ExpertRun.id == body.run_id, ExpertRun.task_id == t.id)
+    )).scalar_one_or_none()
+    if run is None:
+        raise BizError(BizCode.NOT_FOUND, "Run 不存在或不属于该任务")
+    if run.status == "running":
+        raise BizError(BizCode.LOCKED, "Expert Run 仍在执行中，请稍后再采纳", http_status=423)
+    if run.status != "succeeded":
+        raise BizError(BizCode.FLOW_VALIDATE, f"Run 状态为 {run.status}，无可采纳产出；可点击「重新生成」重试")
+    service = WorkflowService(session)
+    values, warnings = await service.fill_task_from_run(t, run, cfg, user)
+    if not values:
+        raise BizError(BizCode.FLOW_VALIDATE, warnings[0] if warnings else "Run 产出未能解析出表单值；可点击「重新生成」重试", http_status=422)
+    await AuditService(session).record(
+        actor=user.name, action="task:adopt_run", target=f"{t.id} · {t.node}", result="success",
+        after={"runId": run.id, "fields": list(values.keys()), "warnings": warnings[:5]},
+    )
+    await session.commit()
+    return ok({"values": values, "warnings": warnings, "runId": run.id}, "已采纳 Expert 产出，请审核后提交")
 
 
 @router.post("/{task_id}/split-suggest")

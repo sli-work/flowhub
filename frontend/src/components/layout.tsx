@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  LayoutGrid, Bell, BarChart3, FolderKanban, Workflow,
-  FileText, Bot, Building2, ShieldCheck, ScrollText, LogOut, Search,
+  LayoutGrid, Bell, BarChart3, FolderKanban, Workflow, GitBranch,
+  FileText, Bot, Building2, ShieldCheck, ScrollText, LogOut, Search, ListChecks,
   Moon, Sun, Webhook, Sparkles, Boxes, Cable, Database, BrainCircuit, Activity, CircleCheck, Download,
 } from 'lucide-react'
 import { useApp, toast, ROLE_NAV } from '../store/app-store'
@@ -26,6 +26,8 @@ const NAV: { grp: string; items: { id: PageId; label: string; icon: React.ReactN
     grp: '流程管理',
     items: [
       { id: 'projects', label: '项目列表', icon: <FolderKanban className="h-[17px] w-[17px]" /> },
+      { id: 'workitems', label: '工作项', icon: <ListChecks className="h-[17px] w-[17px]" /> },
+      { id: 'repos', label: '代码仓库', icon: <GitBranch className="h-[17px] w-[17px]" /> },
       { id: 'templates', label: '流程模板', icon: <Workflow className="h-[17px] w-[17px]" /> },
     ],
   },
@@ -179,9 +181,11 @@ export function Topbar() {
     notif: ['通知中心', '工作台 / 通知中心'],
     dashboard: ['领导看板', '工作台 / 领导看板'],
     projects: ['项目列表', '流程管理 / 项目列表'],
+    repos: ['代码仓库', '流程管理 / 代码仓库'],
     templates: ['流程模板', '流程管理 / 流程模板'],
     canvas: ['流程画布 · 需求流程 v3', '流程管理 / 流程画布'],
     workitem: ['工作项详情', '流程管理 / 工作项详情'],
+    workitems: ['工作项', '流程管理 / 工作项'],
     node: ['节点处理 · 测试', '流程管理 / 节点处理'],
     docs: ['文档中心', '知识库 / 文档中心'],
 

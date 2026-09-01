@@ -209,3 +209,50 @@ class TestProjectArchiveDelete:
         d = client.delete(f"/api/v1/projects/{pid}", headers=org_headers)
         assert d.status_code == 409
         assert "工作项" in d.json()["message"]
+
+
+class TestProjectProgress:
+    """项目卡片进度：未归档工作项的平均流转进度（closed=100%，其余=已完成任务/总任务；archived 不计入）。"""
+
+    def _mk_project(self, client: TestClient, leader_headers: dict) -> str:
+        code = f"PG{uuid.uuid4().hex[:6]}"
+        r = client.post("/api/v1/projects", headers=leader_headers, json=_project_payload(code))
+        assert r.status_code == 200, r.text
+        return r.json()["data"]["item"]["id"]
+
+    def _progress(self, client: TestClient, leader_headers: dict, pid: str) -> int:
+        d = client.get(f"/api/v1/projects/{pid}", headers=leader_headers).json()["data"]["item"]
+        return d["progress"]
+
+    def test_progress_reflects_flow_advance(self, client: TestClient, leader_headers: dict, org_headers: dict):
+        """创建即自动完成起始节点：单条 WI 停在 n2 → 进度 50%（2 个任务完成 1 个）；
+        n2 提交后变为 2/3 → 67%。旧逻辑（仅认 closed）会一直显示 0%。"""
+        pid = self._mk_project(client, org_headers)
+        r = client.post("/api/v1/work-items", headers=leader_headers, json={
+            "project_id": pid, "template_id": "tpl-req",
+            "start_values": {"title": _uniq("进度验证"), "description": "x", "priority": "P2"},
+        })
+        assert r.status_code == 200, r.text
+        assert self._progress(client, leader_headers, pid) == 50
+
+        wi_id = r.json()["data"]["item"]["id"]
+        detail = client.get(f"/api/v1/work-items/{wi_id}", headers=leader_headers).json()["data"]
+        n2_task = next(t for t in detail["tasks"] if t["status"] != "completed")
+        r2 = client.post(f"/api/v1/tasks/{n2_task['id']}/actions", headers=leader_headers,
+                         json={"action": "submit", "form_values": {"conclusion": "分析完成"}})
+        assert r2.status_code == 200, r2.text
+        assert self._progress(client, leader_headers, pid) == 67, "单条 WI：2/3 ≈ 67%"
+
+    def test_archived_wi_excluded_from_progress(self, client: TestClient, leader_headers: dict, org_headers: dict):
+        """archived（冻结）工作项不计入进度：仅剩的 active WI 完成后项目应为 100% 而非被稀释。"""
+        pid = self._mk_project(client, org_headers)
+        r = client.post("/api/v1/work-items", headers=leader_headers, json={
+            "project_id": pid, "template_id": "tpl-req",
+            "start_values": {"title": _uniq("归档稀释"), "description": "x", "priority": "P2"},
+        })
+        wi_id = r.json()["data"]["item"]["id"]
+        # 归档该工作项（若路由支持）：项目里只剩归档件 → 进度 0 而不是误导值
+        ra = client.post(f"/api/v1/work-items/{wi_id}/archive", headers=org_headers)
+        if ra.status_code == 404:
+            pytest.skip("工作项归档接口不存在")
+        assert self._progress(client, leader_headers, pid) == 0

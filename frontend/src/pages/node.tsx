@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import {
-  ArrowLeft, ArrowRight, Bot, ClipboardList, FileText, Info, Layers, Users, Plus,
+  ArrowLeft, ArrowRight, Bot, ClipboardList, FileText, Info, Layers, LoaderCircle, Users, Plus,
   Send, Sparkles, Undo2, UserPlus, PauseCircle, ShieldAlert, ChevronRight, Trash2,
 } from 'lucide-react'
 import { useApp, toast } from '../store/app-store'
@@ -8,6 +8,7 @@ import {
   Badge, FlowSteps, SectionCard, Timeline, priorityBadge,
 } from '../components/common'
 import { SchemaForm, validateSchema, type SchemaValues } from '../components/schema-form'
+import { MarkdownView } from '../components/markdown'
 import { api, ApiError } from '../lib/api'
 import { DocumentViewerDrawer, type ViewerDoc } from '../components/document-viewer-drawer'
 import { cn } from '../lib/utils'
@@ -39,6 +40,25 @@ interface CanvasNodeLite {
 interface SubtaskBrief { id: string; title: string; node: string; status: string; assignee: string; due: string }
 interface SplitRow { title: string; note: string; assignee: string }
 
+/* 只读值展示：textarea 类型的长文本按 Markdown 渲染（Expert 产出/人工填写常用）；
+   文档引用对象显示为附件名；其余原样 */
+function ReadOnlyValue({ schema, k, v }: { schema?: FormField[]; k: string; v: unknown }) {
+  const fmt = (item: unknown): string => {
+    if (item === null || item === undefined) return ''
+    if (typeof item === 'object') {
+      const o = item as { name?: string; label?: string; title?: string; id?: string }
+      return o.name ?? o.label ?? o.title ?? o.id ?? JSON.stringify(o)
+    }
+    return String(item)
+  }
+  if (Array.isArray(v)) return <>{v.map(fmt).filter(Boolean).join('、')}</>
+  if (v !== null && typeof v === 'object') return <>{fmt(v)}</>
+  const s = String(v)
+  const ftype = schema?.find((f) => f.key === k)?.type
+  if (ftype === 'textarea' && s.trim()) return <MarkdownView text={s} className="text-[12.5px] leading-relaxed" />
+  return <>{s}</>
+}
+
 function fieldLabel(schema: FormField[] | undefined, key: string): string {
   return schema?.find((field) => field.key === key)?.label ?? key
 }
@@ -69,6 +89,7 @@ export function NodeProcessPage() {
   const [expertRuns, setExpertRuns] = useState<{ id: string; status: string; output: string; error: string; startedAt: string }[]>([])
   const [aiFilledKeys, setAiFilledKeys] = useState<string[]>([])
   const [fillBusy, setFillBusy] = useState(false)
+  const [adoptBusy, setAdoptBusy] = useState<string | null>(null)
   /* 继承上下文：起始表单 + 已执行前序节点表单（来自 GET /tasks/{id} upstream）；按节点折叠、默认收起 */
   type UpstreamSeg = {
     node: string; task_id?: string; values: Record<string, unknown>; assignee?: string
@@ -90,9 +111,33 @@ export function NodeProcessPage() {
   const [docs, setDocs] = useState<ViewerDoc[]>([])
   const [viewer, setViewer] = useState<{ open: boolean; initialId?: string }>({ open: false })
 
+  /* Expert Run 后台执行：run 进行中或自动节点处理中 → 轮询任务详情（3s），完成后自动刷新状态 */
+  const expertProcessing = expertRuns[0]?.status === 'running' || task?.status === 'pending_confirmation'
+  useEffect(() => {
+    if (!activeTaskId || !expertProcessing) return
+    const timer = setInterval(() => {
+      api.get<{
+        task: TaskItem; expertRuns?: { id: string; status: string; output: string; error: string; startedAt: string }[]
+      }>(`/api/v1/tasks/${activeTaskId}`)
+        .then((td) => {
+          setTask((prev) => (prev && prev.id === td.task.id ? td.task : prev))
+          if (td.expertRuns?.length) setExpertRuns(td.expertRuns)
+        })
+        .catch(() => {})
+    }, 3000)
+    return () => clearInterval(timer)
+  }, [activeTaskId, expertProcessing])
+
   /* 挂载：任务详情(+Expert Run 摘要 + 继承上下文) → 工作项详情 → 模板画布。 */
   useEffect(() => {
     if (!activeTaskId) { navigate('tasks'); return }
+    // 切换任务时重置所有任务级状态：避免上一个任务的表单/节点配置/验收清单残留显示
+    setTask(null); setFormValues({}); setAiFilledKeys([]); setExpertRuns([])
+    setUpstream([]); setSubtasks([]); setTimeline([]); setFlowSteps([]); setDocs([])
+    setCandidates([]); setStartValues({}); setWi(null); setInstance(null)
+    setCurCfg({}); setCurSchema([]); setCurNodeType(''); setAcceptance({})
+    setExpandedUp(new Set()); setSubmitBusy(false)
+    setLoading(true)
     let curNodeId = ''
     let instRef: typeof instance = null
     // 引擎视角配置（nodeCfg）优先；画布链路仅在其缺失时兜底
@@ -148,8 +193,9 @@ export function NodeProcessPage() {
             status: closed || i < curIdx ? 'done' : i === curIdx ? 'current' : 'wait',
             assignee: '', time: '',
           })))
-          // 当前节点表单 Schema（与画布节点一致）
-          const cur = canvas.nodes.find((n) => n.id === curNodeId) ?? canvas.nodes.find((n) => n.type === 'task')
+          // 当前节点表单 Schema（与画布节点一致）；历史任务节点在新版画布中不存在时
+          // 保留引擎返回的 nodeCfg schema，禁止兜底成第一个 task 节点（会显示别的节点的表单）
+          const cur = canvas.nodes.find((n) => n.id === curNodeId)
           if (cur?.cfg?.schema) setCurSchema(cur.cfg.schema)
           setCurNodeType(cur?.type ?? '')
           if (!engineCfgApplied) {
@@ -185,13 +231,18 @@ export function NodeProcessPage() {
     }
   }, [activeTaskId, navigate])
 
+  const [submitBusy, setSubmitBusy] = useState(false)
   const submitTask = async () => {
+    if (submitBusy) return
     if (!activeTaskId) { toast.error('暂无真实任务可提交（请先新建工作项）'); return }
+    if (task?.status === 'completed' || task?.status === 'cancelled') { toast.error('历史任务不可重复提交'); return }
     // 验收清单：节点配置了验收标准时必须逐条勾选（后端 advance 再次强校验）
+    // 注意：本地校验失败直接 return，不进入 busy 状态（否则按钮永久 loading）
     if (curNodeType !== 'start' && Object.keys(acceptance).length) {
       const unchecked = Object.values(acceptance).filter((c) => !c.checked)
       if (unchecked.length) { toast.error(`验收标准未全部确认（剩 ${unchecked.length} 项）：${unchecked[0].text}`); return }
     }
+    setSubmitBusy(true)
     try {
       // 起始节点任务：表单已在发起时提交，提交时携带起始表单值，无需重填
       const form = curNodeType === 'start' ? startValues : formValues
@@ -218,31 +269,43 @@ export function NodeProcessPage() {
       }
     } catch (e) {
       toast.error(e instanceof ApiError ? e.message : '提交失败')
-    }
+    } finally { setSubmitBusy(false) }
   }
 
-  /* ---------- Expert 协助填充：人工确认 → 生成全部字段（含文档）→ 回填表单供审核 ---------- */
-  const canAiFill = (
-    curNodeType === 'task'
-    && (curCfg.handler ?? '').includes('Expert')
-    && curSchema.length > 0
-    && !!activeTaskId
-    && !task?.frozen
-    && task?.status !== 'completed'
-  )
+  /* ---------- Expert 节点统一面板：任务到达即有 Run —— 成功后「采纳」回填表单，执行中显示 loading，失败可重新生成 ---------- */
+  const isExpertNode = curNodeType === 'task' && (curCfg.handler ?? '').includes('Expert')
+  const isAutoNode = (curCfg.handler ?? '') === 'Expert 自动'
+  const canExpert = isExpertNode && curSchema.length > 0 && !!activeTaskId && !task?.frozen && task?.status !== 'completed'
+  const latestRun = expertRuns[0]
 
-  const aiFill = async () => {
+  const applyExpertValues = (values: Record<string, unknown>, warnings: string[], message: string) => {
+    setFormValues((prev) => ({ ...prev, ...values }))
+    setAiFilledKeys(Object.keys(values))
+    if (warnings.length) toast.warning(`部分字段未生成：${warnings.join('；')}`)
+    else toast.success(message)
+  }
+
+  const adoptRun = async (runId: string) => {
     if (!activeTaskId) return
-    if (!window.confirm('将由 Expert 生成全部表单字段（文件类产出会自动生成文档并上传），生成后可逐字段修改。确认继续？')) return
+    setAdoptBusy(runId)
+    try {
+      const d = await api.post<{ values: Record<string, unknown>; warnings: string[] }>(`/api/v1/tasks/${activeTaskId}/adopt-run`, { run_id: runId })
+      applyExpertValues(d.values, d.warnings, '已采纳 Expert 产出，请审核后提交')
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : '采纳失败')
+    } finally { setAdoptBusy(null) }
+  }
+
+  const regenerateRun = async () => {
+    if (!activeTaskId) return
     setFillBusy(true)
     try {
       const d = await api.post<{ values: Record<string, unknown>; warnings: string[]; runId: string }>(`/api/v1/tasks/${activeTaskId}/ai-fill`, {})
-      setFormValues((prev) => ({ ...prev, ...d.values }))
-      setAiFilledKeys(Object.keys(d.values))
-      if (d.warnings.length) toast.warning(`部分字段未生成：${d.warnings.join('；')}`)
-      else toast.success('Expert 已填充表单草稿，请审核后提交')
+      applyExpertValues(d.values, d.warnings, 'Expert 已重新生成表单草稿，请审核后提交')
+      const td = await api.get<{ expertRuns: { id: string; status: string; output: string; error: string; startedAt: string }[] }>(`/api/v1/tasks/${activeTaskId}`)
+      if (td.expertRuns) setExpertRuns(td.expertRuns)
     } catch (e) {
-      toast.error(e instanceof ApiError ? e.message : 'Expert 填充失败')
+      toast.error(e instanceof ApiError ? e.message : 'Expert 生成失败')
     } finally { setFillBusy(false) }
   }
 
@@ -314,18 +377,29 @@ export function NodeProcessPage() {
     } finally { setAppendBusy(false) }
   }
 
-  /* 动作可用性说明（不可用动作说明原因而非静默隐藏）；归档冻结任务全部只读 */
-  const actions = task?.frozen
+  /* 动作可用性说明（不可用动作说明原因而非静默隐藏）；归档冻结任务全部只读；
+     completed/cancelled 历史任务同样只读回看，不允许再提交/退回/转办 */
+  const readonlyTask = !!task?.frozen || task?.status === 'completed' || task?.status === 'cancelled'
+  const readonlyReason = task?.frozen
+    ? '项目已归档，流程已冻结（只读）'
+    : '历史任务（已完成/已取消），仅供回看不可操作'
+  const actions = readonlyTask
     ? [
-        { label: '提交', icon: <Send className="h-4 w-4" />, disabled: true, reason: '项目已归档，流程已冻结（只读）', onClick: () => {} },
-        { label: '退回', icon: <Undo2 className="h-4 w-4" />, disabled: true, reason: '项目已归档，流程已冻结（只读）', onClick: () => {} },
-        { label: '转办', icon: <ArrowRight className="h-4 w-4" />, disabled: true, reason: '项目已归档，流程已冻结（只读）', onClick: () => {} },
+        { label: '提交', icon: <Send className="h-4 w-4" />, disabled: true, reason: readonlyReason, onClick: () => {} },
+        { label: '退回', icon: <Undo2 className="h-4 w-4" />, disabled: true, reason: readonlyReason, onClick: () => {} },
+        { label: '转办', icon: <ArrowRight className="h-4 w-4" />, disabled: true, reason: readonlyReason, onClick: () => {} },
       ]
     : [
         { label: '认领', icon: <UserPlus className="h-4 w-4" />, disabled: true, reason: `已认领（${task?.assignee || '—'}）`, onClick: () => {} },
         task?.status === 'pending_confirmation'
-          ? { label: '提交', icon: <Send className="h-4 w-4" />, disabled: true, reason: 'Expert 运行等待审批：批准后自动填充并流转', onClick: () => {} }
-          : { label: '提交', icon: <Send className="h-4 w-4" />, tone: 'primary' as const, onClick: submitTask },
+          ? { label: '提交', icon: <Send className="h-4 w-4" />, disabled: true, reason: 'Expert 自动处理中：完成后自动采纳并流转，无需人工提交', onClick: () => {} }
+          : {
+              label: submitBusy ? '提交中…' : '提交',
+              icon: submitBusy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />,
+              tone: 'primary' as const, disabled: submitBusy,
+              reason: submitBusy ? '正在提交（节点绑定了 Expert 时需等待生成完成）' : undefined,
+              onClick: submitTask,
+            },
         { label: '退回', icon: <Undo2 className="h-4 w-4" />, tone: 'danger' as const, onClick: () => openDialog('return') },
         { label: '转办', icon: <ArrowRight className="h-4 w-4" />, onClick: () => openDialog('transfer') },
         { label: '暂停流程', icon: <PauseCircle className="h-4 w-4" />, disabled: true, reason: '仅项目管理员可暂停', onClick: () => {} },
@@ -496,7 +570,7 @@ export function NodeProcessPage() {
                 {Object.entries(startValues).filter(([, v]) => v).map(([k, v]) => (
                   <div key={k} className="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
                     <div className="text-[12px] font-medium text-slate-600 dark:text-slate-300">{k}</div>
-                    <p className="mt-1 text-[12.5px] leading-relaxed text-slate-500 dark:text-slate-400">{String(v)}</p>
+                    <div className="mt-1 break-all text-[12.5px] leading-relaxed text-slate-500 dark:text-slate-400"><ReadOnlyValue schema={curSchema} k={k} v={v} /></div>
                   </div>
                 ))}
                 {Object.keys(startValues).length === 0 && (
@@ -509,15 +583,34 @@ export function NodeProcessPage() {
           ) : (
             <SectionCard title={`${task?.node ?? '当前节点'} 表单`} extra={
               <div className="flex items-center gap-2">
-                {canAiFill && (
+                {canExpert && (latestRun?.status === 'running' || fillBusy) && (
+                  <button className="inline-flex cursor-wait items-center gap-1 rounded-lg border border-violet-200 px-2.5 py-1 text-[11.5px] font-medium text-violet-500 dark:border-violet-500/30 dark:text-violet-400" disabled>
+                    <Bot className="h-3.5 w-3.5 animate-pulse" />Expert 生成中…
+                  </button>
+                )}
+                {canExpert && latestRun?.status === 'succeeded' && (
+                  <button className="inline-flex items-center gap-1 rounded-lg bg-violet-600 px-2.5 py-1 text-[11.5px] font-medium text-white transition-colors hover:bg-violet-700 disabled:opacity-50"
+                    disabled={adoptBusy === latestRun.id} onClick={() => void adoptRun(latestRun.id)}>
+                    <Bot className="h-3.5 w-3.5" />{adoptBusy === latestRun.id ? '采纳中…' : '采纳 Expert 结果'}
+                  </button>
+                )}
+                {canExpert && (!latestRun || latestRun.status === 'failed') && (
                   <button className="inline-flex items-center gap-1 rounded-lg border border-violet-200 px-2.5 py-1 text-[11.5px] font-medium text-violet-600 transition-colors hover:bg-violet-50 disabled:opacity-50 dark:border-violet-500/30 dark:text-violet-300 dark:hover:bg-violet-500/10"
-                    disabled={fillBusy} onClick={() => void aiFill()}>
+                    disabled={fillBusy} onClick={() => void regenerateRun()}>
                     <Bot className="h-3.5 w-3.5" />{fillBusy ? 'Expert 生成中…' : 'Expert 协助填充'}
                   </button>
                 )}
                 <Badge tone="cyn">Schema 驱动 · 与画布节点一致</Badge>
               </div>
             }>
+              {canExpert && isAutoNode && (
+                <div className="mb-3 flex items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50/60 px-3 py-2 text-[11.5px] text-blue-700 dark:border-blue-500/30 dark:bg-blue-500/10 dark:text-blue-300">
+                  <Bot className="h-3.5 w-3.5 flex-none animate-pulse" />
+                  {task?.status === 'pending_confirmation'
+                    ? 'Expert 自动处理中：Run 完成后会自动采纳并流转到下一节点，无需人工提交。'
+                    : '本节点为 Expert 自动节点：Run 成功后自动采纳流转；当前为运行失败/校验不过后的人工兜底，可手动填写或重新生成后提交。'}
+                </div>
+              )}
               {aiFilledKeys.length > 0 && (
                 <div className="mb-3 flex items-center gap-1.5 rounded-lg border border-violet-200 bg-violet-50/60 px-3 py-2 text-[11.5px] text-violet-700 dark:border-violet-500/30 dark:bg-violet-500/10 dark:text-violet-300">
                   <Bot className="h-3.5 w-3.5 flex-none" />Expert 已填充 {aiFilledKeys.length} 个字段（含生成的文档），请逐项审核修改后提交。
@@ -563,7 +656,7 @@ export function NodeProcessPage() {
                             {Object.entries(seg.values ?? {}).filter(([, v]) => v !== undefined && v !== null && v !== '').map(([k, v]) => (
                               <div key={k} className="flex gap-2 text-[12px] leading-relaxed">
                                 <span className="w-24 flex-none text-slate-400">{fieldLabel(seg.schema, k)}</span>
-                                <span className="min-w-0 break-all text-slate-600 dark:text-slate-300">{Array.isArray(v) ? v.join('、') : String(v)}</span>
+                                <span className="min-w-0 break-all text-slate-600 dark:text-slate-300"><ReadOnlyValue schema={seg.schema} k={k} v={v} /></span>
                               </div>
                             ))}
                             {/* 追加记录：原处理人补充的信息，独立留痕 */}
@@ -576,7 +669,7 @@ export function NodeProcessPage() {
                                   {Object.entries(ap.values ?? {}).filter(([, v]) => v !== undefined && v !== null && v !== '').map(([k, v]) => (
                                     <div key={k} className="flex gap-2 text-[11.5px] leading-relaxed">
                                       <span className="w-24 flex-none text-slate-400">{fieldLabel(seg.schema, k)}</span>
-                                      <span className="min-w-0 break-all text-slate-600 dark:text-slate-300">{Array.isArray(v) ? v.join('、') : String(v)}</span>
+                                      <span className="min-w-0 break-all text-slate-600 dark:text-slate-300"><ReadOnlyValue schema={seg.schema} k={k} v={v} /></span>
                                     </div>
                                   ))}
                                 </div>
@@ -618,10 +711,21 @@ export function NodeProcessPage() {
                     <span className="flex items-center gap-1.5 text-[12.5px] font-semibold text-violet-700 dark:text-violet-300">
                       <Bot className="h-4 w-4" />{s.id}
                     </span>
-                    <Badge tone={s.status === 'succeeded' ? 'suc' : s.status === 'failed' ? 'err' : s.status === 'interrupted' ? 'orgx' : 'info'}>{s.status}</Badge>
+                    <span className="flex flex-none items-center gap-2">
+                      <Badge tone={s.status === 'succeeded' ? 'suc' : s.status === 'failed' ? 'err' : s.status === 'interrupted' ? 'orgx' : 'info'}>{s.status}</Badge>
+                      {canExpert && s.status === 'succeeded' && (
+                        <button className="rounded-md border border-violet-300 px-2 py-0.5 text-[11px] font-medium text-violet-600 transition-colors hover:bg-violet-100 disabled:opacity-50 dark:border-violet-500/40 dark:text-violet-300 dark:hover:bg-violet-500/10"
+                          disabled={adoptBusy === s.id} onClick={() => void adoptRun(s.id)}>
+                          {adoptBusy === s.id ? '采纳中…' : '采纳'}
+                        </button>
+                      )}
+                      {canExpert && s.status === 'running' && (
+                        <span className="text-[11px] text-violet-400">生成中…</span>
+                      )}
+                    </span>
                   </div>
                   <p className="mt-1.5 whitespace-pre-wrap break-words text-[12.5px] leading-relaxed text-slate-600 dark:text-slate-300">{s.output || s.error || '（无文本输出）'}</p>
-                  <div className="mt-1.5 text-[11px] text-slate-400">{s.startedAt} · Expert Run 输出受版本和审批策略约束</div>
+                  <div className="mt-1.5 text-[11px] text-slate-400">{s.startedAt} · 采纳后产出解析为表单值，人工审核后提交</div>
                 </div>
               ))}
             </div>

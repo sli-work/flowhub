@@ -5,7 +5,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from flowhub_api.authz.authorizer import build_authorizer, get_current_user
@@ -67,23 +67,33 @@ async def stream_notifications(
 async def list_notifications(
     session: Annotated[AsyncSession, Depends(get_db)],
     user: Annotated[User, Depends(get_current_user)],
-    kind: str = "", unread: bool | None = None,
+    kind: str = "", unread: bool | None = None, failed: bool | None = None,
     page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100),
 ):
-    stmt = select(NotificationItem).where(NotificationItem.target_user.in_([user.name, user.account, "admin", ""]))
+    def _scope():
+        return NotificationItem.target_user.in_([user.name, user.account, "admin", ""])
+
+    conds = [_scope()]
     if kind:
-        stmt = stmt.where(NotificationItem.kind == kind)
+        conds.append(NotificationItem.kind == kind)
     if unread is not None:
-        stmt = stmt.where(NotificationItem.unread == unread)
-    total = len((await session.execute(stmt)).scalars().all())
+        conds.append(NotificationItem.unread == unread)
+    if failed is not None:
+        conds.append(NotificationItem.failed == failed)
+    stmt = select(NotificationItem).where(*conds)
+    total = (await session.execute(select(func.count()).select_from(stmt.subquery()))).scalar() or 0
     rows = (await session.execute(stmt.order_by(NotificationItem.id.desc()).offset((page - 1) * page_size).limit(page_size))).scalars().all()
-    unread_count = (await session.execute(
-        select(NotificationItem).where(
-            NotificationItem.target_user.in_([user.name, user.account, "admin", ""]),
-            NotificationItem.unread == True  # noqa: E712
-        )
-    )).scalars().all().__len__()
-    return ok({"items": [_brief(n) for n in rows], "total": total, "unread_count": unread_count, "page": page, "page_size": page_size})
+    # Tab 计数聚合（与用户可见范围一致，一条 SQL 4 个计数）：all / unread / agent / failed
+    all_count, unread_n, agent_n, failed_n = (await session.execute(
+        select(
+            func.count(NotificationItem.id),
+            func.count(NotificationItem.id).filter(NotificationItem.unread == True),  # noqa: E712
+            func.count(NotificationItem.id).filter(NotificationItem.kind == "agent"),
+            func.count(NotificationItem.id).filter(NotificationItem.failed == True),  # noqa: E712
+        ).where(_scope())
+    )).one()
+    return ok({"items": [_brief(n) for n in rows], "total": total, "unread_count": unread_n, "page": page, "page_size": page_size,
+               "stats": {"all": all_count, "unread": unread_n, "agent": agent_n, "failed": failed_n}})
 
 
 @router.post("/read")

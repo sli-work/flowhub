@@ -72,6 +72,18 @@ class TestNotificationList:
         data = r.json()["data"]
         assert all(n["kind"] == "info" for n in data["items"])
 
+    def test_list_pagination_and_stats(self, client: TestClient, leader_headers: dict):
+        d1 = client.get("/api/v1/notifications", headers=leader_headers, params={"page": 1, "page_size": 1}).json()["data"]
+        assert "stats" in d1 and d1["stats"]["all"] == d1["total"]
+        if d1["total"] >= 2:
+            d2 = client.get("/api/v1/notifications", headers=leader_headers, params={"page": 2, "page_size": 1}).json()["data"]
+            assert d2["items"] and d1["items"][0]["id"] != d2["items"][0]["id"]
+
+    def test_list_filter_failed(self, client: TestClient, leader_headers: dict):
+        r = client.get("/api/v1/notifications", headers=leader_headers, params={"failed": "true", "page_size": 100})
+        data = r.json()["data"]
+        assert all(n["failed"] for n in data["items"])
+
 
 class TestMarkRead:
     def test_mark_all_read(self, client: TestClient, leader_headers: dict):

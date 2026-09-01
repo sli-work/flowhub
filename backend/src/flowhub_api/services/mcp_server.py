@@ -25,16 +25,16 @@ _ADMIN_ROLES = ("system_admin", "organization_admin")
 _INSTRUCTIONS = """FlowHub 流程协同平台外部接入服务。
 
 权限边界（重要）：
-- 所有数据访问均受权限控制：任务处理人（assignee）或系统/组织管理员可读；
+- 数据访问与任务提交均受权限控制：任务处理人（assignee）或系统/组织管理员；
 - 已执行链（当前节点 + 之前节点）可获取完整表单数据（get_task_context）；
 - 后续节点（尚未执行）只提供只读摘要（状态/处理人/截止，不含表单明细）。
 
 常用工作流：
 1. list_my_tasks —— 查看我当前有哪些任务；
-2. get_task <task_id> —— 查看某任务详情与当前节点表单；
+2. get_task <task_id> —— 查看任务详情、待填表单 Schema 与验收标准；
 3. get_task_context <task_id> —— 获取完整上下文（含前序节点与文档）；
-4. get_downstream_summary <task_id> —— 查看该任务后续节点摘要；
-5. get_work_item / list_documents —— 工作项与关联文档概览。
+4. create_document —— 把 Markdown 产出保存为文档（upload 字段用）；
+5. submit_task <task_id> —— 填充表单并提交，自动流转到下一节点。
 """
 
 mcp = FastMCP("FlowHub", instructions=_INSTRUCTIONS)
@@ -75,7 +75,7 @@ async def list_my_tasks(status: str = "") -> list[dict]:
 
 @mcp.tool()
 async def get_task(task_id: str) -> dict:
-    """获取任务详情（含当前节点表单 form_values）；无权限返回错误。"""
+    """获取任务详情：当前节点表单值、表单 Schema（待填字段）、验收标准与已有勾选；无权限返回错误。"""
     user = _current_user.get()
     async with SessionFactory() as session:
         task = await session.get(TaskItem, task_id)
@@ -84,10 +84,97 @@ async def get_task(task_id: str) -> dict:
         if not await _can_read_task(session, user, task):
             return {"error": "无权限读取该任务（仅任务处理人或系统/组织管理员可读）"}
         wi = await session.get(WorkItem, task.wi_id)
+        from flowhub_api.services.workflow import WorkflowService
+
+        svc = WorkflowService(session)
+        project, tpl = await svc.resolve_template_for_task(task)
+        cfg: dict = {}
+        if project is not None and tpl is not None:
+            cfg = await svc._node_cfg_of(tpl, task.node_id) or {}
         return {
             **_task_summary(task),
             "formValues": task.form_values or {},
+            "formSchema": cfg.get("schema") or [],
+            "acceptance": (cfg.get("deliverable") or {}).get("acceptance") or [],
+            "acceptanceChecks": task.acceptance_checks or {},
             "workItem": {"id": wi.id if wi else "", "title": wi.title if wi else "", "status": wi.status if wi else ""},
+        }
+
+
+@mcp.tool()
+async def create_document(name: str, content: str, wi_id: str = "") -> dict:
+    """把 Markdown/文本内容保存为 FlowHub 文档（upload 类型表单字段的产出载体），返回 {id, name} 引用。
+    将该引用数组放入 submit_task 的 form_values 对应字段即可完成附件填充。"""
+    user = _current_user.get()
+    from flowhub_api.services.expert_runtime import create_document_from_text
+
+    async with SessionFactory() as session:
+        wi = await session.get(WorkItem, wi_id) if wi_id else None
+        if wi_id and wi is None:
+            return {"error": f"工作项 {wi_id} 不存在"}
+        ref = await create_document_from_text(
+            session, wi_id=wi.id if wi else None, project=wi.project if wi else "未归档",
+            name=name, content=content, uploader=user,
+        )
+        await session.commit()
+        return dict(ref)
+
+
+@mcp.tool()
+async def claim_task(task_id: str) -> dict:
+    """认领任务（转办/待认领的任务：status assigned/transferred → accepted），仅任务处理人或管理员。"""
+    user = _current_user.get()
+    async with SessionFactory() as session:
+        task = await session.get(TaskItem, task_id)
+        if task is None:
+            return {"error": f"任务 {task_id} 不存在"}
+        if not (_is_admin(user) or task.assignee == user.name):
+            return {"error": "无权限认领该任务（仅任务处理人或系统/组织管理员）"}
+        if task.status not in ("assigned", "transferred"):
+            return {"error": f"任务状态为 {task.status}，无需认领"}
+        task.status = "accepted"
+        task.assignee = user.name
+        from flowhub_api.services.audit import AuditService
+
+        await AuditService(session).record(actor=user.name, action="task:claim", target=f"{task.id} · {task.node}", result="success")
+        await session.commit()
+        return {"claimed": True, "task": _task_summary(task)}
+
+
+@mcp.tool()
+async def submit_task(task_id: str, form_values: dict, acceptance_checks: dict | None = None) -> dict:
+    """提交任务并流转到下一节点（仅任务处理人或系统/组织管理员）。
+
+    - form_values：按节点 formSchema 的 key 组织；upload 字段传 create_document 返回的 [{id, name}] 引用数组；
+    - acceptance_checks：节点配置了验收标准（acceptance）时必须逐项 {key: {"text": ..., "checked": true}}；
+    - 校验失败/无权限返回 {"error": ...}；成功返回下一节点与处理人信息。"""
+    user = _current_user.get()
+    async with SessionFactory() as session:
+        task = await session.get(TaskItem, task_id)
+        if task is None:
+            return {"error": f"任务 {task_id} 不存在"}
+        if not (_is_admin(user) or task.assignee == user.name):
+            return {"error": "无权限提交该任务（仅任务处理人或系统/组织管理员）"}
+        if task.status in ("completed", "cancelled"):
+            return {"error": "任务已处理，不可重复提交（幂等保护）"}
+        if task.status == "pending_confirmation":
+            return {"error": "Expert 正在自动处理该节点，完成后会自动流转"}
+        try:
+            from flowhub_api.services.workflow import WorkflowService
+
+            result = await WorkflowService(session).submit_and_advance(task, form_values or {}, acceptance_checks or {}, user)
+            await session.commit()
+        except Exception as exc:  # noqa: BLE001
+            detail = getattr(exc, "detail", None) or str(exc)
+            return {"error": f"提交失败：{detail}", "code": getattr(exc, "biz_code", 0)}
+        return {
+            "submitted": True,
+            "task": _task_summary(task),
+            "nextNode": result.get("next_node"),
+            "nextAssignees": result.get("next_assignees") or [],
+            "nextTasks": [_task_summary(x) for x in (result.get("tasks") or [])],
+            "waitingJoin": bool(result.get("waiting_join")),
+            "closed": bool(result.get("closed")),
         }
 
 

@@ -83,6 +83,8 @@ class TaskItem(Base):
     brief: Mapped[str] = mapped_column(Text, default="")
     # 提交时验收清单勾选快照 {key: {text, checked}}，模板后续修改不影响历史审计
     acceptance_checks: Mapped[dict] = mapped_column(JSON, default=dict)
+    # 创建时间（ISO 字符串）：列表"最新创建"排序与展示用；存量数据由 migrate 从 id 回填
+    created_at: Mapped[str] = mapped_column(String(40), default="")
 
     work_item: Mapped["WorkItem"] = relationship(back_populates="tasks")
 

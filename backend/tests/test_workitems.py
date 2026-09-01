@@ -111,6 +111,21 @@ class TestWorkItemCreate:
         assert r.status_code == 200, f"重复标题应可创建: {r.status_code} {r.text}"
         assert r.json()["data"]["item"]["title"] == title
 
+    def test_create_priority_normalization(self, client: TestClient, leader_headers: dict, _created_project: str):
+        """priority 归一化：小写 p0 → DB 枚举 P0；非法值回落 P2（回归：曾因小写值插入枚举列报 500）。"""
+        r = client.post("/api/v1/work-items", headers=leader_headers, json={
+            "project_id": _created_project, "template_id": "tpl-req",
+            "start_values": {**_start_values(_uniq("小写优先级")), "priority": "p0"},
+        })
+        assert r.status_code == 200, f"小写 priority 不应报内部错误: {r.status_code} {r.text}"
+        assert r.json()["data"]["item"]["priority"] == "P0"
+        r2 = client.post("/api/v1/work-items", headers=leader_headers, json={
+            "project_id": _created_project, "template_id": "tpl-req",
+            "start_values": {**_start_values(_uniq("非法优先级")), "priority": "urgent"},
+        })
+        assert r2.status_code == 200, r2.text
+        assert r2.json()["data"]["item"]["priority"] == "P2"
+
     def test_create_without_title(self, client: TestClient, leader_headers: dict, _created_project: str):
         r = client.post("/api/v1/work-items", headers=leader_headers, json={
             "project_id": _created_project, "template_id": "tpl-req", "start_values": {"description": "no title"},
@@ -281,3 +296,32 @@ class TestTaskAppend:
         r = client.post(f"/api/v1/tasks/{start_task['id']}/appends", headers=H_zw, json={"values": {"description": "缺标题"}})
         assert r.status_code == 400
         assert "必填" in r.json()["message"]
+
+
+class TestWorkItemStop:
+    def test_stop_flow(self, client: TestClient, leader_headers: dict, org_headers: dict, _created_project: str):
+        """手动停止：权限拦截 → 停止后实例/任务/工作项全部终结 → 重复停止 409。"""
+        title = _uniq("待停止需求")
+        r = client.post("/api/v1/work-items", headers=leader_headers, json={
+            "project_id": _created_project, "template_id": "tpl-req", "start_values": _start_values(title),
+        })
+        assert r.status_code == 200
+        wi_id = r.json()["data"]["item"]["id"]
+        # leader 无 workflow_instance:cancel → 403
+        denied = client.post(f"/api/v1/work-items/{wi_id}/stop", headers=leader_headers)
+        assert denied.status_code == 403, f"无权限应被拒绝: {denied.status_code} {denied.text}"
+        # 组织管理员（有 workflow_instance:cancel）停止成功
+        stopped = client.post(f"/api/v1/work-items/{wi_id}/stop", headers=org_headers)
+        assert stopped.status_code == 200, f"停止失败: {stopped.status_code} {stopped.text}"
+        assert stopped.json()["data"]["item"]["status"] == "cancelled"
+        detail = client.get(f"/api/v1/work-items/{wi_id}", headers=leader_headers).json()["data"]
+        assert detail["instance"]["state"] == "cancelled", "流程实例应置为 cancelled"
+        assert all(t["status"] in ("completed", "cancelled") for t in detail["tasks"]), "所有任务应终结"
+        assert any(t["status"] == "cancelled" for t in detail["tasks"]), "待处理任务应被取消"
+        # 重复停止 → 409
+        again = client.post(f"/api/v1/work-items/{wi_id}/stop", headers=org_headers)
+        assert again.status_code == 409, f"重复停止应 409: {again.status_code} {again.text}"
+
+    def test_stop_not_found(self, client: TestClient, org_headers: dict):
+        r = client.post("/api/v1/work-items/NOPE-0000/stop", headers=org_headers)
+        assert r.status_code == 404

@@ -4,7 +4,9 @@ import { DialogHost } from './components/dialogs'
 import { LoginPage } from './pages/login'
 import { MyTasksPage } from './pages/tasks'
 import { ProjectsPage } from './pages/projects'
+import { ReposPage } from './pages/repos'
 import { WorkItemPage } from './pages/workitem'
+import { WorkItemsPage } from './pages/workitems'
 import { NodeProcessPage } from './pages/node'
 import { TemplatesPage } from './pages/templates'
 import { CanvasPage } from './pages/canvas'
@@ -43,7 +45,9 @@ function PageRouter() {
     case 'channel': return <ChannelsPage />
     case 'dashboard': return <DashboardPage />
     case 'projects': return <ProjectsPage />
+    case 'repos': return <ReposPage />
     case 'workitem': return <WorkItemPage />
+    case 'workitems': return <WorkItemsPage />
     case 'node': return <NodeProcessPage />
     case 'templates': return <TemplatesPage />
     case 'canvas': return <CanvasPage />

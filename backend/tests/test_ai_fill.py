@@ -1,5 +1,6 @@
 """节点表单 AI 填充：schema 解析矫正 / 协助填充 / Expert 自动闭环 / 失败兜底。"""
 import json
+import time
 import uuid
 
 import pytest
@@ -128,6 +129,31 @@ def _publish_flow_template(client, headers, deployment_id):
 
 # ---------- Expert 协助填充（人工确认 → 回填表单） ----------
 
+def _wait_wi_task_status(client, headers, wi_id, node_id, status, timeout=8.0):
+    """轮询等待工作项某节点任务进入指定状态（Expert Run 已改为后台异步执行）。"""
+    deadline = time.time() + timeout
+    detail = None
+    while time.time() < deadline:
+        detail = client.get(f"/api/v1/work-items/{wi_id}", headers=headers).json()["data"]
+        t = next((x for x in detail["tasks"] if x["nodeId"] == node_id), None)
+        if t is not None and t["status"] == status:
+            return detail
+        time.sleep(0.05)
+    return detail
+
+
+def _wait_run_succeeded(client, headers, task_id, timeout=8.0):
+    """轮询等待任务关联的 Expert Run 执行完成。"""
+    deadline = time.time() + timeout
+    runs = []
+    while time.time() < deadline:
+        runs = client.get(f"/api/v1/tasks/{task_id}", headers=headers).json()["data"]["expertRuns"]
+        if runs and runs[0]["status"] in ("succeeded", "failed"):
+            return runs
+        time.sleep(0.05)
+    return runs
+
+
 def test_ai_fill_generates_values_and_document(client, org_headers, fake_model):
     headers = org_headers
     model_id, dep_id = _publish_expert_with_deployment(client, headers, "fill-dep-1")
@@ -180,7 +206,32 @@ def test_ai_fill_model_failure_returns_clear_error(client, org_headers, fake_mod
     FakeChatOpenAI.should_fail = False
 
 
-# ---------- Expert 自动：审批后自动填充并流转 ----------
+def test_adopt_run_reuses_spawned_run(client, org_headers, fake_model):
+    """协助节点标准路径：任务到达时引擎自动创建 Run → 采纳接口复用其产出回填表单，无需重复触发模型。"""
+    headers = org_headers
+    model_id, dep_id = _publish_expert_with_deployment(client, headers, "fill-dep-3")
+    tpl_id = _publish_flow_template(client, headers, dep_id)
+    pid = _make_project(client, headers, tpl_id, "v1", [])
+    FakeChatOpenAI.payload = json.dumps({"conclusion": "到达即生成的结论", "verdict": "通过", "report": "# 到达报告"})
+    wi_id = _create_wi(client, headers, pid, tpl_id, "AI采纳-E2E")
+    task_id = _get_open_tasks(client, headers, wi_id)[0]["id"]
+
+    runs = _wait_run_succeeded(client, headers, task_id)
+    assert runs and runs[0]["status"] == "succeeded", "任务到达时引擎应已自动创建 Run（后台执行）"
+
+    r = client.post(f"/api/v1/tasks/{task_id}/adopt-run", headers=headers, json={"run_id": runs[0]["id"]})
+    assert r.status_code == 200, r.text
+    data = r.json()["data"]
+    assert data["values"]["conclusion"] == "到达即生成的结论"
+    assert data["values"]["verdict"] == "pass"
+    assert data["values"]["report"][0]["id"], "upload 字段应回填文档引用"
+
+    # 采纳不产生新 Run：仍是到达时那一条
+    td2 = client.get(f"/api/v1/tasks/{task_id}", headers=headers).json()["data"]
+    assert len(td2["expertRuns"]) == len(runs)
+
+
+# ---------- Expert 自动：run 成功后免审批自动采纳并流转 ----------
 
 def _publish_auto_template(client, headers, deployment_id):
     tpl = client.post("/api/v1/templates", headers=headers, json={"name": f"AI自动-{uuid.uuid4().hex[:6]}", "type": "requirement"}).json()["data"]["template"]
@@ -205,44 +256,48 @@ def _publish_auto_template(client, headers, deployment_id):
     return tpl["id"]
 
 
-def test_expert_auto_fills_and_advances_after_approval(client, org_headers, fake_model):
+def test_expert_auto_fills_and_advances_without_approval(client, org_headers, fake_model):
+    """自动节点免人工介入：任务到达即触发 Run → 成功后自动采纳填充并流转，无需审批。"""
     headers = org_headers
     model_id, dep_id = _publish_expert_with_deployment(client, headers, "auto-dep-1")
     tpl_id = _publish_auto_template(client, headers, dep_id)
     pid = _make_project(client, headers, tpl_id, "v1", [])
+    FakeChatOpenAI.payload = json.dumps({"conclusion": "自动生成的结论", "report": "# 自动报告"})
     wi_id = _create_wi(client, headers, pid, tpl_id, "AI自动-E2E")
 
-    # 到达 Expert 自动节点：运行中断等待审批（治理写入）
-    task = _get_open_tasks(client, headers, wi_id)[0]
-    assert task["status"] == "pending_confirmation"
-    approval = client.get("/api/v1/expert-approvals", headers=headers).json()["data"]["items"][0]
-    FakeChatOpenAI.payload = json.dumps({"conclusion": "自动生成的结论", "report": "# 自动报告"})
-    assert client.post(f"/api/v1/expert-approvals/{approval['id']}/approve", headers=headers, json={}).status_code == 200
-
-    detail = client.get(f"/api/v1/work-items/{wi_id}", headers=headers).json()["data"]
-    parent = next(t for t in detail["tasks"] if t["id"] == task["id"])
-    assert parent["status"] == "completed", "审批通过后 AI 自动填充并完成节点"
+    detail = _wait_wi_task_status(client, headers, wi_id, "n2", "completed")
+    auto_task = next(t for t in detail["tasks"] if t["nodeId"] == "n2")
+    assert auto_task["status"] == "completed", "后台 Run 成功后应自动采纳并完成节点"
     next_task = next(t for t in detail["tasks"] if t["node"] == "完成")
     assert next_task["status"] == "assigned", "自动流转到结束节点任务"
     assert detail["item"]["status"] == "in_progress", "结束节点未提交前 WI 不关闭"
 
-    td = client.get(f"/api/v1/tasks/{task['id']}", headers=headers).json()["data"]
-    assert td["task"]["formValues"] if "formValues" in td["task"] else True
+    td = client.get(f"/api/v1/tasks/{auto_task['id']}", headers=headers).json()["data"]
     runs = td["expertRuns"]
-    assert runs and runs[0]["status"] == "succeeded" and runs[0]["taskLinked"] if "taskLinked" in runs[0] else runs[0]["status"] == "succeeded"
+    assert runs and runs[0]["status"] == "succeeded"
+    # 无需审批：不应产生 ExpertApproval
+    approvals = client.get("/api/v1/expert-approvals", headers=headers).json()["data"]["items"]
+    assert not [a for a in approvals if a.get("runId") == runs[0]["id"]], "自动采纳不应触发审批"
 
 
 def test_expert_auto_model_failure_falls_back_to_human(client, org_headers, fake_model):
+    """自动节点 Run 失败 → 任务保持 assigned 由人工兜底，成功重试后仍可走自动采纳。"""
     headers = org_headers
     model_id, dep_id = _publish_expert_with_deployment(client, headers, "auto-dep-2")
     tpl_id = _publish_auto_template(client, headers, dep_id)
     pid = _make_project(client, headers, tpl_id, "v1", [])
-    wi_id = _create_wi(client, headers, pid, tpl_id, "AI自动-失败兜底")
-    task = _get_open_tasks(client, headers, wi_id)[0]
-    approval = client.get("/api/v1/expert-approvals", headers=headers).json()["data"]["items"][0]
     FakeChatOpenAI.should_fail = True
-    assert client.post(f"/api/v1/expert-approvals/{approval['id']}/approve", headers=headers, json={}).status_code == 200
-    detail = client.get(f"/api/v1/work-items/{wi_id}", headers=headers).json()["data"]
-    parent = next(t for t in detail["tasks"] if t["id"] == task["id"])
-    assert parent["status"] == "assigned", "审批后模型失败 → 任务回退人工兜底"
+    wi_id = _create_wi(client, headers, pid, tpl_id, "AI自动-失败兜底")
+
+    detail = _wait_wi_task_status(client, headers, wi_id, "n2", "assigned")
+    auto_task = next(t for t in detail["tasks"] if t["nodeId"] == "n2")
+    assert auto_task["status"] == "assigned", "后台 Run 失败 → 任务回退人工兜底"
     FakeChatOpenAI.should_fail = False
+
+    # 人工兜底路径可用：协助填充（重新生成）→ 提交
+    r = client.post(f"/api/v1/tasks/{auto_task['id']}/ai-fill", headers=headers, json={})
+    assert r.status_code == 200, r.text
+    values = r.json()["data"]["values"]
+    r2 = client.post(f"/api/v1/tasks/{auto_task['id']}/actions", headers=headers,
+                     json={"action": "submit", "form_values": values, "acceptance_checks": {"a1": {"text": "结论完整", "checked": True}}})
+    assert r2.status_code == 200, r2.text

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { FolderKanban, Plus, Users, GitCommitHorizontal, Lock, Pencil, Workflow, Archive, Trash2 } from 'lucide-react'
+import { FolderKanban, Plus, Users, GitCommitHorizontal, GitBranch, Lock, Pencil, Workflow, Archive, Trash2 } from 'lucide-react'
 import { useApp, toast } from '../store/app-store'
 import { Avatar, Badge, PageHeader, SearchInput, type Tone } from '../components/common'
 import { ProjectDialog } from '../components/dialogs'
@@ -157,6 +157,18 @@ export function ProjectsPage() {
             </>
           )}
         </div>
+        {/* 绑定的代码仓库（多对多） */}
+        {(p.repos?.length ?? 0) > 0 && (
+          <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+            <GitBranch className="h-3.5 w-3.5 flex-none text-slate-300 dark:text-slate-600" />
+            {p.repos!.slice(0, 3).map((r) => (
+              <Badge key={r.bindingId} tone={r.connectionStatus === 'ok' ? 'gry' : 'warn'} className="!px-2 !font-mono !text-[10.5px]">
+                {r.fullName}
+              </Badge>
+            ))}
+            {p.repos!.length > 3 && <span className="text-[10.5px] text-slate-400">+{p.repos!.length - 3}</span>}
+          </div>
+        )}
         <div className="mt-3 flex items-center justify-between border-t border-slate-100 pt-3 text-[12px] text-slate-400 dark:border-slate-800">
           <div className="flex items-center gap-1">
             <Users className="h-3.5 w-3.5" />{p.members} 人

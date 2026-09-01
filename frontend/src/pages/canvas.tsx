@@ -1,7 +1,7 @@
 import { useRef, useState, useEffect } from 'react'
 import {
   Save, ShieldCheck, Undo2, GitBranch, Zap, X, Plus, Trash2,
-  Move, Link2, Eye, Check, Play, Clock,
+  Move, Link2, Eye, Check, Play, Clock, LayoutGrid,
 } from 'lucide-react'
 import { useApp, toast } from '../store/app-store'
 import { api, ApiError } from '../lib/api'
@@ -69,10 +69,10 @@ const typeGuide: Record<CanvasNode['type'], { what: string; steps: string[] }> =
   },
 }
 
-const W = 860
-const H = 300
-const NODE_W = 118
-const NODE_H = 56
+const W = 1400
+const H = 640
+const NODE_W = 132
+const NODE_H = 60
 
 interface Snap {
   nodes: CanvasNode[]
@@ -120,13 +120,56 @@ export function CanvasPage() {
   useEffect(() => {
     api.get<{ nodes: CanvasNode[]; edges: [string, string][]; fallbacks: [string, string][] }>(`/api/v1/templates/${tplId}/versions/${viewVersion}/canvas`)
       .then((d) => {
-        setNodes(d.nodes)
+        // 统一节点尺寸为当前画布规格（历史版本节点可能存有旧尺寸）
+        const normalized = d.nodes.map((n) => ({ ...n, width: NODE_W, height: NODE_H }))
+        // 画布扩大后，历史布局可能挤在左上角：整体居中（保持相对位置不变）
+        if (normalized.length) {
+          const minX = Math.min(...normalized.map((n) => n.x))
+          const maxX = Math.max(...normalized.map((n) => n.x + n.width))
+          const minY = Math.min(...normalized.map((n) => n.y))
+          const maxY = Math.max(...normalized.map((n) => n.y + n.height))
+          const offX = Math.max(0, (W - (maxX - minX)) / 2 - minX)
+          const offY = Math.max(0, (H - (maxY - minY)) / 2 - minY)
+          for (const n of normalized) { n.x += offX; n.y += offY }
+        }
+        setNodes(normalized)
         setEdges(d.edges)
         setFallbacks(d.fallbacks)
         setSelectedId(d.nodes[0]?.id ?? '')
       })
       .catch(() => { /* 后端不可用：画布为空 */ })
   }, [tplId, viewVersion])
+
+  /* ---------- 视图：滚轮缩放 + 拖拽平移 + 适配 ---------- */
+  const [vb, setVb] = useState({ x: 0, y: 0, w: W, h: H })
+  const [zoom, setZoom] = useState(1)
+  const panRef = useRef<{ sx: number; sy: number; vx: number; vy: number; moved: boolean } | null>(null)
+  const panMoved = useRef(false)
+
+  const applyZoom = (factor: number, cx?: number, cy?: number) => {
+    const nw = Math.min(W * 2.5, Math.max(W * 0.35, vb.w * factor))
+    const k = nw / vb.w
+    const px = cx ?? vb.x + vb.w / 2
+    const py = cy ?? vb.y + vb.h / 2
+    setVb({ x: px - (px - vb.x) * k, y: py - (py - vb.y) * k, w: nw, h: vb.h * k })
+    setZoom(W / nw)
+  }
+  const fitView = () => { setVb({ x: 0, y: 0, w: W, h: H }); setZoom(1) }
+
+  /* 滚轮缩放（以鼠标位置为中心；非 passive 监听以阻止页面滚动） */
+  useEffect(() => {
+    const svg = svgRef.current
+    if (!svg) return
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault()
+      const rect = svg.getBoundingClientRect()
+      const cx = vb.x + ((e.clientX - rect.left) / rect.width) * vb.w
+      const cy = vb.y + ((e.clientY - rect.top) / rect.height) * vb.h
+      applyZoom(e.deltaY > 0 ? 1.12 : 1 / 1.12, cx, cy)
+    }
+    svg.addEventListener('wheel', onWheel, { passive: false })
+    return () => svg.removeEventListener('wheel', onWheel)
+  })
 
   const snapshot = useRef<Snap | null>(null)
   const drag = useRef<{
@@ -141,28 +184,28 @@ export function CanvasPage() {
   const selected = nodes.find((n) => n.id === selectedId) ?? nodes[0] ?? null
   const st = selected ? nodeStyle[selected.type] : nodeStyle.task
 
-  /* ---------- 坐标换算 ---------- */
+  /* ---------- 坐标换算（按当前 viewBox，支持缩放/平移） ---------- */
   const toSvg = (e: { clientX: number; clientY: number }) => {
     const rect = svgRef.current!.getBoundingClientRect()
-    return { x: (e.clientX - rect.left) * W / rect.width, y: (e.clientY - rect.top) * H / rect.height }
+    return { x: vb.x + (e.clientX - rect.left) * vb.w / rect.width, y: vb.y + (e.clientY - rect.top) * vb.h / rect.height }
   }
 
-  /* ---------- 发布校验问题定位：选中目标节点 + 滚动可见 + 脉冲高亮 ---------- */
+  /* ---------- 发布校验问题定位：选中目标节点 + 视图居中 + 脉冲高亮 ---------- */
   useEffect(() => {
     if (!locateNode) return
     const target = nodes.find((n) => n.id === locateNode)
     setSelectedId(locateNode)
     setLocateFlash(locateNode)
-    // 滚动容器使节点可见（节点坐标 → viewBox 比例 → 容器滚动位置）
-    const svg = svgRef.current
-    if (svg && target) {
-      const parent = svg.closest('.overflow-x-auto') as HTMLElement | null
-      if (parent) {
-        const scale = parent.clientWidth / W
-        parent.scrollTo({ left: Math.max(0, target.x * scale - parent.clientWidth / 2 + target.width * scale / 2), behavior: 'smooth' })
-      }
+    // 视图居中到目标节点（缩放态下也能定位）
+    if (target) {
+      setVb((v) => ({
+        x: Math.max(0, Math.min(W - v.w, target.x + target.width / 2 - v.w / 2)),
+        y: Math.max(0, Math.min(H - v.h, target.y + target.height / 2 - v.h / 2)),
+        w: v.w, h: v.h,
+      }))
+    } else {
+      toast(`未找到节点 ${locateNode}（当前画布为已发布版本，问题节点属于草稿）`)
     }
-    if (!target) toast(`未找到节点 ${locateNode}（当前画布为已发布版本，问题节点属于草稿）`)
     // 脉冲高亮 3 秒后清除
     const timer = window.setTimeout(() => setLocateFlash(null), 3000)
     return () => window.clearTimeout(timer)
@@ -356,6 +399,90 @@ export function CanvasPage() {
     }
   }, [])
 
+  /* ---------- 背景平移（按住空白拖拽；未移动视为点击空白 → 取消选中） ---------- */
+  const onBgPointerDown = (e: React.PointerEvent) => {
+    panRef.current = { sx: e.clientX, sy: e.clientY, vx: vb.x, vy: vb.y, moved: false }
+    panMoved.current = false
+    const onMove = (ev: PointerEvent) => {
+      const p = panRef.current
+      if (!p) return
+      const dx = ev.clientX - p.sx
+      const dy = ev.clientY - p.sy
+      if (Math.abs(dx) + Math.abs(dy) > 3) p.moved = true
+      if (!p.moved) return
+      panMoved.current = true
+      const rect = svgRef.current!.getBoundingClientRect()
+      setVb((v) => ({ x: p.vx - (dx * v.w) / rect.width, y: p.vy - (dy * v.h) / rect.height, w: v.w, h: v.h }))
+    }
+    const onUp = () => {
+      if (!panMoved.current && mode === 'edit') { setSelectedEdge(null); setSelectedId('') }
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+  }
+
+  /* ---------- 自动整理：拓扑分层 + 蛇形排布（主边最长路径定层级） ---------- */
+  const autoLayout = () => {
+    setNodes((prev) => {
+      const ids = prev.map((n) => n.id)
+      const succ = new Map<string, string[]>()
+      const indeg = new Map<string, number>()
+      for (const id of ids) { succ.set(id, []); indeg.set(id, 0) }
+      for (const [a, b] of edges) {
+        if (succ.has(a) && indeg.has(b) && a !== b) {
+          succ.get(a)!.push(b)
+          indeg.set(b, (indeg.get(b) ?? 0) + 1)
+        }
+      }
+      // Kahn 最长路径分层（回退边不参与，避免环干扰）
+      const depth = new Map<string, number>()
+      const work = new Map(indeg)
+      const q = ids.filter((id) => (work.get(id) ?? 0) === 0)
+      for (const id of q) depth.set(id, 0)
+      while (q.length) {
+        const id = q.shift()!
+        for (const b of succ.get(id) ?? []) {
+          depth.set(b, Math.max(depth.get(b) ?? 0, (depth.get(id) ?? 0) + 1))
+          work.set(b, (work.get(b) ?? 1) - 1)
+          if ((work.get(b) ?? 0) === 0) q.push(b)
+        }
+      }
+      for (const id of ids) if (!depth.has(id)) depth.set(id, 0) // 环上孤点放首层兜底
+      // 分层 → 行（行内按当前 x 保持相对顺序）→ 蛇形排布
+      const layers = new Map<number, string[]>()
+      for (const id of [...ids].sort((x, y) => (prev.find((n) => n.id === x)?.x ?? 0) - (prev.find((n) => n.id === y)?.x ?? 0))) {
+        const d = depth.get(id) ?? 0
+        if (!layers.has(d)) layers.set(d, [])
+        layers.get(d)!.push(id)
+      }
+      const depths = [...layers.keys()].sort((a, b) => a - b)
+      const GAP_X = NODE_W + 72
+      const GAP_Y = NODE_H + 84
+      const posById = new Map<string, { x: number; y: number }>()
+      depths.forEach((d, row) => {
+        const rowIds = layers.get(d)!
+        const ltr = row % 2 === 0
+        const ordered = ltr ? rowIds : [...rowIds].reverse()
+        const rowWidth = ordered.length * GAP_X - (GAP_X - NODE_W)
+        const startX = Math.max(32, (W - rowWidth) / 2)
+        ordered.forEach((id, i) => {
+          posById.set(id, {
+            x: Math.round(ltr ? startX + i * GAP_X : startX + (ordered.length - 1 - i) * GAP_X),
+            y: Math.round(36 + row * GAP_Y),
+          })
+        })
+      })
+      return prev.map((n) => ({ ...n, ...(posById.get(n.id) ?? {}) }))
+    })
+    setCheckResult(null)
+    toast.success('已自动整理：按流转顺序分层蛇形排布')
+  }
+
+  /* ---------- 拖连线落点高亮 ---------- */
+  const [dropTarget, setDropTarget] = useState<string | null>(null)
+
   const onWinMove = (e: PointerEvent) => {
     const d = drag.current
     if (!d) return
@@ -366,6 +493,8 @@ export function CanvasPage() {
       updateNode(d.id, { x: Math.max(8, Math.min(W - NODE_W - 8, nx)), y: Math.max(8, Math.min(H - NODE_H - 8, ny)) })
     } else {
       d.cur = p
+      const hit = hitNodeRef(p)
+      setDropTarget(hit && hit.id !== d.id ? hit.id : null)
     }
   }
   const onWinUp = (e: PointerEvent) => {
@@ -381,6 +510,7 @@ export function CanvasPage() {
       } else {
         toast('未命中节点：从节点右侧蓝点拖到目标节点上松手')
       }
+      setDropTarget(null)
     }
     drag.current = null
     window.removeEventListener('pointermove', moveListener.current)
@@ -491,7 +621,8 @@ export function CanvasPage() {
     const A = pos(a), B = pos(b)
     const x1 = A.x + A.width / 2, y1 = A.y + A.height
     const x2 = B.x + B.width / 2, y2 = B.y
-    return `M ${x1} ${y1} L ${x2} ${y2}`
+    const my = (y1 + y2) / 2 + 28
+    return `M ${x1} ${y1} C ${x1} ${my}, ${x2} ${my}, ${x2} ${y2}`
   }
   const edgeKey = (a: string, b: string) => `${a}-${b}`
 
@@ -567,17 +698,20 @@ export function CanvasPage() {
             </div>
           )}
 
-          <div className="overflow-x-auto">
+          <div className="relative overflow-hidden rounded-lg border border-slate-100 bg-slate-50/40 dark:border-slate-800 dark:bg-slate-950/40">
             <svg
               ref={svgRef}
-              viewBox={`0 0 ${W} ${H}`}
-              className={cn('min-w-[720px] touch-none', mode === 'edit' && 'cursor-crosshair')}
-              style={{ width: '100%' }}
-              onClick={() => { if (mode === 'edit' && !drag.current) { setSelectedEdge(null); setSelectedId('') } }}
+              viewBox={`${vb.x} ${vb.y} ${vb.w} ${vb.h}`}
+              className={cn('block w-full touch-none select-none', mode === 'edit' ? 'cursor-grab active:cursor-grabbing' : 'cursor-grab')}
+              style={{ width: '100%', height: 460 }}
+              onPointerDown={onBgPointerDown}
             >
               <defs>
                 <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
                   <path d="M 0 0 L 10 5 L 0 10 z" fill="#94A3B8" />
+                </marker>
+                <marker id="arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M 0 0 L 10 5 L 0 10 z" fill="#2563EB" />
                 </marker>
                 <marker id="arrow-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
                   <path d="M 0 0 L 10 5 L 0 10 z" fill="#F87171" />
@@ -590,7 +724,7 @@ export function CanvasPage() {
                   <path d="M 24 0 L 0 0 0 24" fill="none" stroke="#F1F5F9" strokeWidth="0.6" className="dark:stroke-slate-800" />
                 </pattern>
               )}
-              {mode === 'edit' && <rect x="0" y="0" width={W} height={H} fill="url(#grid)" />}
+              {mode === 'edit' && <rect x={-2000} y={-2000} width={W + 4000} height={H + 4000} fill="url(#grid)" />}
 
               {/* 主线边 */}
               {edges.map(([a, b]) => {
@@ -598,19 +732,19 @@ export function CanvasPage() {
                 const sel = selectedEdge === key
                 return (
                   <g key={key} onClick={(e) => { if (mode === 'edit') { e.stopPropagation(); setSelectedEdge(key) } }} className={mode === 'edit' ? 'cursor-pointer' : ''}>
-                    <path d={edgeD(a, b)} fill="none" stroke={sel ? '#2563EB' : '#94A3B8'} strokeWidth={sel ? 2.6 : 1.6} markerEnd="url(#arrow)" />
+                    <path d={edgeD(a, b)} fill="none" stroke={sel ? '#2563EB' : '#94A3B8'} strokeWidth={sel ? 2.6 : 1.6} markerEnd={sel ? 'url(#arrow-blue)' : 'url(#arrow)'} className="transition-colors" />
                     {/* 加宽点击热区 */}
                     <path d={edgeD(a, b)} fill="none" stroke="transparent" strokeWidth="14" style={{ pointerEvents: mode === 'edit' ? 'stroke' : 'none' }} />
                   </g>
                 )
               })}
-              {/* 回退边 */}
+              {/* 回退边（下行绕行曲线） */}
               {fallbacks.map(([a, b]) => {
                 const key = `fb-${a}-${b}`
                 const sel = selectedEdge === key
                 return (
                   <g key={key} onClick={(e) => { if (mode === 'edit') { e.stopPropagation(); setSelectedEdge(key) } }} className={mode === 'edit' ? 'cursor-pointer' : ''}>
-                    <path d={fbD(a, b)} fill="none" stroke={sel ? '#2563EB' : '#F87171'} strokeWidth={sel ? 2.6 : 1.4} strokeDasharray="5 4" markerEnd="url(#arrow-red)" />
+                    <path d={fbD(a, b)} fill="none" stroke={sel ? '#2563EB' : '#F87171'} strokeWidth={sel ? 2.6 : 1.4} strokeDasharray="5 4" markerEnd="url(#arrow-red)" className="transition-colors" />
                     <path d={fbD(a, b)} fill="none" stroke="transparent" strokeWidth="14" style={{ pointerEvents: mode === 'edit' ? 'stroke' : 'none' }} />
                   </g>
                 )
@@ -620,7 +754,7 @@ export function CanvasPage() {
               {drag.current?.kind === 'link' && drag.current.cur && (() => {
                 const d = drag.current!
                 return (
-                  <path d={`M ${d.ox} ${d.oy} L ${d.cur!.x} ${d.cur!.y}`} fill="none" stroke="#2563EB" strokeWidth="1.8" strokeDasharray="4 3" markerEnd="url(#arrow)" />
+                  <path d={`M ${d.ox} ${d.oy} L ${d.cur!.x} ${d.cur!.y}`} fill="none" stroke="#2563EB" strokeWidth="1.8" strokeDasharray="4 3" markerEnd="url(#arrow-blue)" />
                 )
               })()}
 
@@ -629,14 +763,20 @@ export function CanvasPage() {
                 const s = nodeStyle[n.type]
                 const sel = selectedId === n.id
                 const located = locateFlash === n.id
+                const dropping = dropTarget === n.id
+                const label = n.label.length > 10 ? `${n.label.slice(0, 10)}…` : n.label
+                const sub = `${n.sub} · ${typeLine[n.type]}`
                 return (
-                  <g key={n.id} className="cursor-pointer select-none"
+                  <g key={n.id} className="canvas-node select-none"
                     onPointerDown={(e) => onNodePointerDown(e, n)}
                     onClick={(e) => { e.stopPropagation(); setSelectedId(n.id); setSelectedEdge(null) }}>
                     <rect x={n.x} y={n.y} width={n.width} height={n.height} rx={10}
-                      className={cn('transition-all', sel ? 'fill-blue-50 dark:fill-blue-500/10' : 'fill-white dark:fill-slate-800')}
-                      stroke={located ? '#EF4444' : sel ? '#2563EB' : '#CBD5E1'}
-                      strokeWidth={located ? 2.5 : sel ? 2 : 1.2}
+                      className={cn('node-body transition-all',
+                        dropping ? 'fill-emerald-50 dark:fill-emerald-500/10'
+                          : sel ? 'fill-blue-50 dark:fill-blue-500/10'
+                            : 'fill-white dark:fill-slate-800')}
+                      stroke={located ? '#EF4444' : dropping ? '#10B981' : sel ? '#2563EB' : '#CBD5E1'}
+                      strokeWidth={located ? 2.5 : dropping || sel ? 2 : 1.2}
                       strokeDasharray={n.type === 'decision' ? '5 3' : located ? '6 3' : undefined}
                       style={{ cursor: mode === 'edit' ? 'move' : 'pointer' }} />
                     {located && (
@@ -645,20 +785,20 @@ export function CanvasPage() {
                         <animate attributeName="opacity" from="0.8" to="0" dur="0.9s" repeatCount="indefinite" />
                       </circle>
                     )}
-                    <circle cx={n.x + 16} cy={n.y + 16} r={5} className={s.bg} />
-                    <text x={n.x + 28} y={n.y + 20} fontSize="11" fontWeight="600" className="fill-slate-700 dark:fill-slate-200" pointerEvents="none">{n.label}</text>
-                    <text x={n.x + 28} y={n.y + 36} fontSize="8.5" className="fill-slate-400" pointerEvents="none">{n.sub} · {typeLine[n.type]}</text>
+                    <circle cx={n.x + 16} cy={n.y + 17} r={5} className={s.bg} />
+                    <text x={n.x + 28} y={n.y + 21} fontSize="11.5" fontWeight="600" className="fill-slate-700 dark:fill-slate-200" pointerEvents="none">{label}</text>
+                    <text x={n.x + 16} y={n.y + 42} fontSize="9" className="fill-slate-400" pointerEvents="none">{sub.length > 20 ? `${sub.slice(0, 20)}…` : sub}</text>
                     {located && (
                       <text x={n.x + n.width - 8} y={n.y - 6} fontSize="9" fontWeight="600" textAnchor="end" fill="#EF4444" pointerEvents="none">问题节点</text>
                     )}
                     {/* 端口（编辑模式）：右侧输出 */}
                     {mode === 'edit' && (
                       <>
-                        <circle cx={n.x + n.width} cy={n.y + n.height / 2} r={12} fill="transparent" style={{ cursor: 'crosshair' }}
+                        <circle cx={n.x + n.width} cy={n.y + n.height / 2} r={12} fill="transparent" className="node-port-hit" style={{ cursor: 'crosshair' }}
                           onPointerDown={(e) => onPortPointerDown(e, n)}>
                           <title>拖动连线到目标节点</title>
                         </circle>
-                        <circle cx={n.x + n.width} cy={n.y + n.height / 2} r={6} fill="#2563EB" stroke="white" strokeWidth="1.6" pointerEvents="none" />
+                        <circle cx={n.x + n.width} cy={n.y + n.height / 2} r={6} fill="#2563EB" stroke="white" strokeWidth="1.6" pointerEvents="none" className="node-port" />
                         <circle cx={n.x} cy={n.y + n.height / 2} r={5} fill="#CBD5E1" opacity="0.6" pointerEvents="none" />
                       </>
                     )}
@@ -681,7 +821,7 @@ export function CanvasPage() {
                   ? key.slice(3).split('-')
                   : key.split('-')
                 const A = pos(a), B = pos(b)
-                const cx = (A.x + B.x) / 2, cy = (A.y + B.y) / 2
+                const cx = (A.x + A.width / 2 + B.x + B.width / 2) / 2, cy = (A.y + A.height / 2 + B.y + B.height / 2) / 2
                 const isFb = key.startsWith('fb-')
                 return (
                   <g className="cursor-pointer" onClick={(e) => { e.stopPropagation(); if (isFb) deleteFallback(key); else deleteEdge(key) }}>
@@ -692,6 +832,19 @@ export function CanvasPage() {
                 )
               })()}
             </svg>
+
+            {/* 缩放控件 */}
+            <div className="absolute bottom-3 right-3 flex items-center gap-1 rounded-lg border border-slate-200 bg-white/95 px-1 py-1 shadow-s dark:border-slate-700 dark:bg-slate-900/95">
+              <button className="h-7 w-7 rounded-md text-[14px] font-medium text-slate-500 hover:bg-slate-100 hover:text-blue-600 dark:hover:bg-slate-800" title="缩小" onClick={() => applyZoom(1.2)}>−</button>
+              <span className="w-10 text-center text-[11px] font-medium text-slate-500">{Math.round(zoom * 100)}%</span>
+              <button className="h-7 w-7 rounded-md text-[14px] font-medium text-slate-500 hover:bg-slate-100 hover:text-blue-600 dark:hover:bg-slate-800" title="放大" onClick={() => applyZoom(1 / 1.2)}>＋</button>
+              <button className="h-7 rounded-md px-2 text-[11px] font-medium text-slate-500 hover:bg-slate-100 hover:text-blue-600 dark:hover:bg-slate-800" title="适配视图" onClick={fitView}>适配</button>
+            </div>
+            {mode === 'edit' && (
+              <div className="absolute bottom-3 left-3 rounded-md bg-white/90 px-2 py-1 text-[10.5px] text-slate-400 shadow-s dark:bg-slate-900/90">
+                滚轮缩放 · 拖拽空白平移
+              </div>
+            )}
           </div>
 
           {/* 底部工具条 */}
@@ -722,13 +875,19 @@ export function CanvasPage() {
                   )}
                 </div>
                 <span className="text-[11.5px] text-slate-400">拖拽节点移动 · 右侧蓝点拖到目标节点创建主线 · 属性面板设置回退</span>
+                <button className="flex items-center gap-1 text-[11.5px] font-medium text-slate-500 hover:text-blue-600" title="按流转顺序分层蛇形重排" onClick={autoLayout}>
+                  <LayoutGrid className="h-3.5 w-3.5" />自动整理
+                </button>
                 <button className="ml-auto flex items-center gap-1 text-[11.5px] font-medium text-blue-600 hover:underline" onClick={runCheck}>
                   <ShieldCheck className="h-3.5 w-3.5" />静态校验
                 </button>
               </>
             ) : (
               <>
-                <span className="text-[11.5px] text-slate-400">蛇形布局：需求提交 → 分析 → 评审 → 拆分 →（并行）后端 / 前端 → 测试 → 验收 → 发布 → 完成</span>
+                <span className="text-[11.5px] text-slate-400">滚轮缩放 · 拖拽空白平移 · 点击节点查看属性</span>
+                <button className="flex items-center gap-1 text-[11.5px] font-medium text-slate-500 hover:text-blue-600" title="按流转顺序分层蛇形重排" onClick={autoLayout}>
+                  <LayoutGrid className="h-3.5 w-3.5" />自动整理
+                </button>
                 <button className="ml-auto inline-flex items-center gap-1 font-medium text-blue-600 hover:underline" onClick={enterEdit}>
                   <Zap className="h-3.5 w-3.5" />进入编辑模式
                 </button>

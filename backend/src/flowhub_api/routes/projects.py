@@ -9,7 +9,10 @@ from sqlalchemy.orm import selectinload
 from flowhub_api.authz.authorizer import build_authorizer, get_current_user
 from flowhub_api.core.response import BizError, BizCode, ok
 from flowhub_api.db.session import get_db
-from flowhub_api.models import GlobalTemplate, NodeAssignment, Project, ProjectTemplateBinding, User, WorkItem
+from flowhub_api.models import (
+    GlobalTemplate, NodeAssignment, Project, ProjectRepoBinding, ProjectTemplateBinding,
+    Repo, RepoConnection, TaskItem, User, WorkItem,
+)
 from flowhub_api.schemas.api import ProjectUpsertReq
 from flowhub_api.seed.init import gen_id
 from flowhub_api.services.audit import AuditService
@@ -45,15 +48,38 @@ async def _project_stats(
 
     - workItems：按项目名统计 work_items 表中真实工作项数量
     - members：节点绑定处理人（显式用户 + 角色/技能解析出的在职用户）去重
-    - progress：已完成（closed）工作项占比
+    - progress：未归档工作项的平均流转进度——closed 记 100%，
+      其余按「已完成任务数 / 总任务数（不含已取消）」计；archived（冻结件）不计入
     """
-    wi_count = (await session.execute(
-        select(func.count(WorkItem.id)).where(WorkItem.project == p.name)
-    )).scalar() or 0
-    wi_closed = (await session.execute(
-        select(func.count(WorkItem.id)).where(WorkItem.project == p.name, WorkItem.status == "closed")
-    )).scalar() or 0
-    progress = round(wi_closed / wi_count * 100) if wi_count else 0
+    wis = (await session.execute(
+        select(WorkItem.id, WorkItem.status).where(WorkItem.project == p.name)
+    )).all()
+    wi_count = len(wis)
+    wi_active = [(wid, status) for wid, status in wis if status != "archived"]
+
+    task_rows = (await session.execute(
+        select(TaskItem.wi_id, TaskItem.status, func.count())
+        .where(TaskItem.project == p.name)
+        .group_by(TaskItem.wi_id, TaskItem.status)
+    )).all()
+    done_map: dict[str, int] = {}
+    total_map: dict[str, int] = {}
+    for wi_id, status, cnt in task_rows:
+        if status != "cancelled":
+            total_map[wi_id] = total_map.get(wi_id, 0) + cnt
+        if status == "completed":
+            done_map[wi_id] = done_map.get(wi_id, 0) + cnt
+    if wi_active:
+        total_frac = 0.0
+        for wid, status in wi_active:
+            if status == "closed":
+                total_frac += 1.0
+            else:
+                total = total_map.get(wid, 0)
+                total_frac += (done_map.get(wid, 0) / total) if total else 0.0
+        progress = round(total_frac / len(wi_active) * 100)
+    else:
+        progress = 0
 
     all_users = users if users is not None else (await session.execute(select(User))).scalars().all()
     member_ids: set[str] = set()
@@ -76,6 +102,25 @@ async def _project_stats(
     return {"members": len(member_ids), "workItems": wi_count, "progress": progress}
 
 
+async def _project_repos(session: AsyncSession, p: Project) -> list[dict]:
+    """项目绑定的代码仓库（多对多快照，用于项目卡片与详情展示）。"""
+    rows = (await session.execute(
+        select(ProjectRepoBinding, Repo, RepoConnection)
+        .join(Repo, Repo.id == ProjectRepoBinding.repo_id)
+        .join(RepoConnection, RepoConnection.id == Repo.connection_id)
+        .where(ProjectRepoBinding.project_id == p.id)
+        .order_by(ProjectRepoBinding.created_at.asc())
+    )).all()
+    return [
+        {
+            "bindingId": b.id, "repoId": r.id, "fullName": r.full_name,
+            "webUrl": r.web_url, "provider": c.provider, "role": b.role,
+            "defaultBranch": b.default_branch or r.default_branch,
+            "visibility": r.visibility, "connectionStatus": c.status,
+        } for b, r, c in rows
+    ]
+
+
 async def _project_dict(session: AsyncSession, p: Project, users: list[User] | None = None) -> dict:
     stats = await _project_stats(session, p, users)
     return {
@@ -84,6 +129,7 @@ async def _project_dict(session: AsyncSession, p: Project, users: list[User] | N
         "progress": stats["progress"], "manager": p.manager, "owner": p.owner,
         "updated": p.updated, "readOnly": p.read_only,
         "templateBindings": await _project_bindings(session, p),
+        "repos": await _project_repos(session, p),
     }
 
 

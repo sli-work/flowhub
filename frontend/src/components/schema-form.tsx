@@ -1,9 +1,10 @@
 import { useRef, useState } from 'react'
-import { Upload, Paperclip, Calendar, AlertCircle, LoaderCircle } from 'lucide-react'
+import { Upload, Paperclip, Calendar, AlertCircle, LoaderCircle, Eye, Pencil } from 'lucide-react'
 import { cn } from '../lib/utils'
 import { getToken } from '../lib/api'
 import type { FormField } from '../types'
 import { Badge } from './common'
+import { MarkdownView } from './markdown'
 
 export type SchemaValues = Record<string, unknown>
 type UploadedFileRef = { id: string; name: string }
@@ -32,6 +33,53 @@ export function validateSchema(fields: FormField[], values: SchemaValues): strin
   return missing
 }
 
+/* 多行文本：支持 Markdown 语法 —— 编辑模式写 Markdown，「预览」切换为渲染视图 */
+function MarkdownTextarea({ value, onChange, placeholder, base, error }: {
+  value: string
+  onChange: (v: string) => void
+  placeholder?: string
+  base: string
+  error?: boolean
+}) {
+  const [preview, setPreview] = useState(false)
+  return (
+    <div>
+      <div className="mb-1 flex items-center justify-end gap-1">
+        <button
+          type="button"
+          className={cn('inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium transition-colors',
+            !preview ? 'bg-blue-50 text-blue-600 dark:bg-blue-500/15 dark:text-blue-300' : 'text-slate-400 hover:text-slate-600 dark:hover:text-slate-300')}
+          onClick={() => setPreview(false)}
+        >
+          <Pencil className="h-3 w-3" />编辑
+        </button>
+        <button
+          type="button"
+          className={cn('inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium transition-colors',
+            preview ? 'bg-blue-50 text-blue-600 dark:bg-blue-500/15 dark:text-blue-300' : 'text-slate-400 hover:text-slate-600 dark:hover:text-slate-300')}
+          onClick={() => setPreview(true)}
+        >
+          <Eye className="h-3 w-3" />预览
+        </button>
+      </div>
+      {preview ? (
+        <div className={cn(base, 'min-h-[76px] p-3 text-[13px] leading-relaxed', !value.trim() && 'text-slate-400')} data-error={error || undefined}>
+          {value.trim()
+            ? <MarkdownView text={value} className="text-[13px] leading-relaxed" />
+            : <span>暂无内容，切回「编辑」填写（支持 Markdown 语法）</span>}
+        </div>
+      ) : (
+        <textarea
+          className={cn(base, 'min-h-[76px] p-3 font-mono text-[13px] leading-relaxed')}
+          placeholder={placeholder ?? '支持 Markdown 语法：# 标题、**加粗**、- 列表、| 表格 | 等'}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+        />
+      )}
+    </div>
+  )
+}
+
 /* 单字段控件 */
 function FieldControl({ field, value, onChange, error, workItemId, project }: {
   field: FormField
@@ -54,11 +102,12 @@ function FieldControl({ field, value, onChange, error, workItemId, project }: {
   switch (field.type) {
     case 'textarea':
       return (
-        <textarea
-          className={cn(base, 'min-h-[76px] p-3 leading-relaxed')}
-          placeholder={field.placeholder}
+        <MarkdownTextarea
           value={str}
-          onChange={(e) => onChange(e.target.value)}
+          onChange={onChange}
+          placeholder={field.placeholder}
+          base={base}
+          error={error}
         />
       )
     case 'number':

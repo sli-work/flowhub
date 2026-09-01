@@ -235,6 +235,16 @@ sequenceDiagram
   - pause/cancel：暂停/取消流程（权限见权限文档）
 - 响应：`{ item, next_node, next_assignees }`（next_assignees 为下一节点绑定解析出的处理人）
 
+### 6.5 手动停止
+
+- `POST /work-items/{id}/stop` — 权限 `workflow_instance:cancel`（系统/组织/项目管理员）
+- 行为：
+  - 工作项状态置 `cancelled`，流程实例 state 置 `cancelled`
+  - 所有未终结任务（assigned / in_progress / pending_confirmation 等）置 `cancelled`；后台 Expert Run 完成回调检测到非 pending_confirmation 自动放弃采纳
+  - 写审计 `workflow_instance:cancel`（携带被取消任务 ID 列表），站内通知创建人与被取消任务处理人
+  - 已终结（closed / cancelled / archived）→ 409
+- 响应：`{ item }`
+
 ---
 
 ## 七、我的任务 Tasks

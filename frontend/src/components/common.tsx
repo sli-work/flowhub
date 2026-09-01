@@ -236,8 +236,10 @@ export function FlowSteps({ nodes }: { nodes: FlowNode[] }) {
 }
 
 /* ============ 处理历史时间线 ============ */
-export function Timeline({ events }: {
-  events: { time: string; title: string; desc: string; by: string; kind: string }[]
+export function Timeline({ events, onSelect }: {
+  events: { id?: string; time: string; title: string; desc: string; by: string; kind: string }[]
+  /** 提供后，带 id 的事件条目可点击进入对应任务查看 */
+  onSelect?: (id: string) => void
 }) {
   const dotTone: Record<string, string> = {
     system: 'bg-slate-300 dark:bg-slate-600',
@@ -248,12 +250,16 @@ export function Timeline({ events }: {
   return (
     <div className="space-y-0">
       {events.map((e) => (
-        <div key={e.time + e.title} className="relative flex gap-3 pb-4 last:pb-0">
+        <div key={e.time + e.title}
+          className={cn('group relative flex gap-3 pb-4 last:pb-0', onSelect && e.id && 'cursor-pointer rounded-lg transition-colors hover:bg-slate-50 dark:hover:bg-slate-800/50')}
+          onClick={onSelect && e.id ? () => onSelect(e.id!) : undefined}
+          role={onSelect && e.id ? 'button' : undefined}>
           <span className="absolute left-[5px] top-6 h-full w-px bg-slate-100 last:hidden dark:bg-slate-800" />
           <span className={cn('relative z-10 mt-1.5 h-2.5 w-2.5 flex-none rounded-full', dotTone[e.kind] ?? dotTone.system)} />
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-x-2 text-[13px]">
-              <span className="font-medium text-slate-700 dark:text-slate-200">{e.title}</span>
+              <span className={cn('font-medium text-slate-700 dark:text-slate-200', onSelect && e.id && 'group-hover:text-blue-600')}>{e.title}</span>
+              {onSelect && e.id && <span className="text-[10.5px] text-blue-400">点击查看 →</span>}
               <span className="text-[11px] text-slate-400">{e.time}</span>
             </div>
             <div className="mt-0.5 text-[12px] leading-relaxed text-slate-500 dark:text-slate-400">{e.desc}</div>

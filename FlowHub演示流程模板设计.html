@@ -3,326 +3,410 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>FlowHub 演示流程模板设计</title>
+<title>FlowHub 演示流程模板设计 v2 · 专家团队 × 典型流程</title>
 <style>
   :root {
     --fh-blue: #2563eb; --fh-blue-dark: #1e40af; --expert-violet: #7c3aed;
-    --teal: #0d9488; --amber: #d97706; --red: #dc2626;
+    --teal: #0d9488; --amber: #d97706; --red: #dc2626; --green: #059669;
     --slate-50: #f8fafc; --slate-100: #f1f5f9; --slate-200: #e2e8f0;
-    --slate-600: #475569; --slate-800: #1e293b; --slate-900: #0f172a;
+    --slate-500: #64748b; --slate-600: #475569; --slate-800: #1e293b; --slate-900: #0f172a;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif; background: var(--slate-50); color: var(--slate-800); line-height: 1.7; }
-  .page { max-width: 1080px; margin: 0 auto; padding: 0 32px 80px; }
+  .page { max-width: 1120px; margin: 0 auto; padding: 0 32px 80px; }
 
-  .cover { background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 55%, #312e81 100%); color: #fff; padding: 80px 56px 64px; margin: 0 -32px 40px; position: relative; overflow: hidden; }
+  .cover { background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 55%, #312e81 100%); color: #fff; padding: 72px 56px 56px; margin: 0 -32px 40px; position: relative; overflow: hidden; }
   .cover::after { content: ""; position: absolute; right: -120px; top: -120px; width: 420px; height: 420px; border-radius: 50%; background: radial-gradient(circle, rgba(124,58,237,.35), transparent 70%); }
   .cover .logo { display: inline-flex; align-items: center; gap: 10px; font-weight: 700; font-size: 18px; }
   .cover .logo-dot { width: 34px; height: 34px; border-radius: 9px; background: linear-gradient(135deg,#3b82f6,#7c3aed); display:flex; align-items:center; justify-content:center; }
-  .cover h1 { font-size: 40px; font-weight: 800; margin: 24px 0 12px; }
-  .cover .sub { font-size: 17px; color: #c7d2fe; max-width: 760px; }
-  .cover .meta { margin-top: 28px; display: flex; gap: 24px; flex-wrap: wrap; font-size: 14px; color: #93c5fd; }
+  .cover h1 { font-size: 38px; font-weight: 800; margin: 22px 0 12px; }
+  .cover .sub { font-size: 16px; color: #c7d2fe; max-width: 780px; }
+  .cover .meta { margin-top: 26px; display: flex; gap: 24px; flex-wrap: wrap; font-size: 14px; color: #93c5fd; }
   .cover .meta b { color: #fff; }
 
-  h2 { font-size: 26px; font-weight: 800; color: var(--slate-900); margin: 48px 0 8px; padding-bottom: 10px; border-bottom: 3px solid var(--fh-blue); display: inline-block; }
-  h3 { font-size: 19px; font-weight: 700; color: var(--slate-900); margin: 28px 0 10px; }
-  h4 { font-size: 15px; font-weight: 700; color: var(--fh-blue-dark); margin: 18px 0 8px; }
-  p { margin: 10px 0; }
-  .lead { font-size: 16px; color: var(--slate-600); }
-  .section-note { color: var(--slate-600); font-size: 13.5px; margin-bottom: 14px; }
+  h2 { font-size: 25px; font-weight: 800; color: var(--slate-900); margin: 46px 0 8px; padding-bottom: 10px; border-bottom: 3px solid var(--fh-blue); display: inline-block; }
+  h3 { font-size: 18px; font-weight: 700; color: var(--slate-900); margin: 26px 0 10px; }
+  h4 { font-size: 14.5px; font-weight: 700; color: var(--fh-blue-dark); margin: 16px 0 6px; }
+  p { margin: 8px 0; }
+  .lead { font-size: 15.5px; color: var(--slate-600); }
+  .note { color: var(--slate-600); font-size: 13px; margin-bottom: 12px; }
 
-  .card { background: #fff; border: 1px solid var(--slate-200); border-radius: 14px; padding: 20px 24px; margin: 12px 0; box-shadow: 0 1px 3px rgba(15,23,42,.05); }
-  .tpl-card { border-left: 5px solid var(--fh-blue); }
-  .tpl-card.hl { border-left-color: var(--expert-violet); }
+  table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid var(--slate-200); border-radius: 10px; overflow: hidden; margin: 12px 0 18px; font-size: 13px; }
+  th { background: var(--slate-100); text-align: left; padding: 9px 12px; font-weight: 700; color: var(--slate-600); white-space: nowrap; }
+  td { padding: 8px 12px; border-top: 1px solid var(--slate-100); vertical-align: top; }
+  tr:hover td { background: #fafcff; }
 
-  table { width: 100%; border-collapse: collapse; margin: 10px 0 20px; font-size: 13px; background: #fff; }
-  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--slate-200); vertical-align: top; }
-  th { background: var(--slate-100); color: var(--slate-900); font-weight: 700; white-space: nowrap; }
-  tr:hover td { background: #f8fafc; }
+  .card { background: #fff; border: 1px solid var(--slate-200); border-radius: 12px; padding: 18px 20px; margin: 12px 0; }
+  .expert-card { border-top: 4px solid var(--expert-violet); }
+  .slug { font-family: ui-monospace, monospace; font-size: 12px; color: var(--expert-violet); background: #f5f3ff; border-radius: 6px; padding: 1px 8px; }
+  .pill { display: inline-block; border-radius: 999px; padding: 1px 10px; font-size: 12px; font-weight: 600; margin: 0 4px 4px 0; }
+  .pill.auto { background: #ede9fe; color: #6d28d9; }
+  .pill.assist { background: #e0f2fe; color: #0369a1; }
+  .pill.split { background: #fef3c7; color: #b45309; }
+  .pill.gov { background: #fee2e2; color: #b91c1c; }
+  .pill.human { background: var(--slate-100); color: var(--slate-600); }
 
-  .badge { display: inline-block; padding: 1px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 600; white-space: nowrap; }
-  .b-green { background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; }
-  .b-blue { background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; }
-  .b-violet { background: #f5f3ff; color: #6d28d9; border: 1px solid #ddd6fe; }
-  .b-amber { background: #fffbeb; color: #b45309; border: 1px solid #fde68a; }
-  .b-slate { background: var(--slate-100); color: var(--slate-600); border: 1px solid var(--slate-200); }
+  .pipeline { background: #fff; border: 1px solid var(--slate-200); border-radius: 12px; padding: 16px 20px; margin: 12px 0 6px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: 13px; font-weight: 600; }
+  .pipe-node { border-radius: 8px; padding: 4px 12px; background: var(--slate-100); color: var(--slate-800); }
+  .pipe-node.ai { background: #ede9fe; color: #5b21b6; }
+  .pipe-node.gate { background: #fef3c7; color: #92400e; }
+  .pipe-node.end { background: #dcfce7; color: #166534; }
+  .pipe-arrow { color: var(--slate-500); }
+  .pipe-note { width: 100%; font-size: 12px; color: var(--slate-500); font-weight: 400; margin-top: 6px; }
 
-  .flow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 12px 0 8px; }
-  .flow-step { background: #fff; border: 1px solid var(--slate-200); border-radius: 10px; padding: 7px 13px; font-size: 13px; font-weight: 600; color: var(--slate-800); box-shadow: 0 1px 2px rgba(15,23,42,.06); white-space: nowrap; }
-  .flow-step.hl { border-color: var(--expert-violet); color: #5b21b6; background: #faf5ff; }
-  .flow-step.ai { border-color: var(--fh-blue); color: var(--fh-blue-dark); background: #eff6ff; }
-  .flow-arrow { color: var(--slate-400); font-weight: 700; }
+  .callout { border-radius: 12px; padding: 14px 18px; margin: 14px 0; font-size: 13.5px; }
+  .callout.blue { background: #eff6ff; border: 1px solid #bfdbfe; color: #1e40af; }
+  .callout.amber { background: #fffbeb; border: 1px solid #fde68a; color: #92400e; }
+  .callout .t { font-weight: 800; }
 
-  .demo-note { border-left: 4px solid var(--teal); background: #f0fdfa; padding: 10px 16px; margin: 10px 0; border-radius: 0 10px 10px 0; font-size: 13.5px; color: #134e4a; }
-  .demo-note b { color: #0f766e; }
-  .tip { border-left: 4px solid var(--amber); background: #fffbeb; padding: 10px 16px; margin: 10px 0; border-radius: 0 10px 10px 0; font-size: 13.5px; color: #78350f; }
-
-  .toc { background: #fff; border: 1px solid var(--slate-200); border-radius: 14px; padding: 22px 28px; margin: 16px 0 32px; }
-  .toc h3 { margin: 0 0 10px; font-size: 15px; color: var(--slate-600); text-transform: uppercase; letter-spacing: 1px; }
-  .toc ol { padding-left: 22px; }
-  .toc li { margin: 5px 0; font-size: 14px; }
-  .toc a { color: var(--fh-blue-dark); text-decoration: none; }
-  .toc a:hover { text-decoration: underline; }
-
-  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-  @media (max-width: 800px) { .grid-2 { grid-template-columns: 1fr; } }
-  .comb-card { background: #fff; border: 1px solid var(--slate-200); border-radius: 12px; padding: 16px 18px; }
-  .comb-card h4 { margin-top: 0; }
-  .comb-card p { font-size: 13.5px; color: var(--slate-600); margin: 6px 0 0; }
-
-  .footer { margin-top: 56px; padding-top: 22px; border-top: 1px solid var(--slate-200); color: var(--slate-600); font-size: 13px; text-align: center; }
+  .prompt-box { background: var(--slate-900); color: #e2e8f0; border-radius: 10px; padding: 12px 16px; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; line-height: 1.8; white-space: pre-wrap; margin: 8px 0; }
+  .toc { background: #fff; border: 1px solid var(--slate-200); border-radius: 12px; padding: 16px 22px; font-size: 14px; }
+  .toc a { color: var(--fh-blue); text-decoration: none; }
+  code { background: var(--slate-100); border-radius: 4px; padding: 0 5px; font-size: 12.5px; color: var(--slate-800); }
 </style>
 </head>
 <body>
-
-<div class="cover">
-  <div class="logo"><span class="logo-dot">FH</span> FlowHub 演示流程模板设计</div>
-  <h1>4 套可落地演示流程模板</h1>
-  <p class="sub">基于系统画布真实配置项设计（节点类型 / 表单 Schema / 处理人 / SLA / Expert 绑定 / 决策分支），可直接照配。覆盖需求、变更、问题三类业务 + 非研发场景，融入人机协同与外部智能体接力核心卖点。</p>
-  <div class="meta">
-    <span>配套：<b>FlowHub 产品介绍与客户讲解</b></span>
-    <span>日期：<b>2026-08-27</b></span>
-    <span>用途：<b>客户现场演示</b></span>
-  </div>
-</div>
-
 <div class="page">
 
-<div class="toc">
-  <h3>Contents · 目录</h3>
-  <ol>
-    <li><a href="#quick">模板配置速查</a>（节点类型 / 配置字段 / 发布校验）</li>
-    <li><a href="#tpl1">模板 1：客户需求变更流程</a>（推荐首演）</li>
-    <li><a href="#tpl2">模板 2：合同审批流程</a>（多级审批 + AI 预审）</li>
-    <li><a href="#tpl3">模板 3：缺陷问题处理流程</a>（SLA + AI 诊断 + 外部智能体接力 ⭐）</li>
-    <li><a href="#tpl4">模板 4：新员工入职流程</a>（非研发场景 + 并行）</li>
-    <li><a href="#comb">演示组合建议</a>（15/45 分钟 · 按客户类型）</li>
-    <li><a href="#steps">录入步骤</a>（画布操作）</li>
-  </ol>
+<div class="cover">
+  <div class="logo"><span class="logo-dot">FH</span>FlowHub</div>
+  <h1>演示流程模板设计 v2</h1>
+  <div class="sub">先设计专家团队，再编排典型流程——每个 AI 节点 = 节点产出契约 × Expert × 协作模式（协助填充 / 自动接管 / 建议拆分）。基于画布真实配置项，可直接照配。</div>
+  <div class="meta">
+    <span>版本：<b>v2（重设计）</b></span>
+    <span>Expert 团队：<b>7 个</b></span>
+    <span>流程模板：<b>4 套</b></span>
+    <span>配套：《FlowHub 产品介绍与客户讲解》</span>
+  </div>
 </div>
 
-<h2 id="quick">〇、模板配置速查</h2>
+<div class="toc">
+  <b>目录</b><br>
+  〇、<a href="#principle">设计原则：专家先行</a><br>
+  一、<a href="#experts">Expert 团队设计（7 个）</a><br>
+  二、<a href="#t1">模板 1：软件需求交付流程（研发主航道 · 推荐首演）</a><br>
+  三、<a href="#t2">模板 2：缺陷智能处理流程（自动分诊 + 外部智能体接力）</a><br>
+  四、<a href="#t3">模板 3：合同审批流程（AI 审查报告生成 + 多级审批）</a><br>
+  五、<a href="#t4">模板 4：客户售后工单流程（非研发 · AI 自动分诊拆分）</a><br>
+  六、<a href="#combo">演示组合建议</a><br>
+  七、<a href="#setup">画布配置落地步骤</a>
+</div>
 
-<h3>节点类型（画布 9 种）</h3>
+<h2 id="principle">〇、设计原则：专家先行</h2>
+<p class="lead">旧版把 Expert 当成节点上的一个附属配置；v2 反过来——<b>先定义一支可复用的专家团队，再让流程像搭积木一样引用他们</b>。判定一个 AI 节点设计是否成立，看三件事：</p>
+<div class="card">
+  <b>① 产出契约</b> —— 节点要求产出什么（说明 / 验收清单 / 表单字段），Expert 的输出必须逐字段、逐条验收对齐；<br>
+  <b>② Expert 设计</b> —— 谁来做（系统提示词五段式）、靠什么做（知识库 / 工具）、输出什么形态（文本 / 文档）；<br>
+  <b>③ 协作模式</b> —— 人机怎么分工：
+  <span class="pill assist">协助填充：AI 起草全部字段（含生成文档），人审核修改后提交</span>
+  <span class="pill auto">自动接管：Expert 自动节点审批通过后自动填充并流转</span>
+  <span class="pill split">建议拆分：AI 给出子任务拆分方案，人确认后创建</span>
+  <span class="pill gov">治理写入：写操作中断进审批队列，批准后精确执行一次</span>
+</div>
+<div class="callout blue"><span class="t">v1 → v2 的关键变化：</span>模板从「节点 + AI 提一嘴」升级为「专家团队作战地图」；每个 AI 节点明确标注产出契约要点、使用的 Expert 与协作模式；新增文档自动生成（文件类产出由 AI 生成并上传）、AI 表单填充、子任务拆分三个演示亮点。</div>
+
+<h2 id="experts">一、Expert 团队设计（7 个）</h2>
+<p class="note">系统提示词统一采用五段式骨架：<b>角色 → 输入 → 职责 → 输出契约 → 边界</b>。所有 Expert 的输入都包含平台自动生成的「任务书」（节点产出契约 + 上游表单上下文），输出必须严格按节点表单字段的 key 组织 JSON；文件类字段输出 Markdown 正文，由平台自动落库为工作项文档。</p>
+
 <table>
-  <tr><th style="width:16%">类型</th><th style="width:18%">含义</th><th>用途</th></tr>
-  <tr><td><code>start</code></td><td>开始</td><td>每个流程唯一入口，承载起始表单（startSchema）</td></tr>
-  <tr><td><code>task</code></td><td>任务</td><td>单人/角色处理，可绑表单 Schema、SLA、处理人</td></tr>
-  <tr><td><code>decision</code></td><td>决策</td><td>分支判断，按表单字段条件路由（eq / ne / contains）</td></tr>
-  <tr><td><code>parallel_split</code></td><td>并行分叉</td><td>拆成多路并行</td></tr>
-  <tr><td><code>parallel_join</code></td><td>并行汇合</td><td>多路汇合后流程收敛</td></tr>
-  <tr><td><code>acceptance</code></td><td>验收</td><td>结果验收（通过 / 不通过）</td></tr>
-  <tr><td><code>closure</code></td><td>闭环确认</td><td>流程闭环确认</td></tr>
-  <tr><td><code>timer</code></td><td>定时</td><td>定时触发 / 等待</td></tr>
-  <tr><td><code>end</code></td><td>结束</td><td>流程终点</td></tr>
+  <thead><tr><th>#</th><th>Expert</th><th>slug</th><th>定位一句话</th><th>协作模式</th><th>服务的节点</th></tr></thead>
+  <tbody>
+    <tr><td>E1</td><td><b>需求分析专家</b></td><td class="slug">requirement-analyst</td><td>把模糊需求变成结构化分析、拆分建议</td><td>协助填充 + 建议拆分</td><td>需求分析（模板1）</td></tr>
+    <tr><td>E2</td><td><b>方案设计专家</b></td><td class="slug">solution-architect</td><td>技术方案与接口契约起草</td><td>协助填充</td><td>方案设计（模板1）</td></tr>
+    <tr><td>E3</td><td><b>开发实现专家</b></td><td class="slug">dev-coder</td><td>代码骨架 / 接口实现 / 变更说明起草</td><td>协助填充</td><td>前后端开发（模板1）</td></tr>
+    <tr><td>E4</td><td><b>测试质量专家</b></td><td class="slug">qa-engineer</td><td>测试用例生成、缺陷定性、回归结论建议</td><td>协助填充</td><td>测试 / 回归验证（模板1、2）</td></tr>
+    <tr><td>E5</td><td><b>发布运维专家</b></td><td class="slug">release-ops</td><td>发布说明、上线检查清单、回滚预案</td><td>协助填充</td><td>发布交付（模板1）</td></tr>
+    <tr><td>E6</td><td><b>智能分诊专家</b></td><td class="slug">ticket-triage</td><td>缺陷 / 工单分类分级、根因初判、路由与拆分</td><td><b>自动接管</b> + 自动拆分</td><td>智能分诊（模板2、4）</td></tr>
+    <tr><td>E7</td><td><b>合同审查专家</b></td><td class="slug">contract-reviewer</td><td>合同摘要、风险条款识别、审查报告生成</td><td>协助填充（含审查报告文档生成）</td><td>法务预审（模板3）</td></tr>
+  </tbody>
 </table>
 
-<h3>节点配置字段（属性面板）</h3>
-<table>
-  <tr><th style="width:20%">字段</th><th>说明</th></tr>
-  <tr><td><b>处理人 handler</b></td><td>指定用户或按角色/技能匹配（如"开发人员-前端"）</td></tr>
-  <tr><td><b>SLA</b></td><td>节点时限（默认 24h），超时自动标记预警</td></tr>
-  <tr><td><b>表单 Schema</b></td><td>input / textarea / select / multiselect / radio / date / number / upload / file</td></tr>
-  <tr><td><b>Expert 绑定</b></td><td>节点挂载已发布的 Expert Deployment（AI 自动处理）</td></tr>
-  <tr><td><b>决策分支</b></td><td>{ 目标节点: { field, op: eq/ne/contains, value } } + 默认分支</td></tr>
-  <tr><td><b>输出 output</b></td><td>本节点产出说明（写入任务上下文，供下游继承）</td></tr>
-</table>
-<p class="tip"><b>发布前置校验（6 项）</b>：开始/结束节点存在 · 无孤立节点 · 决策分支条件完整 · 任务节点处理人已绑定 · Expert 节点已绑定已发布 Deployment。</p>
+<h3>E1 · 需求分析专家 <span class="slug">requirement-analyst</span></h3>
+<div class="card expert-card">
+  <b>解决的问题：</b>需求描述口语化、不结构化，分析结论质量依赖产品经理个人水平，且拆分粒度随意。<br><br>
+  <b>系统提示词骨架：</b>
+  <div class="prompt-box">【角色】你是资深需求分析师，擅长把业务语言转成结构化研发输入。
+【输入】工作项背景（发起表单）、上游评论、知识库《需求分析 SOP》《历史需求库》。
+【职责】1) 澄清背景与目标；2) 明确范围与非目标；3) 识别风险与依赖；
+4) 给出可独立交付的模块拆分建议（每个子项含负责人建议与完成顺序）。
+【输出契约】严格按节点表单字段输出 JSON：分析结论 / 影响范围 / 方案要点；
+拆分建议以列表返回，每项含 title / note / assignee_hint。
+【边界】不虚构需求细节，缺失信息写入「待澄清」字段；不做技术方案设计。</div>
+  <b>知识库：</b>需求分析 SOP、历史需求档案；<b>工具：</b>读取工作项与上游表单（只读）<br>
+  <b>部署与治理：</b>版本发布 → Deployment 绑定到「需求分析」节点；协作模式 = 协助填充 + 建议拆分（人确认后创建子任务），无自动写入。<br>
+  <b>演示台词：</b>“AI 不是替产品经理写结论，而是把结论的结构、完整性、拆分粒度先垫到位——人改的是判断，不是格式。”
+</div>
 
-<h2 id="tpl1">模板 1：客户需求变更流程（推荐首演）</h2>
-<div class="card tpl-card">
-  <p style="font-size:13.5px;"><span class="badge b-blue">requirement</span> <b>演示价值</b>：画布建模 + AI 辅助起草 + 决策分支 + 并行分叉 + 验收闭环——最能体现"流程引擎 × AI 专家"</p>
-  <h4>流程总览</h4>
-  <div class="flow">
-    <span class="flow-step">开始</span><span class="flow-arrow">→</span>
-    <span class="flow-step">需求受理</span><span class="flow-arrow">→</span>
-    <span class="flow-step ai">需求分析 · AI 辅助</span><span class="flow-arrow">→</span>
-    <span class="flow-step">技术评审 · 决策</span><span class="flow-arrow">→</span>
-    <span class="flow-step">开发实现 · 并行分叉</span><span class="flow-arrow">→</span>
-    <span class="flow-step">并行汇合</span><span class="flow-arrow">→</span>
-    <span class="flow-step">验收</span><span class="flow-arrow">→</span>
-    <span class="flow-step hl">闭环确认</span><span class="flow-arrow">→</span>
-    <span class="flow-step">结束</span>
-  </div>
-  <p style="font-size:12.5px; color:#64748b;">评审"打回" → 回退到需求分析重新走</p>
-  <h4>起始表单（startSchema）</h4>
-  <table>
-    <tr><th style="width:22%">字段</th><th style="width:14%">类型</th><th style="width:10%">必填</th><th>说明</th></tr>
-    <tr><td>需求标题</td><td>input</td><td>✅</td><td></td></tr>
-    <tr><td>需求描述</td><td>textarea</td><td>✅</td><td></td></tr>
+<h3>E2 · 方案设计专家 <span class="slug">solution-architect</span></h3>
+<div class="card expert-card">
+  <b>解决的问题：</b>设计文档格式参差、接口契约缺失，评审效率低。<br><br>
+  <b>系统提示词骨架：</b>
+  <div class="prompt-box">【角色】你是资深系统架构师。
+【输入】需求分析结论（上游表单）、架构决策记录（ADR）、现有系统接口清单。
+【职责】1) 技术方案选型与理由；2) 模块与接口契约设计；3) 数据模型变更；
+4) 兼容性与迁移策略。
+【输出契约】方案说明 / 接口契约 / 数据变更 / 迁移策略，按节点字段输出 JSON；
+接口契约部分同时生成 Markdown 设计文档（自动上传为工作项文档）。
+【边界】不直接产出生产代码；涉及容量与安全只给评估结论。</div>
+  <b>知识库：</b>ADR 库、系统架构图、接口清单；<b>部署：</b>协助填充（设计文档自动生成上传）。<br>
+  <b>演示台词：</b>“评审会上吵格式的时间归零——AI 出稿，架构师判对错。”
+</div>
+
+<h3>E3 · 开发实现专家 <span class="slug">dev-coder</span></h3>
+<div class="card expert-card">
+  <b>解决的问题：</b>开发节点产出（实现说明 / 接口文档）常缺失，代码评审无上下文。<br><br>
+  <b>系统提示词骨架：</b>
+  <div class="prompt-box">【角色】你是全栈开发工程师，遵循团队编码规范。
+【输入】设计方案（上游表单）、代码库接口清单、编码规范知识库。
+【职责】1) 按方案生成实现说明与关键代码骨架；2) 生成接口文档；
+3) 自查清单（边界条件 / 错误处理 / 日志）。
+【输出契约】实现说明 / 关键代码（Markdown）/ 接口文档（生成文档上传）/ 自查结果。
+【边界】只产出建议性代码与文档，不直接提交代码库（写代码库由外部智能体 / CI 承担）。</div>
+  <b>知识库：</b>编码规范、组件库文档；<b>部署：</b>协助填充。<br>
+  <b>演示台词：</b>“开发节点最怕‘完成’两个字没有证据——现在实现说明、接口文档、自查清单一样不少。”
+</div>
+
+<h3>E4 · 测试质量专家 <span class="slug">qa-engineer</span></h3>
+<div class="card expert-card">
+  <b>解决的问题：</b>测试用例覆盖不全、缺陷定性靠拍脑袋、回归结论缺少依据。<br><br>
+  <b>系统提示词骨架：</b>
+  <div class="prompt-box">【角色】你是测试质量工程师，掌握等价类 / 边界值 / 场景法。
+【输入】需求分析与设计方案（上游表单）、缺陷描述、历史缺陷库。
+【职责】1) 从需求与方案推导测试用例（正反例 + 边界）；2) 缺陷复现步骤与严重级别定性；
+3) 回归范围建议与结论倾向。
+【输出契约】测试用例清单（生成文档上传）/ 缺陷定性 / 回归结论建议，按节点字段输出 JSON。
+【边界】不替需求方做验收；P0 级缺陷必须给出复现步骤。</div>
+  <b>知识库：</b>历史缺陷库、测试用例库；<b>部署：</b>协助填充。<br>
+  <b>演示台词：</b>“用例是 AI 从需求和方案里推导出来的——需求和方案是结构化的，用例才有结构。”
+</div>
+
+<h3>E5 · 发布运维专家 <span class="slug">release-ops</span></h3>
+<div class="card expert-card">
+  <b>解决的问题：</b>发布说明没人写、上线检查靠记忆、回滚预案事后补。<br><br>
+  <b>系统提示词骨架：</b>
+  <div class="prompt-box">【角色】你是发布运维工程师（Release Manager）。
+【输入】本工作项全链路上游表单（需求 / 方案 / 测试结论）、发布检查 SOP。
+【职责】1) 汇总生成面向业务的发布说明；2) 生成上线检查清单（逐条可勾选）；
+3) 生成回滚预案（触发条件 / 步骤 / 责任人占位）。
+【输出契约】发布版本 / 发布说明（生成文档上传）/ 检查清单，按节点字段输出 JSON。
+【边界】不执行真实发布动作；回滚预案不替代值班 SOP。</div>
+  <b>知识库：</b>发布检查 SOP、历史发布记录；<b>部署：</b>协助填充。<br>
+  <b>演示台词：</b>“全链路数据都在流程里——发布说明是 AI 从整条链路自动汇总的，不是发布前半小时赶出来的。”
+</div>
+
+<h3>E6 · 智能分诊专家 <span class="slug">ticket-triage</span> <span class="pill auto">自动接管</span></h3>
+<div class="card expert-card">
+  <b>解决的问题：</b>缺陷 / 工单进来先靠人读、人分、人派——分诊是整个链条最慢的一环。<br><br>
+  <b>系统提示词骨架：</b>
+  <div class="prompt-box">【角色】你是智能分诊专家，负责缺陷与客户工单的自动分诊。
+【输入】问题 / 工单描述与附件、影响模块清单、知识库《故障分类法》《历史案例》。
+【职责】1) 分类（缺陷 / 工单 / 咨询）与分级（P0-P3）；2) 初步根因假设与排查建议；
+3) 按影响模块给出子任务拆分方案（每项含负责人建议）；4) 引用历史相似案例。
+【输出契约】严格按节点表单字段输出 JSON：分类 / 分级 / 诊断结论 / 疑似根因 /
+排查建议 / 知识库引用；拆分子任务以列表返回。
+【边界】P0 级必须转人工复核；不确定时降级为 P2 并标注“待人工确认”；
+不执行任何修复写入。</div>
+  <b>知识库：</b>故障分类法、历史案例库；<b>部署：</b><b>自动接管</b>（治理写入：自动拆分创建子任务走审批队列，批准后精确执行一次）+ 自动拆分。<br>
+  <b>演示台词：</b>“问题进来 15 分钟内完成分诊、拆分、派单——AI 先干活，人复核把关。”
+</div>
+
+<h3>E7 · 合同审查专家 <span class="slug">contract-reviewer</span></h3>
+<div class="card expert-card">
+  <b>解决的问题：</b>合同预审耗时长、风险条款靠经验、审查报告不标准。<br><br>
+  <b>系统提示词骨架：</b>
+  <div class="prompt-box">【角色】你是法务合规专家，专注商务合同审查。
+【输入】合同文件（工作项文档）、合同要素（发起表单）、《合同风险条款库》《审查清单》。
+【职责】1) 合同要素与背景摘要；2) 逐条识别风险条款（付款 / 违约 / 知识产权 / 保密 / 终止）；
+3) 给出修改建议与谈判要点；4) 输出标准审查报告。
+【输出契约】风险等级 / 风险条款（多选）/ 审查意见，按节点字段输出 JSON；
+审查报告全文以 Markdown 输出，自动上传为工作项文档。
+【边界】只做风险识别与建议，不做法律裁决；重大风险必须标注“建议外部律师意见”。</div>
+  <b>知识库：</b>风险条款库、审查清单、历史合同；<b>部署：</b>协助填充（审查报告文档自动生成上传）。<br>
+  <b>演示台词：</b>“上传合同到 AI 给出带风险清单的审查报告，法务在报告上签字——预审从一天变十分钟。”
+</div>
+
+<h2 id="t1">二、模板 1：软件需求交付流程 <span class="pill assist">协助填充</span> <span class="pill split">建议拆分</span> <span class="pill human">并行汇合</span></h2>
+<p class="note">类型 requirement · 研发主航道 · 推荐首演。演示价值：产出契约驱动 + 专家团队接力（E1→E2→E3→E4→E5 全员出场）+ AI 拆分 + 打回回退 + 并行汇合 + 文档自动沉淀。</p>
+
+<div class="pipeline">
+  <span class="pipe-node">需求提交</span><span class="pipe-arrow">→</span>
+  <span class="pipe-node ai">需求分析 · E1 协助填充 + 建议拆分</span><span class="pipe-arrow">→</span>
+  <span class="pipe-node ai">方案设计 · E2 协助填充</span><span class="pipe-arrow">→</span>
+  <span class="pipe-node gate">技术评审 · 决策</span><span class="pipe-arrow">→</span>
+  <span class="pipe-node">开发实现 · 并行分叉（E3 协助）</span><span class="pipe-arrow">→</span>
+  <span class="pipe-node">汇合 → 测试 · E4 协助</span><span class="pipe-arrow">→</span>
+  <span class="pipe-node gate">验收</span><span class="pipe-arrow">→</span>
+  <span class="pipe-node ai">发布交付 · E5 协助</span><span class="pipe-arrow">→</span>
+  <span class="pipe-node end">完成</span>
+  <span class="pipe-note">评审「打回」→ 回退需求分析；验收「不通过」→ 回退测试。</span>
+</div>
+
+<h4>起始表单（startSchema）</h4>
+<table>
+  <thead><tr><th>字段</th><th>类型</th><th>必填</th><th>说明</th></tr></thead>
+  <tbody>
+    <tr><td>需求标题</td><td>input</td><td>✅</td><td>全局去重</td></tr>
+    <tr><td>需求描述</td><td>textarea</td><td>✅</td><td>背景与内容</td></tr>
     <tr><td>优先级</td><td>radio</td><td>✅</td><td>P0 / P1 / P2 / P3</td></tr>
     <tr><td>期望上线日期</td><td>date</td><td></td><td></td></tr>
     <tr><td>涉及模块</td><td>multiselect</td><td></td><td>前端 / 后端 / 数据 / 文档</td></tr>
-  </table>
-  <h4>节点规格</h4>
-  <table>
-    <tr><th style="width:13%">节点</th><th style="width:12%">类型</th><th style="width:14%">处理人</th><th style="width:8%">SLA</th><th style="width:30%">表单字段</th><th>Expert / 分支</th></tr>
-    <tr><td>需求受理</td><td>task</td><td>项目经理</td><td>8h</td><td>需求来源(select)；受理结论(radio: 受理/打回)</td><td></td></tr>
-    <tr><td>需求分析</td><td>task</td><td>产品经理</td><td>24h</td><td>分析结论(textarea)；影响范围(multiselect)；方案要点(textarea)</td><td><span class="badge b-violet">Expert：需求分析师</span>（AI 汇总上下文、起草方案，人确认后采纳）</td></tr>
-    <tr><td>技术评审</td><td>decision</td><td>架构师</td><td>24h</td><td>评审结论(radio: 通过/打回/降级)；意见(textarea)</td><td>通过→开发实现；打回→需求分析；降级→开发实现；默认→开发实现</td></tr>
-    <tr><td>开发实现</td><td>parallel_split</td><td>—</td><td>—</td><td></td><td>两路：前端开发 / 后端开发</td></tr>
-    <tr><td>前端开发</td><td>task</td><td>开发-前端</td><td>48h</td><td>实现说明(textarea)；代码评审链接(input)</td><td></td></tr>
-    <tr><td>后端开发</td><td>task</td><td>开发-后端</td><td>48h</td><td>实现说明(textarea)；接口文档链接(input)</td><td></td></tr>
-    <tr><td>并行汇合</td><td>parallel_join</td><td>—</td><td>—</td><td></td><td></td></tr>
-    <tr><td>验收</td><td>acceptance</td><td>需求提出方</td><td>24h</td><td>验收结论(radio: 通过/不通过)；备注(textarea)</td><td></td></tr>
-    <tr><td>闭环确认</td><td>closure</td><td>项目经理</td><td>8h</td><td>闭环结论(radio: 确认关闭/需补充)；说明(textarea)</td><td></td></tr>
-  </table>
-  <div class="demo-note"><b>演示要点：</b>① 画布"拖拽建模 + 发布校验"，强调"流程是资产不是文档"；② 需求分析节点 AI 起草、人确认——现场点开人机协同；③ 评审选"打回"，流程回退重走——状态流转与留痕；④ 并行分叉两路推进、汇合收敛；⑤ 收尾看审计中心，人 + AI 全部动作可追溯。</div>
+  </tbody>
+</table>
+
+<h4>节点规格</h4>
+<table>
+  <thead><tr><th>节点</th><th>处理主体</th><th>产出契约（要求 / 验收要点）</th><th>表单字段</th><th>AI 能力</th></tr></thead>
+  <tbody>
+    <tr><td><b>需求分析</b></td><td>产品经理<span class="pill assist">E1 协助</span><span class="pill split">建议拆分</span></td><td><b>要求：</b>背景 / 范围 / 非目标 / 关键风险。<b>验收：</b>① 范围与非目标明确；② 关键风险已列出</td><td>分析结论✅；风险等级✅；分析报告📄</td><td>E1 协助填充（分析报告自动生成上传）+ AI 拆分建议（按模块拆子线进入方案设计）</td></tr>
+    <tr><td><b>方案设计</b></td><td>架构师<span class="pill assist">E2 协助</span></td><td><b>要求：</b>选型与理由 / 接口契约 / 迁移策略。<b>验收：</b>① 接口契约覆盖全部影响模块；② 有回滚或兼容策略</td><td>方案说明✅；接口契约📄；迁移策略</td><td>E2 协助填充（设计文档自动生成上传）</td></tr>
+    <tr><td><b>技术评审</b></td><td>架构师（决策）</td><td>评审结论 + 意见</td><td>评审结论✅(通过/打回)；意见✅</td><td>分支：通过→开发实现；打回→需求分析</td></tr>
+    <tr><td><b>前端开发</b></td><td>开发-前端<span class="pill assist">E3 协助</span></td><td><b>验收：</b>① 实现覆盖设计契约；② 自查清单完成</td><td>实现说明✅；组件清单；页面交付物📄</td><td>E3 协助填充（交付物文档生成上传）</td></tr>
+    <tr><td><b>后端开发</b></td><td>开发-后端<span class="pill assist">E3 协助</span></td><td>同上（接口口径）</td><td>实现说明✅；接口文档📄</td><td>E3 协助填充（接口文档生成上传）</td></tr>
+    <tr><td><b>测试</b></td><td>QA<span class="pill assist">E4 协助</span></td><td><b>要求：</b>用例正反例 + 边界。<b>验收：</b>① 用例覆盖全部分支；② 缺陷有复现步骤</td><td>测试结论✅；缺陷说明；测试报告📄</td><td>E4 协助填充（用例与报告生成上传）</td></tr>
+    <tr><td><b>验收</b></td><td>需求提出方（acceptance）</td><td>验收结论 + 意见</td><td>验收结论✅(通过/不通过)；备注</td><td>不通过→回退测试</td></tr>
+    <tr><td><b>发布交付</b></td><td>发布负责人<span class="pill assist">E5 协助</span></td><td><b>验收：</b>① 发布说明面向业务可读；② 回滚预案三要素齐全</td><td>发布版本✅；目标环境✅；发布记录📄</td><td>E5 协助填充（发布说明 + 回滚预案生成上传）</td></tr>
+  </tbody>
+</table>
+<div class="callout amber"><span class="t">演示剧本（8 分钟）：</span>① 画布点开「需求分析」节点——展示产出契约（要求 + 验收 + AI 指引）；② 发起流程 → 处理页出现<b>任务书</b>；③ 点「Expert 协助填充」→ 全部字段秒级起草、<b>分析报告自动生成上传</b>；④ 点「拆分子任务」→ AI 按模块给出拆分建议 → 确认创建 → 子线独立流转；⑤ 技术评审选「打回」→ 回退留痕；⑥ 收尾：文档中心看全链路沉淀的文档，审计中心看人 + AI 全部动作。</div>
+
+<h2 id="t2">三、模板 2：缺陷智能处理流程 <span class="pill auto">自动接管</span> <span class="pill split">自动拆分</span> <span class="pill gov">治理审批</span></h2>
+<p class="note">类型 issue · 智能运维场景。演示价值：AI 先干活（15 分钟自动分诊）+ 自动拆分子缺陷 + 治理写入审批 + 外部智能体接力。</p>
+
+<div class="pipeline">
+  <span class="pipe-node">问题登记</span><span class="pipe-arrow">→</span>
+  <span class="pipe-node ai">智能分诊 · E6 <b>自动接管 + 自动拆分</b>（SLA 15min）</span><span class="pipe-arrow">→</span>
+  <span class="pipe-node gate">人工复核 · 决策</span><span class="pipe-arrow">→</span>
+  <span class="pipe-node">修复任务 · 并行（分诊已按模块拆好）</span><span class="pipe-arrow">→</span>
+  <span class="pipe-node ai">回归验证 · E4 协助</span><span class="pipe-arrow">→</span>
+  <span class="pipe-node gate">关闭复盘</span><span class="pipe-arrow">→</span>
+  <span class="pipe-node end">结束</span>
+  <span class="pipe-note">复核决策：内部修复 → 修复任务；转外部智能体 → 外部智能体接力（MCP 获取活动节点 + 继承上下文，处理后自动回传）；误报 → 结束。</span>
 </div>
 
-<h2 id="tpl2">模板 2：合同审批流程（多级审批 + AI 预审）</h2>
-<div class="card tpl-card">
-  <p style="font-size:13.5px;"><span class="badge b-blue">change</span> <b>演示价值</b>：多级审批链 + Expert 风险预审 + 通知触达——讲"AI 把关、人决策"</p>
-  <h4>流程总览</h4>
-  <div class="flow">
-    <span class="flow-step">开始</span><span class="flow-arrow">→</span>
-    <span class="flow-step">合同发起</span><span class="flow-arrow">→</span>
-    <span class="flow-step ai">法务预审 · AI 辅助</span><span class="flow-arrow">→</span>
-    <span class="flow-step">部门负责人审批</span><span class="flow-arrow">→</span>
-    <span class="flow-step">财务审批</span><span class="flow-arrow">→</span>
-    <span class="flow-step">法务终审</span><span class="flow-arrow">→</span>
-    <span class="flow-step hl">归档</span><span class="flow-arrow">→</span>
-    <span class="flow-step">结束</span>
-  </div>
-  <h4>起始表单（startSchema）</h4>
-  <table>
-    <tr><th style="width:22%">字段</th><th style="width:14%">类型</th><th style="width:10%">必填</th><th>说明</th></tr>
-    <tr><td>合同名称</td><td>input</td><td>✅</td><td></td></tr>
-    <tr><td>合同类型</td><td>select</td><td>✅</td><td>采购 / 销售 / 服务 / 保密</td></tr>
-    <tr><td>合同金额</td><td>number</td><td>✅</td><td>万元</td></tr>
-    <tr><td>对方单位</td><td>input</td><td>✅</td><td></td></tr>
-    <tr><td>合同期限</td><td>date</td><td>✅</td><td></td></tr>
-    <tr><td>合同文件</td><td>upload</td><td>✅</td><td>走文档校验链（扩展名/MIME/病毒扫描）</td></tr>
-    <tr><td>紧急程度</td><td>radio</td><td></td><td>普通 / 加急</td></tr>
-  </table>
-  <h4>节点规格</h4>
-  <table>
-    <tr><th style="width:15%">节点</th><th style="width:12%">类型</th><th style="width:15%">处理人</th><th style="width:8%">SLA</th><th style="width:34%">表单字段</th><th>Expert / 分支</th></tr>
-    <tr><td>合同发起</td><td>task</td><td>业务发起人</td><td>4h</td><td>合同要点(textarea)；风险自评(radio: 低/中/高)</td><td></td></tr>
-    <tr><td>法务预审</td><td>task</td><td>法务专员</td><td>24h</td><td>风险等级(radio)；风险条款(multiselect)；审查意见(textarea)</td><td><span class="badge b-violet">Expert：合同审查专家</span>（AI 摘要合同、识别风险条款，结果与人工表单同页呈现）</td></tr>
-    <tr><td>部门负责人审批</td><td>task</td><td>部门负责人</td><td>24h</td><td>审批结论(radio: 同意/退回)；意见(textarea)</td><td></td></tr>
-    <tr><td>财务审批</td><td>task</td><td>财务人员</td><td>24h</td><td>付款条款确认(radio)；预算匹配(radio)；意见(textarea)</td><td></td></tr>
-    <tr><td>法务终审</td><td>task</td><td>法务负责人</td><td>24h</td><td>终审结论(radio: 通过/打回)</td><td></td></tr>
-    <tr><td>归档</td><td>closure</td><td>合同管理员</td><td>8h</td><td>归档编号(input)；归档备注(textarea)</td><td></td></tr>
-  </table>
-  <div class="demo-note"><b>演示要点：</b>① 合同文件上传走校验链 + 病毒扫描 + L2 敏感级——文档中心联动；② 法务预审节点 AI 先出风险预审报告，法务在此基础上签字；③ 每级审批完成，通知中心实时推送到钉钉/企微并可跳转；④ 扩展：金额 &gt; 100 万可加决策分支"加签总经理"。</div>
-</div>
-
-<h2 id="tpl3">模板 3：缺陷问题处理流程（SLA + AI 诊断 + 外部智能体接力 ⭐）</h2>
-<div class="card tpl-card hl">
-  <p style="font-size:13.5px;"><span class="badge b-blue">issue</span> <b>演示价值</b>：⭐ 核心卖点三合一——SLA 超时预警、AI 自动诊断、<b>外部智能体接力节点处理</b></p>
-  <h4>流程总览</h4>
-  <div class="flow">
-    <span class="flow-step">开始</span><span class="flow-arrow">→</span>
-    <span class="flow-step">问题登记</span><span class="flow-arrow">→</span>
-    <span class="flow-step ai">AI 初步诊断 · 自动</span><span class="flow-arrow">→</span>
-    <span class="flow-step">人工复核 · 决策</span><span class="flow-arrow">→</span>
-    <span class="flow-step">内部修复 · 并行分叉</span><span class="flow-arrow">→</span>
-    <span class="flow-step">回归验证</span><span class="flow-arrow">→</span>
-    <span class="flow-step hl">关闭</span><span class="flow-arrow">→</span>
-    <span class="flow-step">结束</span>
-  </div>
-  <p style="font-size:12.5px; color:#64748b;">复核结论为"转外部智能体"时，走 ⭐ 外部智能体接力节点 → 回归验证</p>
-  <h4>起始表单（startSchema）</h4>
-  <table>
-    <tr><th style="width:22%">字段</th><th style="width:14%">类型</th><th style="width:10%">必填</th><th>说明</th></tr>
+<h4>起始表单</h4>
+<table>
+  <thead><tr><th>字段</th><th>类型</th><th>必填</th><th>说明</th></tr></thead>
+  <tbody>
     <tr><td>问题标题</td><td>input</td><td>✅</td><td></td></tr>
-    <tr><td>严重程度</td><td>radio</td><td>✅</td><td>P0 / P1 / P2 / P3</td></tr>
-    <tr><td>问题描述</td><td>textarea</td><td>✅</td><td></td></tr>
+    <tr><td>严重程度</td><td>radio</td><td>✅</td><td>P0-P3</td></tr>
+    <tr><td>问题描述</td><td>textarea</td><td>✅</td><td>现象 + 复现步骤</td></tr>
     <tr><td>影响模块</td><td>multiselect</td><td></td><td></td></tr>
     <tr><td>发生环境</td><td>select</td><td></td><td>生产 / 测试 / 预发布</td></tr>
-    <tr><td>截图 / 日志</td><td>upload</td><td></td><td></td></tr>
-  </table>
-  <h4>节点规格</h4>
-  <table>
-    <tr><th style="width:16%">节点</th><th style="width:12%">类型</th><th style="width:14%">处理人</th><th style="width:8%">SLA</th><th style="width:30%">表单字段</th><th>Expert / 分支</th></tr>
-    <tr><td>问题登记</td><td>task</td><td>运维 / 客服</td><td>2h</td><td>问题分类(select)；初步影响评估(radio: 高/中/低)</td><td></td></tr>
-    <tr><td>AI 初步诊断</td><td>task</td><td>—（AI 自动）</td><td>15min</td><td>诊断结论(textarea)；疑似根因(multiselect)；排查建议(textarea)；知识库引用</td><td><span class="badge b-violet">Expert：故障诊断专家</span>（检索知识库、生成诊断报告，直接执行）</td></tr>
-    <tr><td>人工复核</td><td>decision</td><td>技术负责人</td><td>4h</td><td>复核结论(radio: 内部修复/转外部智能体/关闭)；意见(textarea)</td><td>内部修复→修复任务；<b>转外部智能体→外部智能体接力</b>；关闭→结束；默认→修复任务</td></tr>
-    <tr><td>外部智能体接力</td><td>task</td><td>外部智能体（演示）</td><td>24h</td><td>处理结果(textarea)；回传说明(textarea)</td><td>⭐ 外部智能体通过 MCP 自动获取活动节点+继承上下文，处理后经 task.submit 自动回传，流程自动推进</td></tr>
-    <tr><td>修复任务</td><td>parallel_split</td><td>—</td><td>—</td><td></td><td>两路：模块 A 修复 / 模块 B 修复</td></tr>
-    <tr><td>模块 A 修复</td><td>task</td><td>开发-模块A</td><td>24h</td><td>修复说明(textarea)；验证步骤(textarea)</td><td></td></tr>
-    <tr><td>模块 B 修复</td><td>task</td><td>开发-模块B</td><td>24h</td><td>修复说明(textarea)；验证步骤(textarea)</td><td></td></tr>
-    <tr><td>回归验证</td><td>acceptance</td><td>问题提出人</td><td>24h</td><td>验证结论(radio: 通过/未修复)；备注(textarea)</td><td></td></tr>
-    <tr><td>关闭</td><td>closure</td><td>运维负责人</td><td>8h</td><td>关闭确认(radio)；复盘要点(textarea)</td><td></td></tr>
-  </table>
-  <div class="demo-note"><b>演示要点 ⭐：</b>① SLA 预警——AI 诊断节点 SLA 设 15 分钟，演示超时红标与"我的任务"预警；② AI 自动诊断——P0 问题进来 AI 直接产出带知识库引用的诊断报告，"AI 先干活"；③ 人工复核——技术负责人看报告后决策，"人把关"；④ <b>重头戏：外部智能体接力</b>——复核选"转外部智能体"，演示外部智能体拉取该节点上下文（活动节点 + 继承链条）→ 处理 → 自动回传结果 → 流程自动推进到回归验证。强调：上下文自动获取、结果自动回传、全程留痕，边界与内部专家一致。</div>
+    <tr><td>截图 / 日志</td><td>upload</td><td></td><td>走文档校验链</td></tr>
+  </tbody>
+</table>
+
+<h4>节点规格</h4>
+<table>
+  <thead><tr><th>节点</th><th>处理主体</th><th>产出契约（要求 / 验收要点）</th><th>表单字段</th><th>AI 能力</th></tr></thead>
+  <tbody>
+    <tr><td><b>智能分诊</b></td><td><b>Expert 自动</b><span class="pill auto">E6 自动接管</span><span class="pill split">自动拆分</span><span class="pill gov">SLA 15min</span></td><td><b>要求：</b>分类分级 / 根因假设 / 排查建议 / 相似案例引用。<b>验收：</b>① P0 附复现步骤；② 拆分粒度到模块</td><td>问题分类✅；初步影响评估✅；诊断结论✅；疑似根因；排查建议；知识库引用</td><td>E6 自动接管：自动填充 + <b>按模块自动创建子缺陷任务</b>（写入走审批队列）；AI 自评验收</td></tr>
+    <tr><td><b>人工复核</b></td><td>技术负责人（决策）</td><td>复核 AI 分诊的结论与拆分</td><td>复核结论✅(内部修复/转外部智能体/误报关闭)；意见</td><td>三路分支：修复 / 外部接力 / 结束</td></tr>
+    <tr><td><b>修复任务</b></td><td>对应模块开发<span class="pill assist">E3 协助</span></td><td><b>验收：</b>① 修复说明含根因；② 有验证步骤</td><td>修复说明✅；验证步骤✅</td><td>E3 协助填充；并行分叉按模块拆路</td></tr>
+    <tr><td><b>回归验证</b></td><td>问题提出人（acceptance）<span class="pill assist">E4 协助</span></td><td>回归结论 + 备注</td><td>验证结论✅；备注</td><td>E4 协助填充（回归范围建议）</td></tr>
+    <tr><td><b>关闭复盘</b></td><td>运维负责人（closure）</td><td>关闭确认 + 复盘要点</td><td>关闭确认✅；复盘要点</td><td>—</td></tr>
+  </tbody>
+</table>
+<div class="callout amber"><span class="t">演示剧本（10 分钟，⭐ 重头戏）：</span>① 登记 P0 问题 → 15 分钟 SLA 红标倒计时；② <b>智能分诊 Expert 自动接管</b>：分类分级、根因假设、相似案例引用直接填充表单——同时按影响模块<b>自动拆出 2 条子缺陷任务</b>（写入进审批队列）；③ 技术负责人在审批队列<b>批准</b> → 子任务创建、分诊节点自动完成流转；④ 复核选「转外部智能体」→ 外部智能体经 MCP 拉取活动节点与继承上下文、处理后自动回传推进；⑤ 全程审计可追溯。</div>
+
+<h2 id="t3">四、模板 3：合同审批流程 <span class="pill assist">文档生成</span> <span class="pill human">多级审批</span></h2>
+<p class="note">类型 change · 治理与风控场景。演示价值：AI 审查报告自动生成上传（文档预览抽屉现场看报告）+ 多级审批链 + 金额决策分支。</p>
+
+<div class="pipeline">
+  <span class="pipe-node">合同发起（上传合同文件）</span><span class="pipe-arrow">→</span>
+  <span class="pipe-node ai">法务预审 · E7 协助填充 + 审查报告生成</span><span class="pipe-arrow">→</span>
+  <span class="pipe-node gate">部门负责人审批</span><span class="pipe-arrow">→</span>
+  <span class="pipe-node gate">金额决策（&gt;100 万加签总经理）</span><span class="pipe-arrow">→</span>
+  <span class="pipe-node">财务审批</span><span class="pipe-arrow">→</span>
+  <span class="pipe-node">法务终审</span><span class="pipe-arrow">→</span>
+  <span class="pipe-node end">归档</span>
 </div>
 
-<h2 id="tpl4">模板 4：新员工入职流程（非研发场景 + 并行）</h2>
-<div class="card tpl-card">
-  <p style="font-size:13.5px;"><span class="badge b-blue">requirement</span> <b>演示价值</b>：业务人员也能建模；多部门并行 + 通知触达——展示平台普适性</p>
-  <h4>流程总览</h4>
-  <div class="flow">
-    <span class="flow-step">开始</span><span class="flow-arrow">→</span>
-    <span class="flow-step">入职申请</span><span class="flow-arrow">→</span>
-    <span class="flow-step">HR 审核</span><span class="flow-arrow">→</span>
-    <span class="flow-step">并行分叉<br><small style="color:#64748b;">IT 账号 / 行政工位 / 导师</small></span><span class="flow-arrow">→</span>
-    <span class="flow-step">并行汇合</span><span class="flow-arrow">→</span>
-    <span class="flow-step hl">入职确认</span><span class="flow-arrow">→</span>
-    <span class="flow-step">结束</span>
-  </div>
-  <h4>起始表单（startSchema）</h4>
-  <table>
-    <tr><th style="width:22%">字段</th><th style="width:14%">类型</th><th style="width:10%">必填</th><th>说明</th></tr>
-    <tr><td>姓名</td><td>input</td><td>✅</td><td></td></tr>
-    <tr><td>部门</td><td>select</td><td>✅</td><td>按组织同步的部门树</td></tr>
-    <tr><td>岗位</td><td>input</td><td>✅</td><td></td></tr>
-    <tr><td>职级</td><td>select</td><td>✅</td><td></td></tr>
-    <tr><td>入职日期</td><td>date</td><td>✅</td><td></td></tr>
-    <tr><td>联系方式</td><td>input</td><td>✅</td><td></td></tr>
-    <tr><td>Offer 文件</td><td>upload</td><td></td><td></td></tr>
-  </table>
-  <h4>节点规格</h4>
-  <table>
-    <tr><th style="width:16%">节点</th><th style="width:13%">类型</th><th style="width:15%">处理人</th><th style="width:8%">SLA</th><th>表单字段</th></tr>
-    <tr><td>入职申请</td><td>task</td><td>用人部门负责人</td><td>8h</td><td>招聘渠道(select)；薪酬范围(number)；期望到岗(input)</td></tr>
-    <tr><td>HR 审核</td><td>task</td><td>HR 专员</td><td>24h</td><td>背调结论(radio)；Offer 金额(number)；审核意见(textarea)</td></tr>
-    <tr><td>IT 账号开通</td><td>task</td><td>IT 支持</td><td>24h</td><td>企业邮箱(input 自动生成)；系统权限(multiselect: ERP/OA/代码库)</td></tr>
-    <tr><td>行政工位安排</td><td>task</td><td>行政专员</td><td>24h</td><td>工位号(input)；电脑型号(select)；门禁权限(radio)</td></tr>
-    <tr><td>导师分配</td><td>task</td><td>部门主管</td><td>8h</td><td>导师姓名(input)；培养计划(textarea)</td></tr>
-    <tr><td>入职确认</td><td>closure</td><td>HR 专员</td><td>8h</td><td>入职确认(radio)；资料检查表(multiselect)</td></tr>
-  </table>
-  <div class="demo-note"><b>演示要点：</b>① "这个流程不是研发搭的，是 HR 自己拖出来的"——强调零代码建模；② 三路并行（IT / 行政 / 导师）同时推进、汇合收敛；③ 每完成一步钉钉/企微通知直达当事人与 HR——通知中心四渠道。</div>
+<h4>起始表单</h4>
+<table>
+  <thead><tr><th>字段</th><th>类型</th><th>必填</th><th>说明</th></tr></thead>
+  <tbody>
+    <tr><td>合同名称</td><td>input</td><td>✅</td><td></td></tr>
+    <tr><td>合同类型</td><td>select</td><td>✅</td><td>采购 / 销售 / 服务 / 保密</td></tr>
+    <tr><td>合同金额（万元）</td><td>number</td><td>✅</td><td>金额决策分支依据</td></tr>
+    <tr><td>对方单位 / 合同期限</td><td>input / date</td><td>✅</td><td></td></tr>
+    <tr><td>合同文件</td><td>upload</td><td>✅</td><td>E7 审查的知识来源，走文档校验链</td></tr>
+    <tr><td>紧急程度</td><td>radio</td><td>✅</td><td>普通 / 加急</td></tr>
+  </tbody>
+</table>
+
+<h4>节点规格</h4>
+<table>
+  <thead><tr><th>节点</th><th>处理主体</th><th>产出契约（要求 / 验收要点）</th><th>表单字段</th><th>AI 能力</th></tr></thead>
+  <tbody>
+    <tr><td><b>法务预审</b></td><td>法务专员<span class="pill assist">E7 协助</span></td><td><b>要求：</b>摘要 / 逐条风险识别（付款 / 违约 / 知产 / 保密 / 终止）/ 修改建议。<b>验收：</b>① 五类风险逐项核对；② 重大风险标注外部律师意见</td><td>风险等级✅；风险条款✅(多选)；审查意见✅；审查报告📄</td><td>E7 协助填充（读取合同文件 + 条款库，<b>审查报告自动生成上传</b>，预览抽屉现场看报告）</td></tr>
+    <tr><td><b>部门负责人审批</b></td><td>部门负责人</td><td>审批结论 + 意见</td><td>审批结论✅(同意/退回)；意见✅</td><td>退回 → 合同发起</td></tr>
+    <tr><td><b>总经理加签</b></td><td>总经理（决策分支目标）</td><td>加签意见</td><td>加签结论✅</td><td>分支条件：合同金额 &gt; 100 万</td></tr>
+    <tr><td><b>财务审批</b></td><td>财务人员</td><td>付款条款 + 预算匹配</td><td>付款条款确认✅；预算匹配✅</td><td>—</td></tr>
+    <tr><td><b>法务终审</b></td><td>法务负责人</td><td>终审结论</td><td>终审结论✅(通过/打回)</td><td>打回 → 法务预审</td></tr>
+    <tr><td><b>归档</b></td><td>合同管理员（closure）</td><td>归档编号 + 备注</td><td>归档编号✅；归档备注</td><td>归档后合同文件与审查报告在文档中心可查</td></tr>
+  </tbody>
+</table>
+<div class="callout amber"><span class="t">演示剧本（8 分钟）：</span>① 发起时上传合同 PDF（校验链 + 病毒扫描 + L2 敏感级）；② 法务预审节点点「Expert 协助填充」→ 风险等级 / 条款清单自动生成，<b>审查报告 Markdown 自动上传</b>——点开文档预览抽屉现场看报告；③ 法务改两处后提交；④ 多级审批 + 金额 &gt;100 万走总经理加签分支；⑤ 通知中心看每级审批的钉钉 / 企微触达。</div>
+
+<h2 id="t4">五、模板 4：客户售后工单流程 <span class="pill auto">自动拆分</span> <span class="pill human">非研发场景</span></h2>
+<p class="note">类型 ticket（requirement 亦可）· 客户服务场景。演示价值：业务人员也能建模 + AI 自动分诊拆分子工单 + 知识库方案填充 + 客户确认闭环。</p>
+
+<div class="pipeline">
+  <span class="pipe-node">工单登记</span><span class="pipe-arrow">→</span>
+  <span class="pipe-node ai">智能分诊 · E6 自动接管 + 自动拆分（SLA 30min）</span><span class="pipe-arrow">→</span>
+  <span class="pipe-node">专项处理（多条子工单并行）</span><span class="pipe-arrow">→</span>
+  <span class="pipe-node ai">处理方案 · E6 知识库方案填充</span><span class="pipe-arrow">→</span>
+  <span class="pipe-node gate">客户确认</span><span class="pipe-arrow">→</span>
+  <span class="pipe-node end">满意度回访 · 结束</span>
+  <span class="pipe-note">单问题工单不分拆，直接进入专项处理；多问题工单按问题项拆分为多条子工单并行处理。</span>
 </div>
 
-<h2 id="comb">演示组合建议</h2>
-<div class="grid-2">
-  <div class="comb-card">
-    <h4>⏱️ 15 分钟精华</h4>
-    <p>模板 1（首演）+ 模板 3（重头戏）。先让客户理解"流程 + AI 专家"基本盘，再用缺陷流程亮出 SLA、AI 诊断、外部智能体接力三板斧。</p>
-  </div>
-  <div class="comb-card">
-    <h4>⏱️ 45 分钟完整</h4>
-    <p>模板 1 → 2 → 3 → 4。建模（1）→ 审批与 AI 预审（2）→ 智能运维（3）→ 业务普适（4），从"技术场景"讲到"人人可用"。</p>
-  </div>
-  <div class="comb-card">
-    <h4>🏛️ 客户是管理层</h4>
-    <p>模板 2 + 模板 3。多级审批 + AI 把关 + 审计，讲"管得住、可追溯"。</p>
-  </div>
-  <div class="comb-card">
-    <h4>💻 客户是 IT / 技术</h4>
-    <p>模板 3 + 模板 1。外部智能体接力 + 画布建模，讲"开放、可集成"。</p>
-  </div>
-</div>
+<h4>起始表单</h4>
+<table>
+  <thead><tr><th>字段</th><th>类型</th><th>必填</th><th>说明</th></tr></thead>
+  <tbody>
+    <tr><td>工单标题 / 客户名称</td><td>input</td><td>✅</td><td></td></tr>
+    <tr><td>问题描述</td><td>textarea</td><td>✅</td><td>现象 + 期望</td></tr>
+    <tr><td>问题分类</td><td>select</td><td>✅</td><td>使用咨询 / 故障 / 数据问题 / 投诉</td></tr>
+    <tr><td>紧急程度 / 截止</td><td>radio / date</td><td>✅</td><td>SLA 依据</td></tr>
+  </tbody>
+</table>
 
-<h2 id="steps">录入步骤（画布操作）</h2>
+<h4>节点规格</h4>
+<table>
+  <thead><tr><th>节点</th><th>处理主体</th><th>产出契约（要求 / 验收要点）</th><th>表单字段</th><th>AI 能力</th></tr></thead>
+  <tbody>
+    <tr><td><b>智能分诊</b></td><td><b>Expert 自动</b><span class="pill auto">E6 自动接管</span><span class="pill split">自动拆分</span><span class="pill gov">SLA 30min</span></td><td><b>要求：</b>分类 / 分级 / 根因初判 / 相似案例。<b>验收：</b>① 多问题工单按问题项拆分；② 每条子工单有责任人建议</td><td>工单分类✅；优先级✅；分诊结论✅；相似案例引用</td><td>E6 自动接管 + 自动拆分子工单（写入走审批队列）</td></tr>
+    <tr><td><b>专项处理</b></td><td>售后工程师<span class="pill assist">E6 知识库方案协助</span></td><td><b>验收：</b>① 方案引用知识库案例；② 处理结果客户可读</td><td>处理方案✅；处理结果✅</td><td>E6 协助填充（知识库方案推荐）</td></tr>
+    <tr><td><b>客户确认</b></td><td>客户 / 客户成功（acceptance）</td><td>确认结论</td><td>确认结论✅(解决/未解决)；备注</td><td>未解决 → 回退专项处理</td></tr>
+    <tr><td><b>满意度回访</b></td><td>客户成功（closure）</td><td>满意度 + 回访记录</td><td>满意度✅(1-5)；回访记录</td><td>—</td></tr>
+  </tbody>
+</table>
+<div class="callout amber"><span class="t">演示剧本（6 分钟）：</span>① 登记一条“客户反馈三并问题”的工单 → 分诊 Expert 自动分类分级、<b>拆成 3 条子工单</b>派给对应工程师；② 工程师处理页点「Expert 协助填充」→ 知识库相似案例方案秒出；③ 客户确认 → 满意度回访关闭；④ 强调：“这条流程是客服负责人自己拖出来的，AI 能力是挂上去的。”</div>
+
+<h2 id="combo">六、演示组合建议</h2>
+<table>
+  <thead><tr><th>场景</th><th>组合</th><th>叙事线</th></tr></thead>
+  <tbody>
+    <tr><td>⏱️ 15 分钟精华</td><td>模板 1 + 模板 2</td><td>先用模板 1 讲「产出契约 + 专家团队 + 拆分」基本盘，再用模板 2 亮「自动接管 + 审批治理 + 外部接力」三板斧</td></tr>
+    <tr><td>⏱️ 45 分钟完整</td><td>模板 1 → 3 → 2 → 4</td><td>研发交付（专家全员）→ 治理审批（文档生成）→ 智能运维（自动接管）→ 业务普适（工单），从技术场景讲到人人可用</td></tr>
+    <tr><td>🏛️ 客户是管理层</td><td>模板 3 + 模板 2</td><td>多级审批 + AI 把关 + 全程审计：管得住、可追溯</td></tr>
+    <tr><td>💻 客户是 IT / 技术</td><td>模板 2 + 模板 1</td><td>外部智能体接力 + 画布建模 + 专家团队：开放、可集成</td></tr>
+    <tr><td>🏢 客户是客服 / 运营</td><td>模板 4 + 模板 3</td><td>AI 自动分诊拆分 + 知识库方案：先干活后审核</td></tr>
+  </tbody>
+</table>
+
+<h2 id="setup">七、画布配置落地步骤（更新版）</h2>
 <div class="card">
-  <ol style="padding-left:22px; font-size:14px; color:#475569;">
-    <li>「流程模板」→ 新建模板（选择类型）→ 打开发布前校验清单。</li>
-    <li>画布拖入节点 → 连线（开始 → … → 结束）。</li>
-    <li>每个 task / decision / acceptance / closure 节点：配置处理人（用户或角色/技能）、SLA、表单 Schema、输出说明。</li>
-    <li>需求分析 / 法务预审 / AI 诊断节点：在 Expert 中心确认对应 Expert 已发布，节点属性面板绑定其 Deployment。</li>
-    <li>决策节点：配置分支条件与默认分支。</li>
-    <li>点击"发布校验"，按提示补齐（处理人未绑定 / Expert 未绑定 / 分支不完整等），发布。</li>
-    <li>「项目列表」→ 绑定该模板 → 新建工作项 → 按 startSchema 填写 → 发起流程。</li>
-  </ol>
+  <b>第一步 · 专家团队就位：</b>「AI 构建 / Expert 中心」→ 按第一节设计逐个创建 Expert（粘贴提示词五段式）→ 每个节点表单字段对齐输出契约 → 运行测试 → 发布 → 记录 Deployment。<br><br>
+  <b>第二步 · 建模：</b>「流程模板」→ 新建模板 → 画布拖入节点连线；每个 task 节点配置：处理主体、SLA、<b>产出契约</b>（产出要求 / 验收清单 / AI 指引）、表单 Schema（字段 key 与 Expert 输出契约对齐）、<b>子任务拆分模式</b>（off / manual / ai_assist / ai_auto）、Expert Deployment 绑定。<br><br>
+  <b>第三步 · 发布校验：</b>开始 / 结束唯一、无悬空节点、分支条件完整、Expert 自动节点已绑 Deployment、拆分节点单出边。<br><br>
+  <b>第四步 · 运行验证：</b>项目绑定模板 → 新建工作项 → 处理页检查任务书 → 点「Expert 协助填充」看回填与文档生成 → 勾验收提交 → 演练拆分 / 打回 / 并行 / 审批闭环。<br><br>
+  <b>提示：</b>文档中心可随时查看全链路沉淀的文档（上传 / Expert 生成 / 聊天产出），点文件名即打开统一预览抽屉。
 </div>
 
-<div class="footer">
-  FlowHub 演示流程模板设计 · 基于画布真实配置项（CanvasNode 节点类型与 cfg 字段）· 讲解口径与《FlowHub 产品介绍与客户讲解》一致
-</div>
-
+<p style="margin-top:40px;color:var(--slate-500);font-size:12px;">FlowHub 演示流程模板设计 v2 · 专家团队 × 典型流程 · 基于画布真实配置项（CanvasNode / 产出契约 / 拆分模式 / 协作模式）· 讲解口径与《FlowHub 产品介绍与客户讲解》一致</p>
 </div>
 </body>
 </html>

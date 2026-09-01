@@ -28,30 +28,48 @@ const kindTone = (k: NotificationItem['kind']) =>
     : k === 'complete' ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-500/15 dark:text-emerald-400'
     : 'bg-blue-50 text-blue-600 dark:bg-blue-500/15 dark:text-blue-400'
 
+const PAGE_SIZE = 10
+
 export function NotificationsPage() {
   const { navigate, openDialog, openTask, openWorkItem } = useApp()
   const [tab, setTab] = useState<'all' | 'mine' | 'agent' | 'failed'>('all')
   const [notifications, setNotifications] = useState<NotificationItem[]>([])
+  const [page, setPage] = useState(1)
+  const [total, setTotal] = useState(0)
+  const [stats, setStats] = useState<{ all: number; unread: number; agent: number; failed: number } | null>(null)
   /* 渠道健康：GET /notifications/channels/health（钉钉/企微/邮件/站内配置状态） */
   const [health, setHealth] = useState<Record<string, { enabled: boolean; ok: boolean; desc: string }>>({})
 
-  const refresh = () => {
-    api.get<{ items: NotificationItem[] }>('/api/v1/notifications?page_size=100')
-      .then((d) => { if (d.items.length) setNotifications(d.items) })
+  /* Tab → 服务端过滤参数（全部 / 待我处理=未读 / Expert / 发送失败） */
+  const tabParams = (t: typeof tab): Record<string, string> => {
+    if (t === 'mine') return { unread: 'true' }
+    if (t === 'agent') return { kind: 'agent' }
+    if (t === 'failed') return { failed: 'true' }
+    return {}
+  }
+
+  const refresh = (nextTab: typeof tab = tab, nextPage: number = page) => {
+    const qs = new URLSearchParams({ page: String(nextPage), page_size: String(PAGE_SIZE), ...tabParams(nextTab) })
+    api.get<{ items: NotificationItem[]; total: number; stats: { all: number; unread: number; agent: number; failed: number } }>(`/api/v1/notifications?${qs}`)
+      .then((d) => { setNotifications(d.items); setTotal(d.total); setStats(d.stats) })
       .catch(() => {})
   }
 
-  /* 接后端：GET /notifications + 渠道健康 */
+  /* 接后端：GET /notifications（服务端分页 + Tab 过滤）+ 渠道健康 */
   useEffect(() => {
     refresh()
     api.get<{ channels: Record<string, { enabled: boolean; ok: boolean; desc: string }> }>('/api/v1/notifications/channels/health')
       .then((d) => setHealth(d.channels))
       .catch(() => {})
-  }, [])
+  }, [tab, page])
 
-  useEffect(() => onNotification((notification) => {
-    setNotifications((previous) => [notification, ...previous.filter((item) => item.id !== notification.id)])
-  }), [])
+  /* 切 Tab 回到第 1 页（避免翻页后切换分类出现空页） */
+  const changeTab = (t: typeof tab) => { if (t !== tab) { setTab(t); setPage(1) } }
+
+  useEffect(() => onNotification(() => {
+    // 服务端分页下直接刷新当前视图，保证计数与列表一致
+    refresh()
+  }), [tab, page])
 
   const retry = async (n: NotificationItem) => {
     try {
@@ -64,18 +82,14 @@ export function NotificationsPage() {
   }
 
   const counts = {
-    all: notifications.length,
-    mine: notifications.filter((n) => n.unread).length,
-    agent: notifications.filter((n) => n.kind === 'agent').length,
-    failed: notifications.filter((n) => n.failed).length,
+    all: stats?.all ?? 0,
+    mine: stats?.unread ?? 0,
+    agent: stats?.agent ?? 0,
+    failed: stats?.failed ?? 0,
   }
 
-  const list = notifications.filter((n) => {
-    if (tab === 'all') return true
-    if (tab === 'mine') return n.unread
-    if (tab === 'agent') return n.kind === 'agent'
-    return n.failed
-  })
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
+  const safePage = Math.min(page, totalPages)
 
   const onOpen = (n: NotificationItem) => {
     if (n.kind === 'agent') openDialog('expertApproval')
@@ -121,7 +135,7 @@ export function NotificationsPage() {
         {([
           ['all', '全部', counts.all], ['mine', '待我处理', counts.mine], ['agent', 'Expert 待审批', counts.agent], ['failed', '发送失败', counts.failed],
         ] as const).map(([k, label, cnt]) => (
-          <button key={k} onClick={() => setTab(k)}
+          <button key={k} onClick={() => changeTab(k)}
             className={cn('-mb-px flex items-center gap-1.5 border-b-2 px-4 py-2.5 text-[13.5px] font-medium transition-colors',
               tab === k ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300')}>
             {label}
@@ -131,7 +145,7 @@ export function NotificationsPage() {
       </div>
 
       <div className="space-y-2">
-        {list.map((n) => (
+        {notifications.map((n) => (
           <button key={n.id} onClick={() => onOpen(n)}
             className={cn('flex w-full items-start gap-3 rounded-xl border bg-white p-4 text-left shadow-s transition-all hover:border-blue-300 hover:shadow-m dark:border-slate-700 dark:bg-slate-900 dark:hover:border-blue-500/40',
               n.unread ? 'border-blue-200 dark:border-blue-500/30' : 'border-slate-200',
@@ -155,8 +169,34 @@ export function NotificationsPage() {
             )}
           </button>
         ))}
-        {list.length === 0 && (
+        {notifications.length === 0 && (
           <div className="rounded-xl border border-dashed border-slate-300 bg-white p-10 text-center text-[13px] text-slate-400 dark:border-slate-700 dark:bg-slate-900">当前分类无通知</div>
+        )}
+        {/* 分页 footer（服务端分页） */}
+        {total > PAGE_SIZE && (
+          <div className="flex items-center justify-between border-t border-slate-100 pt-3 text-[12px] text-slate-400 dark:border-slate-800">
+            <span>共 {total} 条通知 · 第 {safePage}/{totalPages} 页</span>
+            <div className="flex items-center gap-1.5">
+              <button
+                className={cn('h-7 rounded-md border px-2.5 text-[12px] transition-colors',
+                  safePage <= 1 ? 'cursor-not-allowed border-slate-200 text-slate-300 dark:border-slate-800 dark:text-slate-600' : 'border-slate-300 bg-white text-slate-500 hover:border-blue-400 hover:text-blue-600 dark:border-slate-700 dark:bg-slate-900')}
+                disabled={safePage <= 1} onClick={() => setPage(safePage - 1)}>
+                上一页
+              </button>
+              {Array.from({ length: totalPages }, (_, i) => i + 1).map((p) => (
+                <button key={p}
+                  className={cn('h-7 w-7 rounded-md border text-[12px] transition-colors',
+                    p === safePage ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-300 bg-white text-slate-500 hover:border-blue-400 hover:text-blue-600 dark:border-slate-700 dark:bg-slate-900')}
+                  onClick={() => setPage(p)}>{p}</button>
+              ))}
+              <button
+                className={cn('h-7 rounded-md border px-2.5 text-[12px] transition-colors',
+                  safePage >= totalPages ? 'cursor-not-allowed border-slate-200 text-slate-300 dark:border-slate-800 dark:text-slate-600' : 'border-slate-300 bg-white text-slate-500 hover:border-blue-400 hover:text-blue-600 dark:border-slate-700 dark:bg-slate-900')}
+                disabled={safePage >= totalPages} onClick={() => setPage(safePage + 1)}>
+                下一页
+              </button>
+            </div>
+          </div>
         )}
       </div>
     </div>
