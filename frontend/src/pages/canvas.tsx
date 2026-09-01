@@ -613,21 +613,88 @@ export function CanvasPage() {
 
   /* ---------- 渲染辅助 ---------- */
   const pos = (id: string) => nodes.find((n) => n.id === id)!
-  const edgeD = (a: string, b: string) => {
-    const A = pos(a), B = pos(b)
-    const x1 = A.x + A.width, y1 = A.y + A.height / 2
-    const x2 = B.x, y2 = B.y + B.height / 2
-    const mx = (x1 + x2) / 2
-    return `M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`
+  /** 节点四边锚点：按目标方位选最合适的出入点，换行/回向的边不再横穿节点 */
+  const anchor = (n: CanvasNode, side: 'out' | 'in', other: CanvasNode) => {
+    const cx = n.x + n.width / 2, cy = n.y + n.height / 2
+    const ocx = other.x + other.width / 2, ocy = other.y + other.height / 2
+    const dx = ocx - cx, dy = ocy - cy
+    // 目标在右方（或正右/右下/右上）→ 右出右入；左方 → 左侧；主要垂直偏移 → 底/顶
+    if (Math.abs(dy) > Math.abs(dx) * 1.4) {
+      // 近似垂直关系：下行从底部出、顶部入；上行反向（蛇形换行典型形态）
+      if (dy > 0) return side === 'out' ? { x: cx, y: n.y + n.height } : { x: ocx, y: other.y }
+      return side === 'out' ? { x: cx, y: n.y } : { x: ocx, y: other.y + other.height }
+    }
+    if (dx >= 0) return side === 'out' ? { x: n.x + n.width, y: cy } : { x: other.x, y: ocy }
+    // 回向边（目标在左上/左下）：出边从底部绕行，入边进左侧
+    return side === 'out' ? { x: cx, y: n.y + n.height } : { x: other.x, y: ocy }
   }
+  const edgeD = (a: string, b: string, offset = 0) => {
+    const A = pos(a), B = pos(b)
+    if (!A || !B) return ''
+    const p1 = anchor(A, 'out', B), p2 = anchor(B, 'in', A)
+    const mx = (p1.x + p2.x) / 2
+    if (Math.abs(p1.y - p2.y) < 8 || Math.abs(p1.x - p2.x) < 8) {
+      // 近似直线：微弯即可
+      const my = (p1.y + p2.y) / 2 + offset
+      return `M ${p1.x} ${p1.y} C ${(p1.x + p2.x) / 2} ${my}, ${(p1.x + p2.x) / 2} ${my}, ${p2.x} ${p2.y}`
+    }
+    // 同向水平流：水平贝塞尔；垂直流：垂直贝塞尔（控制点随 offset 平移）
+    if (Math.abs(dy0(p1, p2)) < Math.abs(p1.x - p2.x)) {
+      return `M ${p1.x} ${p1.y} C ${mx} ${p1.y + offset}, ${mx} ${p2.y + offset}, ${p2.x} ${p2.y}`
+    }
+    const my = (p1.y + p2.y) / 2 + offset
+    return `M ${p1.x} ${p1.y} C ${p1.x} ${my}, ${p2.x} ${my}, ${p2.x} ${p2.y}`
+  }
+  const dy0 = (p1: { x: number; y: number }, p2: { x: number; y: number }) => p2.y - p1.y
   const fbD = (a: string, b: string) => {
     const A = pos(a), B = pos(b)
+    if (!A || !B) return ''
     const x1 = A.x + A.width / 2, y1 = A.y + A.height
     const x2 = B.x + B.width / 2, y2 = B.y
     const my = (y1 + y2) / 2 + 28
     return `M ${x1} ${y1} C ${x1} ${my}, ${x2} ${my}, ${x2} ${y2}`
   }
   const edgeKey = (a: string, b: string) => `${a}-${b}`
+  /** 连线视觉偏移：存源节点 cfg.edgeOffsets，随画布保存/加载 */
+  const edgeOffsetOf = (a: string, b: string) => {
+    const from = nodes.find((n) => n.id === a)
+    return from?.cfg.edgeOffsets?.[`${a}-${b}`] ?? 0
+  }
+  const setEdgeOffset = (a: string, b: string, offset: number) => {
+    updateNodeCfg(a, { edgeOffsets: { ...(nodes.find((n) => n.id === a)?.cfg.edgeOffsets ?? {}), [`${a}-${b}`]: Math.round(offset) } })
+  }
+
+  /* ---------- 拖动选中连线调整弯曲度 ---------- */
+  const edgeDragRef = useRef<{ key: string; a: string; b: string; startY: number; startOffset: number } | null>(null)
+  const edgeMoveListener = useRef<(e: PointerEvent) => void>(() => {})
+  const edgeUpListener = useRef<() => void>(() => {})
+  useEffect(() => () => {
+    window.removeEventListener('pointermove', edgeMoveListener.current)
+    window.removeEventListener('pointerup', edgeUpListener.current)
+  }, [])
+  const beginEdgeDrag = (key: string, e: React.PointerEvent) => {
+    const idx = key.startsWith('fb-') ? null : key.split('-')
+    if (!idx) return // 回退边固定绕行形态，不支持拖弯
+    const [a, b] = idx
+    if (e.stopPropagation) e.stopPropagation()
+    edgeDragRef.current = { key, a, b, startY: e.clientY, startOffset: edgeOffsetOf(a, b) }
+    const onMove = (ev: PointerEvent) => {
+      const d = edgeDragRef.current
+      if (!d) return
+      const rect = svgRef.current!.getBoundingClientRect()
+      const scale = vbRef.current.w / rect.width
+      setEdgeOffset(d.a, d.b, d.startOffset + ((ev.clientY - d.startY) * scale) / 2)
+    }
+    const onUp = () => {
+      edgeDragRef.current = null
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+  }
+  const vbRef = useRef(vb)
+  useEffect(() => { vbRef.current = vb })
 
   /* 添加节点类型选择器 */
   /* 全部节点类型均可添加；开始/结束全局唯一（画布只能各 1 个，发布校验强制） */
@@ -736,11 +803,12 @@ export function CanvasPage() {
               {edges.map(([a, b]) => {
                 const key = edgeKey(a, b)
                 const sel = selectedEdge === key
+                const dPath = edgeD(a, b, edgeOffsetOf(a, b))
                 return (
                   <g key={key} onClick={(e) => { if (mode === 'edit') { e.stopPropagation(); setSelectedEdge(key) } }} className={mode === 'edit' ? 'cursor-pointer' : ''}>
-                    <path d={edgeD(a, b)} fill="none" stroke={sel ? '#2563EB' : '#94A3B8'} strokeWidth={sel ? 2.6 : 1.6} markerEnd={sel ? 'url(#arrow-blue)' : 'url(#arrow)'} className="transition-colors" />
+                    <path d={dPath} fill="none" stroke={sel ? '#2563EB' : '#94A3B8'} strokeWidth={sel ? 2.6 : 1.6} markerEnd={sel ? 'url(#arrow-blue)' : 'url(#arrow)'} className="transition-colors" />
                     {/* 加宽点击热区 */}
-                    <path d={edgeD(a, b)} fill="none" stroke="transparent" strokeWidth="14" style={{ pointerEvents: mode === 'edit' ? 'stroke' : 'none' }} />
+                    <path d={dPath} fill="none" stroke="transparent" strokeWidth="14" style={{ pointerEvents: mode === 'edit' ? 'stroke' : 'none' }} />
                   </g>
                 )
               })}
@@ -837,20 +905,31 @@ export function CanvasPage() {
                 )
               })}
 
-              {/* 选中边删除提示 */}
+              {/* 选中边：删除按钮 + 拖弯手柄 */}
               {mode === 'edit' && selectedEdge && (() => {
                 const key = selectedEdge
                 const [a, b] = key.startsWith('fb-')
                   ? key.slice(3).split('-')
                   : key.split('-')
                 const A = pos(a), B = pos(b)
+                if (!A || !B) return null
                 const cx = (A.x + A.width / 2 + B.x + B.width / 2) / 2, cy = (A.y + A.height / 2 + B.y + B.height / 2) / 2
                 const isFb = key.startsWith('fb-')
                 return (
-                  <g className="cursor-pointer" onClick={(e) => { e.stopPropagation(); if (isFb) deleteFallback(key); else deleteEdge(key) }}>
-                    <rect x={cx - 16} y={cy - 16} width={32} height={32} rx={8} fill="#DC2626" />
-                    <path d={`M ${cx - 6} ${cy - 6} l 12 12 M ${cx + 6} ${cy - 6} l -12 12`} stroke="white" strokeWidth="2" strokeLinecap="round" />
-                    <title>删除选中连线（Delete）</title>
+                  <g>
+                    <g className="cursor-pointer" onClick={(e) => { e.stopPropagation(); if (isFb) deleteFallback(key); else deleteEdge(key) }}>
+                      <rect x={cx - 16} y={cy - 16} width={32} height={32} rx={8} fill="#DC2626" />
+                      <path d={`M ${cx - 6} ${cy - 6} l 12 12 M ${cx + 6} ${cy - 6} l -12 12`} stroke="white" strokeWidth="2" strokeLinecap="round" />
+                      <title>删除选中连线（Delete）</title>
+                    </g>
+                    {!isFb && (
+                      <g className="cursor-ns-resize" onPointerDown={(e) => beginEdgeDrag(key, e)}>
+                        <circle cx={cx} cy={cy + 34} r={12} fill="transparent" />
+                        <circle cx={cx} cy={cy + 34} r={8} fill="#2563EB" stroke="white" strokeWidth="1.6" />
+                        <path d={`M ${cx - 3.5} ${cy + 32} h 7 M ${cx - 3.5} ${cy + 36} h 7`} stroke="white" strokeWidth="1.4" strokeLinecap="round" pointerEvents="none" />
+                        <title>上下拖动调整连线弯曲度（自动保存到草稿）</title>
+                      </g>
+                    )}
                   </g>
                 )
               })()}

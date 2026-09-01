@@ -253,6 +253,8 @@ export interface CanvasNode {
     waitHours?: number
     /** 并行分叉节点分支数 */
     branchCount?: number
+    /** 连线视觉偏移（仅显示用）：key = "fromId-toId"，value = 垂直控制点偏移 */
+    edgeOffsets?: Record<string, number>
   }
 }
 
