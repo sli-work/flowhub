@@ -23,3 +23,6 @@ graphify-out/
 # @file-viewer vite 插件生成的渲染资源（构建/开发时自动拷贝）
 frontend/public/vendor/
 frontend/public/
+
+# 仓库镜像本地缓存（git bare clone，含代码副本，不入库）
+backend/.repo-mirror/
