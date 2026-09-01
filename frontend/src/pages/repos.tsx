@@ -119,7 +119,8 @@ function BindRepoDialog({ presetProjectId, onClose, onSaved }: { presetProjectId
   const [connId, setConnId] = useState('')
   const [keyword, setKeyword] = useState('')
   const [remote, setRemote] = useState<RemoteRepoInfo[]>([])
-  const [picked, setPicked] = useState<RemoteRepoInfo | null>(null)
+  /* 多选：一次绑定多个仓库到同一项目（共享连接与角色，逐个提交） */
+  const [picked, setPicked] = useState<RemoteRepoInfo[]>([])
   const [projectId, setProjectId] = useState(presetProjectId ?? '')
   const [role, setRole] = useState<ProjectRepo['role']>('main')
   const [loading, setLoading] = useState(false)
@@ -146,7 +147,7 @@ function BindRepoDialog({ presetProjectId, onClose, onSaved }: { presetProjectId
         `/api/v1/repo-connections/${connId}/remote-repos?q=${encodeURIComponent(q)}`,
       )
       setRemote(d.items)
-      setPicked(null)
+      setPicked([])
     } catch (e) {
       toast.error(e instanceof ApiError ? e.message : '仓库搜索失败')
     } finally {
@@ -156,19 +157,28 @@ function BindRepoDialog({ presetProjectId, onClose, onSaved }: { presetProjectId
 
   useEffect(() => { if (connId) search('') /* 切换连接自动拉取 */ }, [connId]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  const togglePick = (r: RemoteRepoInfo) =>
+    setPicked((prev) => (prev.some((x) => x.providerRepoId === r.providerRepoId) ? prev.filter((x) => x.providerRepoId !== r.providerRepoId) : [...prev, r]))
+
   const save = async () => {
-    if (!picked) { toast.error('请先选择一个仓库'); return }
+    if (!picked.length) { toast.error('请先勾选要绑定的仓库（支持多选）'); return }
     if (!projectId) { toast.error('请选择要绑定到的项目'); return }
     setSaving(true)
     try {
-      await api.post(`/api/v1/projects/${projectId}/repos`, {
-        connection_id: connId, provider_repo_id: picked.providerRepoId, role,
-      })
-      toast.success(`已绑定 ${picked.fullName}`)
-      onSaved()
-      onClose()
-    } catch (e) {
-      toast.error(e instanceof ApiError ? e.message : '绑定失败')
+      let okCount = 0
+      for (const repo of picked) {
+        try {
+          await api.post(`/api/v1/projects/${projectId}/repos`, {
+            connection_id: connId, provider_repo_id: repo.providerRepoId, role,
+          })
+          okCount += 1
+        } catch (e) {
+          // 单个失败（多为重复绑定）不阻断其余仓库
+          toast.warning(`「${repo.fullName}」绑定失败：${e instanceof Error ? e.message : '未知错误'}`)
+        }
+      }
+      if (okCount) toast.success(`已绑定 ${okCount} 个仓库到项目`)
+      if (okCount) { onSaved(); onClose() }
     } finally {
       setSaving(false)
     }
@@ -176,7 +186,7 @@ function BindRepoDialog({ presetProjectId, onClose, onSaved }: { presetProjectId
 
   return (
     <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
-      <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-[560px]">
+      <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-[720px]">
         <DialogHeader>
           <DialogTitle className="text-[15px]">绑定代码仓库到项目</DialogTitle>
         </DialogHeader>
@@ -201,25 +211,36 @@ function BindRepoDialog({ presetProjectId, onClose, onSaved }: { presetProjectId
             <Input value={keyword} onChange={(e) => setKeyword(e.target.value)} placeholder="搜索仓库名称…" onKeyDown={(e) => { if (e.key === 'Enter') search() }} />
             <Button variant="outline" size="sm" disabled={loading} onClick={() => search()}>{loading ? '搜索中…' : '搜索'}</Button>
           </div>
-          <div className="max-h-56 space-y-1.5 overflow-y-auto rounded-lg border border-slate-200 p-2 dark:border-slate-700">
+          <div className="max-h-64 space-y-1.5 overflow-y-auto rounded-lg border border-slate-200 p-2 dark:border-slate-700">
             {remote.length === 0 && <p className="p-3 text-center text-[12px] text-slate-400">该连接下暂无可见仓库</p>}
-            {remote.map((r) => (
-              <button
-                key={r.providerRepoId}
-                className={`flex w-full items-center gap-2 rounded-lg border p-2.5 text-left transition-colors ${
-                  picked?.providerRepoId === r.providerRepoId
-                    ? 'border-blue-300 bg-blue-50 dark:border-blue-500/40 dark:bg-blue-500/10'
-                    : 'border-transparent hover:bg-slate-50 dark:hover:bg-slate-800/60'}`}
-                onClick={() => setPicked(r)}>
-                <GitBranch className="h-4 w-4 flex-none text-slate-400" />
-                <div className="min-w-0 flex-1">
-                  <div className="truncate font-mono text-[12.5px] font-medium text-slate-700 dark:text-slate-200">{r.fullName}</div>
-                  <div className="truncate text-[11px] text-slate-400">{r.description || '无描述'} · 默认分支 {r.defaultBranch}</div>
-                </div>
-                <Badge tone={r.visibility === 'public' ? 'gry' : 'blk'} className="!px-1.5 !text-[10px]">{r.visibility === 'public' ? '公开' : '私有'}</Badge>
-              </button>
-            ))}
+            {remote.map((r) => {
+              const on = picked.some((x) => x.providerRepoId === r.providerRepoId)
+              return (
+                <button
+                  key={r.providerRepoId}
+                  className={`flex w-full items-center gap-2 rounded-lg border p-2.5 text-left transition-colors ${
+                    on
+                      ? 'border-blue-300 bg-blue-50 dark:border-blue-500/40 dark:bg-blue-500/10'
+                      : 'border-transparent hover:bg-slate-50 dark:hover:bg-slate-800/60'}`}
+                  onClick={() => togglePick(r)}>
+                  <span className={`flex h-4 w-4 flex-none items-center justify-center rounded border ${on ? 'border-blue-500 bg-blue-500' : 'border-slate-300 dark:border-slate-600'}`}>
+                    {on && (
+                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3.4" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>
+                    )}
+                  </span>
+                  <GitBranch className="h-4 w-4 flex-none text-slate-400" />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate font-mono text-[12.5px] font-medium text-slate-700 dark:text-slate-200">{r.fullName}</div>
+                    <div className="truncate text-[11px] text-slate-400">{r.description || '无描述'} · 默认分支 {r.defaultBranch}</div>
+                  </div>
+                  <Badge tone={r.visibility === 'public' ? 'gry' : 'blk'} className="!px-1.5 !text-[10px]">{r.visibility === 'public' ? '公开' : '私有'}</Badge>
+                </button>
+              )
+            })}
           </div>
+          {picked.length > 0 && (
+            <p className="text-[11.5px] text-slate-400">已选 {picked.length} 个仓库，将绑定到同一项目并使用同一角色。</p>
+          )}
           <div className="space-y-1.5">
             <label className="text-[13px] font-medium text-slate-600 dark:text-slate-300">仓库角色</label>
             <div className="flex gap-1.5">
@@ -236,7 +257,7 @@ function BindRepoDialog({ presetProjectId, onClose, onSaved }: { presetProjectId
           </div>
           <div className="flex justify-end gap-2 pt-1">
             <Button variant="outline" size="sm" onClick={onClose}>取消</Button>
-            <Button size="sm" disabled={saving || !picked} onClick={save}>{saving ? '绑定中…' : '绑定'}</Button>
+            <Button size="sm" disabled={saving || !picked.length} onClick={save}>{saving ? `绑定中（${picked.length} 个）…` : `绑定${picked.length > 1 ? ` ${picked.length} 个仓库` : ''}`}</Button>
           </div>
         </div>
       </DialogContent>
