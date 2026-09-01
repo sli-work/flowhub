@@ -38,6 +38,16 @@ async def migrate(conn: AsyncConnection) -> None:
         if task_columns and column not in task_columns:
             await conn.execute(text(f'ALTER TABLE tasks ADD COLUMN "{column}" {ddl}'))
             logger.info("migrate: tasks.%s added", column)
+    # users：邮箱（编辑用户可改）与软删标记（删除用户保留审计引用）
+    user_columns = await _existing_columns(conn, "users")
+    user_columns_to_add = {
+        "email": "VARCHAR(128) DEFAULT ''",
+        "deleted": "BOOLEAN DEFAULT FALSE",
+    }
+    for column, ddl in user_columns_to_add.items():
+        if user_columns and column not in user_columns:
+            await conn.execute(text(f'ALTER TABLE users ADD COLUMN "{column}" {ddl}'))
+            logger.info("migrate: users.%s added", column)
     # tasks.created_at：列表"最新创建"排序用（TaskItem 无任何时间列）；从 id 内嵌时间戳回填
     if task_columns and "created_at" not in task_columns:
         await conn.execute(text('ALTER TABLE tasks ADD COLUMN "created_at" VARCHAR(40) DEFAULT \'\''))

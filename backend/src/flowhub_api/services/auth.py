@@ -45,7 +45,7 @@ class AuthService:
     # ---------- 本地登录 ----------
     async def login(self, account: str, password: str) -> tuple[User, str]:
         user = (await self.session.execute(select(User).where(User.account == account))).scalar_one_or_none()
-        if user is None or not user.password_hash or not self.verify_password(password, user.password_hash):
+        if user is None or user.deleted or not user.password_hash or not self.verify_password(password, user.password_hash):
             raise BizError(BizCode.UNAUTH, "账号或密码错误", http_status=401)
         if user.status == "invited":
             # 注册后须管理员审批（docs/02 §1.3-1.5）：待审批状态不可登录（BUG-C 修复）
@@ -66,7 +66,7 @@ class AuthService:
         if role is None:
             raise BizError(BizCode.VALIDATION, "角色不存在")
         user = User(
-            id=gen_id("u"), name=name, account=account,
+            id=gen_id("u"), name=name, account=account, email=email,
             password_hash=self.hash_password(password), dept=dept,
             roles=[role], skills=[], status="invited", must_change_password=True,
         )

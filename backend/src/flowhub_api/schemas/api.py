@@ -31,6 +31,8 @@ class ChangePwdReq(BaseModel):
 # ---------- 组织 / 用户 ----------
 class UserUpdateReq(BaseModel):
     dept: str | None = None
+    email: str | None = None
+    name: str | None = None
     status: str | None = None
     roles: list[str] | None = None
     skills: list[str] | None = None

@@ -15,7 +15,10 @@ class User(Base):
     account: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     dept: Mapped[str] = mapped_column(String(128), default="")
+    email: Mapped[str] = mapped_column(String(128), default="")
     status: Mapped[str] = mapped_column(Enum(*USER_STATUS, name="user_status"), default="active")
+    # 软删：删除用户后保留审计/历史引用，登录与用户列表均过滤
+    deleted: Mapped[bool] = mapped_column(default=False)
     avatar_grad: Mapped[str | None] = mapped_column(String(8), nullable=True)
     ding_talk: Mapped[str | None] = mapped_column(String(64), nullable=True)
     wecom: Mapped[str | None] = mapped_column(String(64), nullable=True)

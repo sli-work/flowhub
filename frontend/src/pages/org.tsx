@@ -11,7 +11,7 @@ import { cn } from '../lib/utils'
 import type { User } from '../types'
 
 const statusMap: Record<string, [Tone, string]> = {
-  active: ['suc', '在职'], disabled: ['err', '已停用'], locked: ['warn', '已锁定'], invited: ['info', '待激活'],
+  active: ['suc', '正常'], disabled: ['err', '已停用'], locked: ['warn', '已锁定'], invited: ['info', '待激活'],
 }
 
 /* 角色 / 技能候选（PRD §5.1：内置全局角色 + 技能标签） */
@@ -22,10 +22,9 @@ const roleName: Record<string, string> = {
   leader: '领导', product_manager: '产品经理', developer: '开发', after_sales: '售后',
   pre_sales: '售前', second_line: '二线',
 }
-const deptOptions: string[] = []
 
 export function OrgPage() {
-  const { openDialog, openApproval, dialog, orgUsers: users, updateUser } = useApp()
+  const { openDialog, openApproval, dialog, orgUsers: users, updateUser, refreshOrgUsers } = useApp()
   const [tab, setTab] = useState<'users' | 'approve' | 'sync'>('users')
   const [editing, setEditing] = useState<User | null>(null)
   /* 概览/部门树/待审批：来自后端聚合接口 */
@@ -61,13 +60,45 @@ export function OrgPage() {
   const saveUser = async (updated: User) => {
     try {
       await api.patch(`/api/v1/org/users/${updated.id}`, {
-        dept: updated.dept, status: updated.status, roles: updated.roles, skills: updated.skills,
+        dept: updated.dept, email: updated.email, status: updated.status, roles: updated.roles, skills: updated.skills,
       })
       updateUser(updated)
       setEditing(null)
-      toast.success(`已保存用户「${updated.name}」的角色/技能配置：${[...updated.roles, ...updated.skills].join('、') || '无'}（变更已审计）`)
+      toast.success(`已保存用户「${updated.name}」的配置（变更已审计）`)
     } catch (e) {
       toast.error(e instanceof ApiError ? e.message : '保存用户失败')
+    }
+  }
+
+  const disableUser = async (u: User) => {
+    if (!window.confirm(`停用「${u.name}」？停用后不可登录、不参与任务分配（已有任务须转办）。`)) return
+    try {
+      await api.patch(`/api/v1/org/users/${u.id}`, { status: 'disabled' })
+      updateUser({ ...u, status: 'disabled' })
+      toast.success(`已停用「${u.name}」`)
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : '停用失败')
+    }
+  }
+
+  const enableUser = async (u: User) => {
+    try {
+      await api.patch(`/api/v1/org/users/${u.id}`, { status: 'active' })
+      updateUser({ ...u, status: 'active' })
+      toast.success(`已启用「${u.name}」`)
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : '启用失败')
+    }
+  }
+
+  const deleteUser = async (u: User) => {
+    if (!window.confirm(`删除「${u.name}（${u.account}）」？用户将立即不可登录并从列表移除（软删，审计记录保留）。`)) return
+    try {
+      await api.del(`/api/v1/org/users/${u.id}`)
+      refreshOrgUsers()
+      toast.success(`已删除用户「${u.name}」`)
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : '删除失败')
     }
   }
 
@@ -171,13 +202,22 @@ export function OrgPage() {
                       <td className="px-4 py-3"><Badge tone={tone} dot>{label}</Badge></td>
                       <td className="px-4 py-3 text-slate-500 dark:text-slate-400">{u.status === 'active' ? `${u.load} 项` : '—'}</td>
                       <td className="px-4 py-3">
-                        {u.status === 'disabled' ? (
-                          <button className="rounded-md border border-amber-300 px-2.5 py-1 text-[11.5px] font-medium text-amber-600 hover:bg-amber-50 dark:border-amber-500/40 dark:text-amber-400" onClick={() => openDialog('userTakeover')}>任务接管</button>
-                        ) : u.status === 'locked' ? (
-                          <button className="rounded-md border border-slate-300 px-2.5 py-1 text-[11.5px] font-medium text-slate-500 hover:border-amber-400 dark:border-slate-700" onClick={() => unlockUser(u)}>解锁</button>
-                        ) : (
-                          <button className="rounded-md border border-slate-300 px-2.5 py-1 text-[11.5px] font-medium text-slate-500 hover:border-blue-400 hover:text-blue-600 dark:border-slate-700 dark:text-slate-400" onClick={() => setEditing(u)}>编辑</button>
-                        )}
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {u.status === 'disabled' ? (
+                            <>
+                              <button className="rounded-md border border-amber-300 px-2.5 py-1 text-[11.5px] font-medium text-amber-600 hover:bg-amber-50 dark:border-amber-500/40 dark:text-amber-400" onClick={() => openDialog('userTakeover')}>任务接管</button>
+                              <button className="rounded-md border border-emerald-300 px-2.5 py-1 text-[11.5px] font-medium text-emerald-600 hover:bg-emerald-50 dark:border-emerald-500/40 dark:text-emerald-400" onClick={() => enableUser(u)}>启用</button>
+                            </>
+                          ) : u.status === 'locked' ? (
+                            <button className="rounded-md border border-slate-300 px-2.5 py-1 text-[11.5px] font-medium text-slate-500 hover:border-amber-400 dark:border-slate-700" onClick={() => unlockUser(u)}>解锁</button>
+                          ) : (
+                            <button className="rounded-md border border-slate-300 px-2.5 py-1 text-[11.5px] font-medium text-slate-500 hover:border-blue-400 hover:text-blue-600 dark:border-slate-700 dark:text-slate-400" onClick={() => setEditing(u)}>编辑</button>
+                          )}
+                          {u.status !== 'disabled' && u.status !== 'locked' && (
+                            <button className="rounded-md border border-slate-300 px-2.5 py-1 text-[11.5px] font-medium text-slate-500 hover:border-amber-400 hover:text-amber-600 dark:border-slate-700 dark:text-slate-400" onClick={() => disableUser(u)}>停用</button>
+                          )}
+                          <button className="rounded-md border border-red-200 px-2.5 py-1 text-[11.5px] font-medium text-red-500 hover:bg-red-50 dark:border-red-500/40 dark:hover:bg-red-500/10" onClick={() => deleteUser(u)}>删除</button>
+                        </div>
                       </td>
                     </tr>
                   )
@@ -251,7 +291,7 @@ export function OrgPage() {
   )
 }
 
-/* ============ 编辑用户：关联角色 / 技能 ============ */
+/* ============ 编辑用户：基础信息（部门/邮箱回显可改）+ 角色 / 技能 + 停用 ============ */
 function EditUserDialog({ user, onSave, onClose }: {
   user: User
   onSave: (u: User) => void
@@ -261,20 +301,21 @@ function EditUserDialog({ user, onSave, onClose }: {
   const [roles, setRoles] = useState<string[]>(user.roles)
   const [skills, setSkills] = useState<string[]>(user.skills)
   const [dept, setDept] = useState(user.dept)
+  const [email, setEmail] = useState(user.email ?? '')
   const [status, setStatus] = useState<User['status']>(user.status)
 
   const toggle = (list: string[], set: (v: string[]) => void, v: string) =>
     set(list.includes(v) ? list.filter((x) => x !== v) : [...list, v])
 
   const save = () => {
-    onSave({ ...user, roles, skills, dept, status })
+    onSave({ ...user, roles, skills, dept, email, status })
   }
 
   return (
     <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
       <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-[480px]">
         <DialogHeader>
-          <DialogTitle className="text-[15px]">编辑用户 · 角色关联</DialogTitle>
+          <DialogTitle className="text-[15px]">编辑用户 · {user.name}</DialogTitle>
         </DialogHeader>
         <div className="space-y-4">
           {/* 用户信息 */}
@@ -290,17 +331,23 @@ function EditUserDialog({ user, onSave, onClose }: {
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <label className="text-[13px] font-medium text-slate-600 dark:text-slate-300">部门</label>
-              <select className="h-9 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm outline-none focus:border-blue-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200" value={dept} onChange={(e) => setDept(e.target.value)}>
-                {deptOptions.map((d) => <option key={d}>{d}</option>)}
-              </select>
+              <input className="h-9 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm outline-none focus:border-blue-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                value={dept} onChange={(e) => setDept(e.target.value)} placeholder="如 平台研发部 / 平台组" />
+              <p className="text-[10.5px] text-slate-400">当前：{user.dept || '（空）'}</p>
             </div>
             <div className="space-y-1.5">
-              <label className="text-[13px] font-medium text-slate-600 dark:text-slate-300">账号状态</label>
-              <select className="h-9 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm outline-none focus:border-blue-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200" value={status} onChange={(e) => setStatus(e.target.value as User['status'])}>
-                <option value="active">在职（active）</option><option value="disabled">停用（disabled）</option>
-                <option value="locked">锁定（locked）</option><option value="invited">待激活（invited）</option>
-              </select>
+              <label className="text-[13px] font-medium text-slate-600 dark:text-slate-300">邮箱</label>
+              <input className="h-9 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm outline-none focus:border-blue-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@company.com" />
+              <p className="text-[10.5px] text-slate-400">通知与找回凭证联系方式</p>
             </div>
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-[13px] font-medium text-slate-600 dark:text-slate-300">账号状态</label>
+            <select className="h-9 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm outline-none focus:border-blue-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200" value={status} onChange={(e) => setStatus(e.target.value as User['status'])}>
+              <option value="active">正常（active）</option><option value="disabled">停用（disabled）</option>
+              <option value="locked">锁定（locked）</option><option value="invited">待激活（invited）</option>
+            </select>
           </div>
 
           {/* 角色多选 */}

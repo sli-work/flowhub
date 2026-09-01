@@ -14,6 +14,7 @@ export interface User {
   name: string
   account: string
   dept: string
+  email?: string
   roles: string[]
   skills: string[]
   avatarGrad?: string // g1-g6
