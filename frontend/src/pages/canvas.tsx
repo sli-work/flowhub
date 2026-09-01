@@ -154,7 +154,14 @@ export function CanvasPage() {
     setVb({ x: px - (px - vb.x) * k, y: py - (py - vb.y) * k, w: nw, h: vb.h * k })
     setZoom(W / nw)
   }
-  const fitView = () => { setVb({ x: 0, y: 0, w: W, h: H }); setZoom(1) }
+  /* 适配视图：以当前节点内容为界（而非固定画布尺寸），保证任何布局下全部节点可见 */
+  const fitView = () => {
+    const list = nodesRef.current.length ? nodesRef.current : nodes
+    const maxX = Math.max(W, ...list.map((n) => n.x + n.width + 32))
+    const maxY = Math.max(H, ...list.map((n) => n.y + n.height + 32))
+    setVb({ x: 0, y: 0, w: maxX, h: maxY })
+    setZoom(W / maxX)
+  }
 
   /* 滚轮缩放（以鼠标位置为中心；非 passive 监听以阻止页面滚动） */
   useEffect(() => {
@@ -458,8 +465,11 @@ export function CanvasPage() {
         layers.get(d)!.push(id)
       }
       const depths = [...layers.keys()].sort((a, b) => a - b)
+      // 行距按画布高度自适应：层级多时压缩行距，保证最深行仍在画布内（含节点高与边距）
       const GAP_X = NODE_W + 72
-      const GAP_Y = NODE_H + 84
+      const GAP_Y = depths.length > 1
+        ? Math.max(NODE_H + 28, Math.min(NODE_H + 84, (H - 36 - NODE_H) / (depths.length - 1)))
+        : NODE_H + 84
       const posById = new Map<string, { x: number; y: number }>()
       depths.forEach((d, row) => {
         const rowIds = layers.get(d)!
@@ -476,6 +486,8 @@ export function CanvasPage() {
       })
       return prev.map((n) => ({ ...n, ...(posById.get(n.id) ?? {}) }))
     })
+    // 布局后适配视图：内容（含新行距）完整可见，避免深层级节点落到画布外
+    setTimeout(() => fitView(), 0)
     setCheckResult(null)
     toast.success('已自动整理：按流转顺序分层蛇形排布')
   }
@@ -485,6 +497,8 @@ export function CanvasPage() {
   /* 悬停节点：显示删除按钮 */
   const [hoverNodeId, setHoverNodeId] = useState<string | null>(null)
 
+  /* 拖动范围：画布高度与现有内容（最深节点）取大者，避免越界节点永远拖不回来 */
+  const dragMaxY = () => Math.max(H - NODE_H - 8, ...nodesRef.current.map((n) => n.y + NODE_H + 8))
   const onWinMove = (e: PointerEvent) => {
     const d = drag.current
     if (!d) return
@@ -492,7 +506,7 @@ export function CanvasPage() {
     if (d.kind === 'move') {
       const nx = Math.round((d.ox + (p.x - d.start.x)) / 8) * 8
       const ny = Math.round((d.oy + (p.y - d.start.y)) / 8) * 8
-      updateNode(d.id, { x: Math.max(8, Math.min(W - NODE_W - 8, nx)), y: Math.max(8, Math.min(H - NODE_H - 8, ny)) })
+      updateNode(d.id, { x: Math.max(8, Math.min(W - NODE_W - 8, nx)), y: Math.max(8, Math.min(dragMaxY(), ny)) })
     } else {
       // 连线磁吸：指针靠近目标节点（含 16px 外扩热区）时吸附到其左侧端口，松手即连
       const hit = hitNodeRef(p, 16)
