@@ -14,7 +14,7 @@ from flowhub_api.db.session import SessionFactory, engine
 from flowhub_api.models import Base
 from flowhub_api.routes import (
     access_keys, audits, auth, dashboard, documents, matrix, notifications,
-    org, projects, search, tasks, templates, workitems, experts, external_tools,
+    org, projects, repos, search, tags, tasks, templates, workitems, experts, external_tools,
 )
 from flowhub_api.seed.init import seed_all
 
@@ -36,6 +36,8 @@ async def lifespan(_: FastAPI):
             await load_runtime_config(session)
         from flowhub_api.services.expert_runtime import setup_checkpointer
         await setup_checkpointer()
+        from flowhub_api.services.repo_mirror import schedule_all_mirror_builds
+        await schedule_all_mirror_builds()  # 启动预热：为绑定仓库的后台任务自愈重建镜像（不阻塞）
         logger.info("数据库初始化完成（PostgreSQL 已连接）")
     except Exception as exc:  # noqa: BLE001
         logger.warning(
@@ -89,8 +91,13 @@ async def health():
     return {"status": "ok"}
 
 
-for r in (auth, org, projects, templates, workitems, tasks, matrix, access_keys, experts, external_tools, documents, notifications, audits, dashboard, search):
+for r in (auth, org, projects, templates, workitems, tasks, matrix, access_keys, experts, external_tools, documents, notifications, audits, dashboard, search, tags):
     app.include_router(r.router)
+
+# 代码仓库：连接管理 / 全局仓库列表 / 项目绑定（单模块三组前缀）
+app.include_router(repos.router)
+app.include_router(repos.repos_router)
+app.include_router(repos.project_router)
 
 # 外部 Agent 接入：MCP SSE server（/api/v1/mcp/sse，access key 认证）
 from flowhub_api.services.mcp_server import mcp_starlette_app

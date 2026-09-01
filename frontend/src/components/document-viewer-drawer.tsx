@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { Download, FileText, LoaderCircle, PanelLeftClose, PanelLeftOpen, X } from 'lucide-react'
 import FileViewer from '@file-viewer/react'
 import officePreset from '@file-viewer/preset-office'
@@ -36,30 +36,68 @@ export function DocumentViewerDrawer({ open, docs, initialDocId, onClose }: { op
   const [currentId, setCurrentId] = useState<string | null>(initialDocId ?? docs[0]?.id ?? null)
   const [listOpen, setListOpen] = useState(true)
   const [blobUrl, setBlobUrl] = useState<string | null>(null)
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const blobRef = useRef<string | null>(null)
+  /* 左缘拖拽调宽：默认 min(1100px, 94vw)，可向左拉伸扩展阅读范围 */
+  const [width, setWidth] = useState(() => Math.min(1100, Math.round(window.innerWidth * 0.94)))
+  const dragRef = useRef<{ startX: number; startWidth: number } | null>(null)
+
+  const startResize = (e: ReactMouseEvent) => {
+    e.preventDefault()
+    dragRef.current = { startX: e.clientX, startWidth: width }
+    document.body.style.userSelect = 'none'
+    document.body.style.cursor = 'col-resize'
+    const onMove = (ev: MouseEvent) => {
+      if (!dragRef.current) return
+      const max = Math.max(480, Math.min(window.innerWidth * 0.94, 2200))
+      const next = dragRef.current.startWidth + (dragRef.current.startX - ev.clientX)
+      setWidth(Math.round(Math.min(Math.max(next, 480), max)))
+    }
+    const onUp = () => {
+      dragRef.current = null
+      document.body.style.userSelect = ''
+      document.body.style.cursor = ''
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
 
   const current = useMemo(() => docs.find((d) => d.id === currentId) ?? null, [docs, currentId])
   const resolvedTheme: ThemeMode = themeMode
+  const isZip = !!current && current.name.toLowerCase().endsWith('.zip')
 
   useEffect(() => {
     if (open) setCurrentId(initialDocId ?? docs[0]?.id ?? null)
   }, [open, initialDocId, docs])
 
   useEffect(() => {
-    if (!open || !current) { setBlobUrl(null); setError(''); return }
+    if (!open || !current) { setBlobUrl(null); setPreviewUrl(null); setError(''); return }
     let revoked = false
     const controller = new AbortController()
     setLoading(true)
     setError('')
-    api.getBlob(`/api/v1/documents/${current.id}/download`, controller.signal)
+    setPreviewUrl(null)
+    // zip（Axure 导出 HTML 包）：取短时 token 走同源 iframe 静态预览；其余走 FileViewer Blob
+    const previewTask = current.name.toLowerCase().endsWith('.zip')
+      ? api.post<{ link: string }>(`/api/v1/documents/${current.id}/link`)
+          .then((d) => {
+            const token = new URLSearchParams(d.link.split('?')[1] ?? '').get('token')
+            if (!token) throw new Error('预览链接无效')
+            if (!revoked) setPreviewUrl(`/api/v1/documents/${current.id}/preview/index.html?token=${encodeURIComponent(token)}`)
+          })
+      : Promise.resolve()
+    const blobTask = api.getBlob(`/api/v1/documents/${current.id}/download`, controller.signal)
       .then((blob) => {
         if (revoked) return
         const url = URL.createObjectURL(blob)
         blobRef.current = url
         setBlobUrl(url)
       })
+    Promise.all([previewTask, blobTask])
       .catch((e) => { if (!revoked) setError(e instanceof Error ? e.message : '文档加载失败') })
       .finally(() => { if (!revoked) setLoading(false) })
     return () => {
@@ -82,7 +120,18 @@ export function DocumentViewerDrawer({ open, docs, initialDocId, onClose }: { op
   return (
     <div className="fixed inset-0 z-[80] flex justify-end" role="dialog" aria-modal="true" aria-label="文档预览">
       <button className="absolute inset-0 cursor-default bg-slate-950/40 backdrop-blur-[1px]" aria-label="关闭预览" onClick={onClose} />
-      <aside className="relative flex h-full w-full max-w-[min(1100px,94vw)] flex-col border-l border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-950">
+      <aside style={{ width }} className="relative flex h-full flex-col border-l border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-950">
+        {/* 左缘拖拽手柄：向左拖动拉宽预览区 */}
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="拖拽调整预览宽度"
+          onMouseDown={startResize}
+          onDoubleClick={() => setWidth(Math.min(1100, Math.round(window.innerWidth * 0.94)))}
+          className="group absolute inset-y-0 left-0 z-20 flex w-1.5 cursor-col-resize items-center justify-center hover:bg-blue-500/20"
+        >
+          <div className="h-10 w-1 rounded-full bg-slate-200 transition-colors group-hover:bg-blue-500 dark:bg-slate-600" />
+        </div>
         <header className="flex flex-none items-center gap-3 border-b border-slate-100 px-4 py-3 dark:border-slate-800">
           <button className="flex h-8 w-8 flex-none items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200"
             onClick={() => setListOpen((v) => !v)} aria-label={listOpen ? '收起文件列表' : '展开文件列表'}>
@@ -136,6 +185,14 @@ export function DocumentViewerDrawer({ open, docs, initialDocId, onClose }: { op
                 <p className="text-[12.5px] text-red-500">{error}</p>
                 <p className="text-[11px] text-slate-400">可尝试下载后本地查看</p>
               </div>
+            ) : isZip && previewUrl ? (
+              <iframe
+                key={current.id}
+                src={previewUrl}
+                title={`Axure 预览：${current.name}`}
+                className="h-full w-full border-0 bg-white"
+                sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
+              />
             ) : blobUrl && current ? (
               <FileViewer
                 key={current.id}

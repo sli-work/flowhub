@@ -114,3 +114,79 @@ class TestDeleteRestore:
     def test_delete_not_found(self, client: TestClient, org_headers: dict):
         r = client.delete("/api/v1/documents/ghost", headers=org_headers)
         assert r.status_code == 404
+
+
+class TestAxurePreview:
+    """Axure zip 预览：外层目录剥离（macOS 压缩文件夹）/ __MACOSX 忽略 / 子资源 cookie 鉴权。"""
+
+    @staticmethod
+    def _make_axure_zip(wrap: bool) -> bytes:
+        import io as _io
+        import zipfile as _zf
+
+        buf = _io.BytesIO()
+        paths = (
+            ["AxureDemo/index.html", "AxureDemo/resources/style.css", "AxureDemo/data.js", "__MACOSX/AxureDemo/._index.html"]
+            if wrap else
+            ["index.html", "resources/style.css", "data.js", "__MACOSX/._index.html"]
+        )
+        with _zf.ZipFile(buf, "w") as zf:
+            for p in paths:
+                zf.writestr(p, f"/* {p} */")
+        return buf.getvalue()
+
+    def _upload(self, client: TestClient, leader_headers: dict, data: bytes) -> str:
+        r = client.post("/api/v1/documents/upload", headers=leader_headers,
+                        files={"file": ("axure-demo2.zip", io.BytesIO(data), "application/zip")},
+                        data={"project": "订单中心", "kind": "原型"})
+        assert r.status_code == 200, r.text
+        return r.json()["data"]["doc"]["id"]
+
+    def test_extract_strips_wrapper_dir_and_macosx(self, tmp_path):
+        from flowhub_api.routes.documents import _extract_zip_checked
+
+        cache = tmp_path / "doc1"
+        _extract_zip_checked(self._make_axure_zip(wrap=True), cache)
+        assert (cache / "index.html").is_file(), "外层目录应被剥离，index.html 位于包根"
+        assert (cache / "resources" / "style.css").is_file()
+        assert not (cache / "AxureDemo").exists()
+        assert not any("__MACOSX" in str(p) for p in cache.rglob("*")), "__MACOSX 应被忽略"
+
+        cache2 = tmp_path / "doc2"
+        _extract_zip_checked(self._make_axure_zip(wrap=False), cache2)
+        assert (cache2 / "index.html").is_file(), "无外层目录时保持原样"
+
+    def test_gbk_entry_name_decoded(self):
+        """未设 UTF-8 标志的中文条目名（实际字节为 UTF-8 或 GBK）解压时应还原为中文名。"""
+        from types import SimpleNamespace
+
+        from flowhub_api.routes.documents import _zip_entry_name
+
+        cn_name = "待处理告警-告警中心.html"
+        utf8_mojibake = cn_name.encode("utf-8").decode("cp437")   # macOS 压缩未标志条目（本例 DRCC 包）
+        gbk_mojibake = cn_name.encode("gbk").decode("cp437")      # Windows 中文导出
+        assert _zip_entry_name(SimpleNamespace(filename=utf8_mojibake, flag_bits=0)) == cn_name
+        assert _zip_entry_name(SimpleNamespace(filename=gbk_mojibake, flag_bits=0)) == cn_name
+        assert _zip_entry_name(SimpleNamespace(filename=cn_name, flag_bits=0x800)) == cn_name
+        assert _zip_entry_name(SimpleNamespace(filename="index.html", flag_bits=0)) == "index.html"
+
+    def test_preview_index_and_subresource_auth(self, client: TestClient, leader_headers: dict):
+        doc_id = self._upload(client, leader_headers, self._make_axure_zip(wrap=True))
+        r = client.post(f"/api/v1/documents/{doc_id}/link", headers=leader_headers)
+        assert r.status_code == 200, r.text
+        token = r.json()["data"]["link"].split("token=", 1)[1]
+
+        # index.html：query token 可访问
+        idx = client.get(f"/api/v1/documents/{doc_id}/preview/index.html?token={token}")
+        assert idx.status_code == 200, idx.text
+
+        # 子资源：无 query token 且无 cookie → 401；带 /link 下发的预览 cookie → 200
+        cookie_name = f"fh_doc_preview_{doc_id}"
+        cookie_value = client.cookies.get(cookie_name)
+        assert cookie_value, "/link 应下发预览 cookie"
+        client.cookies.clear()
+        bare = client.get(f"/api/v1/documents/{doc_id}/preview/resources/style.css")
+        assert bare.status_code == 401
+        sub = client.get(f"/api/v1/documents/{doc_id}/preview/resources/style.css",
+                         cookies={cookie_name: cookie_value})
+        assert sub.status_code == 200, sub.text

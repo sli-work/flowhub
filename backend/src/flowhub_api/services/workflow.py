@@ -9,8 +9,10 @@ from flowhub_api.core.response import BizCode, BizError
 from flowhub_api.models import (
     GlobalTemplate, NodeAssignment, NotificationItem, Project, TaskItem, User, WorkItem, WorkflowInstance,
 )
+from flowhub_api.models.workflow import PRIORITY
 from flowhub_api.seed.init import gen_id
 from flowhub_api.services.audit import AuditService
+from flowhub_api.services import repo_mirror
 
 
 class WorkflowService:
@@ -74,9 +76,11 @@ class WorkflowService:
                 f"仅「{start_label}」节点的处理人（{names}）可创建工作项",
                 http_status=403,
             )
+        # priority 归一化：起始表单选项可能为小写（p0），而 DB 枚举只接受大写（P0-P3）；非法值回落 P2
+        raw_priority = str(start_values.get("priority") or "").upper()
         wi = WorkItem(
             id=self.next_wi_id(wi_type), type=wi_type, title=title,
-            project=project.name, priority=(start_values.get("priority") or "P2"),
+            project=project.name, priority=raw_priority if raw_priority in PRIORITY else "P2",
             status="in_progress", assignee=creator.name, creator=creator.name,
             due=(datetime.now(UTC) + timedelta(days=3)).strftime("%m-%d"),
             labels=(start_values.get("labels") or []), progress=start_label,
@@ -96,6 +100,7 @@ class WorkflowService:
             assignee=creator.name,
             due=(datetime.now(UTC) + timedelta(hours=48)).strftime("%m-%d %H:%M"),
             sla_hours=48,
+            created_at=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
         )
         self.session.add(wi)
         self.session.add(instance)
@@ -219,6 +224,13 @@ class WorkflowService:
             sv = wi.start_values or {}
             summary = "；".join(f"{k}={str(v)[:80]}" for k, v in sv.items() if k != "labels" and str(v).strip())[:600]
             lines.append(f"## 工作项背景\n{summary}")
+        if wi is not None:
+            # 仓库地图层：任务书渲染不阻塞（只用已建镜像），缺镜像时后台补建
+            repo_section = await repo_mirror.repo_map_section(self.session, wi.project, allow_clone=False)
+            if "镜像构建中" in repo_section:
+                await repo_mirror.schedule_mirror_build(wi.project)
+            if repo_section:
+                lines.append(f"## 关联代码仓库\n{repo_section}")
         if deliverable.get("example"):
             lines.append(f"## 参考示例\n{deliverable['example']}")
         return "\n\n".join(lines)
@@ -251,8 +263,28 @@ class WorkflowService:
             if state is not None:
                 inst.state = state
 
-    async def advance(self, task: TaskItem, project: Project, tpl: GlobalTemplate) -> dict:
-        """完成任务 → 沿边推进到下一节点（决策按条件选分支 / 并行分叉拆单 / 汇合等齐）→ 绑定解析 → 生成新任务。"""
+    async def _find_open_task_at(self, task: TaskItem, node_id: str) -> TaskItem | None:
+        """幂等兜底：同工作项、同节点、同子线上已有未终结任务则返回它（父级任务，非拆分子任务）。
+        防止重复提交/多实例写入在相同节点生成重复待办（子任务拆分的并行子线不受影响）。"""
+        lineage_cond = (
+            TaskItem.lineage_root_id == task.lineage_root_id
+            if task.lineage_root_id
+            else TaskItem.lineage_root_id.is_(None)
+        )
+        return (await self.session.execute(
+            select(TaskItem).where(
+                TaskItem.wi_id == task.wi_id,
+                TaskItem.node_id == node_id,
+                TaskItem.status.not_in(["completed", "cancelled"]),
+                TaskItem.parent_task_id.is_(None),
+                TaskItem.id != task.id,
+                lineage_cond,
+            ).order_by(TaskItem.id).limit(1)
+        )).scalar_one_or_none()
+
+    async def advance(self, task: TaskItem, project: Project, tpl: GlobalTemplate, auto_depth: int = 0) -> dict:
+        """完成任务 → 沿边推进到下一节点（决策按条件选分支 / 并行分叉拆单 / 汇合等齐）→ 绑定解析 → 生成新任务。
+        auto_depth：自动节点的递归采纳深度（防连环自动节点 + 环画布无限递归）。"""
         nodes = tpl.nodes
         edges = await self._edges_of(tpl)
         current = task.node_id
@@ -293,13 +325,17 @@ class WorkflowService:
                 wi.progress = f"{cur_node.get('label', '完成')}（等待其他分支）"
             return {"next_node": cur_node, "next_assignees": [], "closed": open_left is None}
 
-        # 决策节点：多条出边按提交表单值选一条分支（无匹配走默认分支）
-        if cur_node and cur_node.get("type") == "decision" and len(out_edges) > 1:
-            cfg = await self._node_cfg_of(tpl, current) or {}
-            branches = cfg.get("branches") or {}
+        # 决策节点：多条出边且配置了分支条件 → 按提交表单值选一条（无匹配走默认分支）；
+        # 未配置任何条件时视为并行分叉（全部分支生成任务），避免静默丢弃分支导致后续汇合永久等待
+        is_decision = bool(cur_node and cur_node.get("type") == "decision")
+        branches_cfg = (cfg.get("branches") or {}) if is_decision else {}
+        decision_conditional = is_decision and len(out_edges) > 1 and any(
+            branches_cfg.get(to) for to in out_edges
+        )
+        if decision_conditional:
             form = task.form_values or {}
             out_edges = [
-                next((to for to in out_edges if self._match_cond(form, branches.get(to))),
+                next((to for to in out_edges if self._match_cond(form, branches_cfg.get(to))),
                      cfg.get("defaultBranch") or out_edges[0]),
             ]
 
@@ -313,16 +349,18 @@ class WorkflowService:
             await self._sync_instance(task.wi_id, node_id="", state="closed")
             return {"next_node": None, "next_assignees": [], "closed": True}
 
-        # 并行分叉：非决策节点多条出边 → 每个分支各生成一个任务（拆单）
-        if cur_node and cur_node.get("type") not in ("decision", "parallel_join") and len(out_edges) > 1:
+        # 并行分叉：多条出边且非（配置了条件的决策节点 / 汇合节点）→ 每个分支各生成一个任务（拆单）
+        if cur_node and cur_node.get("type") != "parallel_join" and len(out_edges) > 1 and not decision_conditional:
             new_tasks = []
             for to in out_edges:
                 nxt = next((n for n in nodes if n.get("id") == to), {"id": to, "label": to})
-                t = await self._spawn_task(task, project, tpl, nxt)
-                new_tasks.append(t)
+                # 幂等兜底：该分支节点已有未终结任务则复用，不重复生成
+                existing = await self._find_open_task_at(task, to)
+                new_tasks.append(existing if existing is not None else await self._spawn_task(task, project, tpl, nxt, auto_depth=auto_depth))
             task.status = "completed"
             wi = await self.session.get(WorkItem, task.wi_id)
-            if wi:
+            # 首分支若是自动节点且已被递归采纳流转，进度以内层更新为准
+            if wi and new_tasks[0].status != "completed":
                 wi.progress = new_tasks[0].node
             first_assignees = await self.resolve_node_assignees(project.id, tpl.id, new_tasks[0].node_id)
             await self._sync_instance(task.wi_id, node_id=new_tasks[0].node_id)
@@ -357,15 +395,23 @@ class WorkflowService:
                 await self._sync_instance(task.wi_id, node_id=next_id)
                 return {"next_node": next_node, "next_assignees": [], "waiting_join": True, "join_sources": missing}
 
-        # 正常推进：生成单个下一节点任务
-        new_task = await self._spawn_task(task, project, tpl, next_node)
+        # 正常推进：生成单个下一节点任务（幂等兜底：已有未终结任务则复用，防重复提交产生重复待办）
+        existing = await self._find_open_task_at(task, next_id)
+        if existing is not None:
+            new_task = existing
+        else:
+            new_task = await self._spawn_task(task, project, tpl, next_node, auto_depth=auto_depth)
         task.status = "completed"
         wi = await self.session.get(WorkItem, task.wi_id)
-        if wi:
+        # 若 new_task 是自动节点且已被递归采纳并继续流转（status 已 completed），
+        # 内层 advance 已更新进度/实例，外层不得覆盖为中间节点
+        advanced_further = new_task.status == "completed"
+        if wi and not advanced_further:
             wi.progress = next_node.get("label", next_id)
             wi.assignee = new_task.assignee
         assignees = await self.resolve_node_assignees(project.id, tpl.id, next_id)
-        await self._sync_instance(task.wi_id, node_id=next_id)
+        if not advanced_further:
+            await self._sync_instance(task.wi_id, node_id=next_id)
         return {
             "next_node": next_node,
             "next_assignees": [{"id": u.id, "name": u.name, "dept": u.dept} for u in assignees],
@@ -397,16 +443,76 @@ class WorkflowService:
         acceptance = self.deliverable_of(cfg).get("acceptance") or []
         return {item.get("key", ""): {"text": item.get("text", ""), "checked": True, "source": "ai"} for item in acceptance}
 
-    async def ai_autosubmit(self, task: TaskItem, project: Project, tpl: GlobalTemplate, cfg: dict, run, actor: User) -> dict:
-        """Expert 自动节点：填充表单后自动流转。返回 advance 结果。"""
+    async def ai_autosubmit(self, task: TaskItem, project: Project, tpl: GlobalTemplate, cfg: dict, run, actor: User, auto_depth: int = 0) -> dict:
+        """Expert 自动节点：采纳 run 产出填充表单后自动流转。返回 advance 结果。
+        若节点开启 ai_auto 拆分且模型输出带 split 数组，则拆分为多条子线（父完成不 advance）。"""
         values, warnings = await self.fill_task_from_run(task, run, cfg, actor)
-        task.form_values = values
         task.acceptance_checks = self.acceptance_checks_ai(cfg)
+        split_mode = (cfg.get("split") or {}).get("mode", "off")
+        from flowhub_api.services.expert_runtime import extract_split_proposals
+
+        proposals = extract_split_proposals(run.output or "") if split_mode == "ai_auto" else []
+        if split_mode == "ai_auto" and proposals:
+            children = [
+                {"title": str(p.get("title", ""))[:120], "note": str(p.get("note", "")), "assignee": str(p.get("assignee_hint", ""))}
+                for p in proposals if str(p.get("title", "")).strip()
+            ]
+            if children:
+                task.form_values = {k: v for k, v in values.items() if k != "split"}
+                await AuditService(self.session).record(
+                    actor=f"Expert({actor.name})", action="task:ai_split", target=f"{task.id} · {task.node}",
+                    result="success", after={"runId": run.id, "children": [c["title"] for c in children]},
+                )
+                await self.split_task(task, project, tpl, children, actor)
+                return {"split": True, "children": len(children)}
+        task.form_values = values
         await AuditService(self.session).record(
             actor=f"Expert({actor.name})", action="task:ai_submit", target=f"{task.id} · {task.node}",
             result="success", after={"runId": run.id, "warnings": warnings[:5]},
         )
-        return await self.advance(task, project, tpl)
+        return await self.advance(task, project, tpl, auto_depth=auto_depth)
+
+    async def submit_and_advance(self, t: TaskItem, form_values: dict | None, acceptance_checks: dict | None, actor: User) -> dict:
+        """人工提交任务核心（HTTP 路由与外部 MCP 工具共用）：
+        表单/验收快照落库 → 表单附件回填工作项关联 → 沿边流转 → 审计。
+        调用方负责 commit 与响应组装；返回 advance 结果（或无绑定时的兜底结果）。"""
+        from flowhub_api.models import DocItem
+
+        t.form_values = form_values or {}
+        t.acceptance_checks = acceptance_checks or {}
+        # 表单附件回填工作项关联：与发起流程时的 _attachment_ids 同语义，防止文档游离
+        attachment_ids = [
+            v.get("id") for v in (form_values or {}).values()
+            if isinstance(v, dict) and isinstance(v.get("id"), str)
+        ] + [
+            ref.get("id") for v in (form_values or {}).values() if isinstance(v, list)
+            for ref in v if isinstance(ref, dict) and isinstance(ref.get("id"), str)
+        ]
+        if attachment_ids:
+            docs = (await self.session.execute(
+                select(DocItem).where(DocItem.id.in_(attachment_ids), DocItem.wi.is_(None))
+            )).scalars().all()
+            for d in docs:
+                d.wi = t.wi_id
+        # 推进流程：需要项目 + 模板定位主边
+        project = (await self.session.execute(select(Project).where(Project.name == t.project))).scalar_one_or_none()
+        tpl = None
+        if project:
+            binding = next((b for b in project.template_bindings if b.status == "active"), None)
+            if binding:
+                tpl = await self.session.get(GlobalTemplate, binding.template_id)
+        if project and tpl:
+            result = await self.advance(t, project, tpl)
+        else:
+            # 无项目绑定 → 仅标记完成
+            t.status = "completed"
+            result = {"next_node": None, "next_assignees": [], "task": None, "tasks": [], "closed": True}
+        await AuditService(self.session).record(
+            actor=actor.name, action="task:submit", target=f"{t.id} · {t.node}", result="success",
+            after={"next": result.get("next_node").get("label") if result.get("next_node") else None,
+                   "assignees": [a.get("name") for a in (result.get("next_assignees") or []) if isinstance(a, dict)]},
+        )
+        return result
 
     async def resolve_template_for_task(self, task: TaskItem) -> tuple[Project | None, GlobalTemplate | None]:
         project = (await self.session.execute(select(Project).where(Project.name == task.project))).scalar_one_or_none()
@@ -417,7 +523,7 @@ class WorkflowService:
                 tpl = await self.session.get(GlobalTemplate, binding.template_id)
         return project, tpl
 
-    async def _spawn_task(self, task: TaskItem, project: Project, tpl: GlobalTemplate, next_node: dict, *, title: str = "", assignee: str = "", due_hours: int | None = None, brief: str = "", parent_task_id: str | None = None, lineage_root_id: str | None = None) -> TaskItem:
+    async def _spawn_task(self, task: TaskItem, project: Project, tpl: GlobalTemplate, next_node: dict, *, title: str = "", assignee: str = "", due_hours: int | None = None, brief: str = "", parent_task_id: str | None = None, lineage_root_id: str | None = None, auto_depth: int = 0) -> TaskItem:
         """为 next_node 生成任务并触发绑定的 Expert Deployment。
         覆盖参数供子任务拆分使用（标题/负责人/截止/拆分说明/父链接）。"""
         next_id = next_node.get("id", "")
@@ -435,9 +541,12 @@ class WorkflowService:
             # 普通后继沿用当前子线 root；拆分起点首次创建时稍后以自身 id 固定 root
             lineage_root_id=lineage_root_id if lineage_root_id is not None else task.lineage_root_id,
             brief=brief,
+            created_at=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
         )
         # Expert Deployment 节点集成：画布绑定一个已发布的 Deployment。
-        # 运行时读取固定 Version，由 LangGraph 执行并在写入操作处 interrupt。
+        # run 语义统一（不再走 write_intent 审批中断）：
+        # - 自动节点：run 成功后直接采纳产出 → 填充表单 → 自动流转（免人工介入）
+        # - 协助节点：run 结果由处理人在任务页点击「采纳」回填表单
         canvas_cfg = await self._node_cfg_of(tpl, next_id)
         handler = (canvas_cfg or {}).get("handler", "")
         expert_cfg = (canvas_cfg or {}).get("expert") or {}
@@ -456,19 +565,59 @@ class WorkflowService:
                 expert_user = (await self.session.execute(
                     select(User).join(User.roles).where(User.name == "系统管理员")
                 )).scalars().first()
-            from flowhub_api.services.expert_runtime import start_deployment_run
+            from flowhub_api.services.expert_runtime import schedule_deployment_run
 
             # AI 拿到与人相同的产出契约任务书，而不是「id·标题·节点」三件套
             brief_text = await self.build_task_brief(new_task, tpl)
-            if handler == "Expert 自动":
+            is_auto = handler == "Expert 自动"
+            if is_auto and ((canvas_cfg or {}).get("split") or {}).get("mode") == "ai_auto":
+                brief_text += (
+                    "\n\n## 自动拆分指令\n本节点要求对工作拆分为可独立执行的子任务。"
+                    '请在输出 JSON 中额外增加 "split" 字段（数组），每项格式：'
+                    '{"title":"子任务标题","note":"子任务要求说明","assignee_hint":"建议负责人"}；'
+                    "拆分粒度到可独立交付的模块，数量 1-5 个。"
+                )
+            if is_auto:
+                # 自动节点处理期间禁止人工提交（后台完成后自动采纳流转，失败回退 assigned）
                 new_task.status = "pending_confirmation"
-            run = await start_deployment_run(
+            expert_user_id = expert_user.id if expert_user is not None else None
+            auto_depth_next = auto_depth + 1
+
+            async def _on_auto_finished(bg_session, bg_run):
+                """自动节点后台 Run 完成回调（独立 Session）：成功 → 采纳流转；失败/校验不过 → 回退人工。"""
+                if not is_auto:
+                    return
+                bg_task = await bg_session.get(TaskItem, new_task.id)
+                if bg_task is None or bg_task.status != "pending_confirmation":
+                    return
+                if bg_run.status == "succeeded" and expert_user_id and auto_depth < 5:
+                    bg_user = await bg_session.get(User, expert_user_id)
+                    if bg_user is not None:
+                        try:
+                            svc = WorkflowService(bg_session)
+                            project_bg, tpl_bg = await svc.resolve_template_for_task(bg_task)
+                            if project_bg is not None and tpl_bg is not None:
+                                cfg_bg = await svc._node_cfg_of(tpl_bg, bg_task.node_id) or {}
+                                if cfg_bg.get("handler") == "Expert 自动":
+                                    await svc.ai_autosubmit(
+                                        bg_task, project_bg, tpl_bg, cfg_bg, bg_run, bg_user,
+                                        auto_depth=auto_depth_next,
+                                    )
+                                    return
+                        except BizError:
+                            pass  # 产出未通过节点校验（必填缺失等）→ 落到人工兜底
+                # 运行失败 / 深度超限 / 校验不过：回退人工兜底（保持待办可见）
+                refreshed = await bg_session.get(TaskItem, new_task.id)
+                if refreshed is not None and refreshed.status == "pending_confirmation":
+                    refreshed.status = "assigned"
+
+            # Run 后台执行：提交请求不再等待 LLM（此前内联执行导致提交挂起 30s+）；
+            # 协助节点完成后处理人在任务页「采纳」；自动节点由 _on_auto_finished 自动采纳流转
+            await schedule_deployment_run(
                 self.session, deployment_id, brief_text,
-                expert_user, write_intent=handler == "Expert 自动", task_id=new_task.id,
+                expert_user, task_id=new_task.id,
+                on_finished=_on_auto_finished,
             )
-            if handler == "Expert 自动" and run.status == "failed":
-                # 运行失败：回退人工兜底（保持待办可见，不再阻塞提交）
-                new_task.status = "assigned"
         self.session.add(new_task)
         await self.session.flush()
         return new_task

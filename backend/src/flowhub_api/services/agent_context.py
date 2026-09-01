@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from flowhub_api.core.response import BizCode, BizError
 from flowhub_api.models import DocItem, TaskAppend, TaskItem, User, WorkItem
 from flowhub_api.services.document_access import document_content_link
+from flowhub_api.services import repo_mirror
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +97,13 @@ async def build_task_context(session: AsyncSession, user: User, task: TaskItem, 
             lines.append(_fmt_values(wi.start_values).replace("\n", "\n    "))
     else:
         lines.append(f"  - ID: {task.wi_id}（工作项不存在）")
+
+    # 绑定仓库的地图层（目录概览/README/依赖清单）：失败降级为空，不阻断上下文
+    if wi is not None:
+        repo_section = await repo_mirror.repo_map_section(session, wi.project, allow_clone=True)
+        if repo_section:
+            lines.append("")
+            lines.append(repo_section)
 
     lines.append("")
     lines.append(f"【当前节点任务】{task.id}｜节点「{task.node}」｜状态 {task.status}｜处理人 {task.assignee}｜截止 {task.due}")

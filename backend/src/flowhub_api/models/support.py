@@ -27,6 +27,17 @@ class DocItem(Base):
     deleted: Mapped[bool] = mapped_column(default=False)
 
 
+class TagItem(Base):
+    """预定义标签（如版本号）：创建工作项时绑定，全局唯一。"""
+    __tablename__ = "tags"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    name: Mapped[str] = mapped_column(String(64), unique=True)
+    color: Mapped[str] = mapped_column(String(16), default="gry")  # 前端 Badge tone
+    creator: Mapped[str] = mapped_column(String(64), default="")
+    time: Mapped[str] = mapped_column(String(32), default="")
+    deleted: Mapped[bool] = mapped_column(default=False)
+
+
 class RuntimeConfig(Base):
     """管理员页面维护的运行配置；敏感值以 Fernet 密文保存。"""
     __tablename__ = "runtime_configs"

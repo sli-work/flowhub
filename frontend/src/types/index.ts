@@ -1,11 +1,11 @@
 /* ============ FlowHub 领域类型（与 PRD v2.0 / 原型一致） ============ */
 
 export type PageId =
-  | 'tasks' | 'notif' | 'dashboard' | 'projects' | 'workitem' | 'node'
+  | 'tasks' | 'notif' | 'dashboard' | 'projects' | 'workitem' | 'workitems' | 'node'
   | 'templates' | 'canvas' | 'docs' | 'org' | 'matrix' | 'audit' | 'channel'
   | 'os-overview' | 'aichat' | 'expert-center' | 'skill-center' | 'mcp-center'
   | 'provider-center' | 'knowledge' | 'memory' | 'runtime-center' | 'approvals' | 'external-tools'
-  | 'expert-editor'
+  | 'expert-editor' | 'repos'
 
 export type RoleKey = 'leader' | 'org' | 'dev' | 'sales'
 
@@ -68,6 +68,8 @@ export interface TaskItem {
   /** 子任务拆分：父任务 id / 子任务携带的需求说明 */
   parentTaskId?: string | null
   brief?: string
+  /** 创建时间（ISO 字符串，「最新创建」排序用；seed 存量数据可能为空） */
+  createdAt?: string
   /** 项目归档冻结：任务仅可查看，不可流转 */
   frozen?: boolean
 }
@@ -92,6 +94,18 @@ export interface ProjectTemplateBinding {
   assignments: NodeAssignment[]
 }
 
+export interface ProjectRepo {
+  bindingId: string
+  repoId: string
+  fullName: string
+  webUrl: string
+  provider: 'github' | 'gitlab'
+  role: 'main' | 'docs' | 'service' | 'lib'
+  defaultBranch: string
+  visibility: string
+  connectionStatus: 'ok' | 'invalid'
+}
+
 export interface Project {
   id: string
   name: string
@@ -106,6 +120,56 @@ export interface Project {
   updated: string
   readOnly?: boolean
   templateBindings: ProjectTemplateBinding[]
+  /** 绑定的代码仓库（多对多，项目卡片 / 详情展示） */
+  repos?: ProjectRepo[]
+}
+
+/* ============ 代码仓库（连接 / 仓库 / 绑定） ============ */
+
+export interface RepoConnection {
+  id: string
+  name: string
+  provider: 'github' | 'gitlab'
+  baseUrl: string
+  tokenHint: string
+  account: string
+  status: 'ok' | 'invalid'
+  checkedAt: string
+  createdBy: string
+  createdAt: string
+  repoCount: number
+}
+
+export interface RemoteRepoInfo {
+  providerRepoId: string
+  fullName: string
+  webUrl: string
+  description: string
+  defaultBranch: string
+  visibility: string
+}
+
+export interface RepoBindingSummary {
+  bindingId: string
+  projectId: string
+  projectName: string
+  role: ProjectRepo['role']
+  defaultBranch: string
+}
+
+export interface RepoItem {
+  id: string
+  fullName: string
+  webUrl: string
+  description: string
+  defaultBranch: string
+  visibility: string
+  syncedAt: string
+  provider: 'github' | 'gitlab'
+  connectionId: string
+  connectionName: string
+  connectionStatus: 'ok' | 'invalid'
+  bindings: RepoBindingSummary[]
 }
 
 export interface GlobalTemplate {

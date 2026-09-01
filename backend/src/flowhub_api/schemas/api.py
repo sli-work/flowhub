@@ -91,6 +91,7 @@ class CreateWorkItemReq(BaseModel):
     project_id: str
     template_id: str
     start_values: dict
+    labels: list[str] = []  # 预定义标签（/api/v1/tags 登记后才可绑定）
 
 
 class TaskActionReq(BaseModel):
@@ -102,6 +103,11 @@ class TaskActionReq(BaseModel):
     reason: str | None = None
     # 提交时验收清单勾选快照 {key: {text, checked}}（有验收标准的节点强制全部勾选）
     acceptance_checks: dict = {}
+
+
+class TaskAdoptRunReq(BaseModel):
+    """采纳指定 Expert Run 的产出回填节点表单。"""
+    run_id: str = Field(min_length=1)
 
 
 class TaskSplitChild(BaseModel):
@@ -198,16 +204,45 @@ class ExpertChatSessionReq(BaseModel):
     deployment_id: str = ""
     provider_model_id: str = ""
     version_id: str = ""  # 绑定指定 Expert Version（编辑器草稿测试会话），deployment 存在时忽略
+    project_name: str = ""  # 绑定项目（存名称）：注入项目绑定仓库的代码上下文
     title: str = "新会话"
 
 
 class ExpertChatSessionRenameReq(BaseModel):
-    """会话更新：title 重命名；expert_id/provider_model_id 变更绑定（传入则更新，空串清除绑定）。"""
+    """会话更新：title 重命名；expert_id/provider_model_id/project_name 变更绑定（传入则更新，空串清除绑定）。"""
     title: str | None = Field(default=None, min_length=1, max_length=160)
     expert_id: str = ""
     provider_model_id: str = ""
+    project_name: str = ""
 
 
 class ExpertChatMessageReq(BaseModel):
     content: str = Field(min_length=1)
     write_intent: bool = False
+
+
+# ---------- 代码仓库（连接 / 绑定） ----------
+class RepoConnectionCreateReq(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+    provider: str = Field(pattern=r"^(github|gitlab)$")
+    base_url: str = ""  # 自建 GitLab 必填（如 https://gitlab.example.com）
+    token: str = Field(min_length=8, max_length=512)
+
+
+class RepoConnectionUpdateReq(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=64)
+    base_url: str = ""
+    token: str | None = Field(default=None, min_length=8, max_length=512)
+
+
+class RepoBindingCreateReq(BaseModel):
+    connection_id: str
+    provider_repo_id: str = ""  # 数字 id 优先；为空时用 full_name 定位
+    full_name: str = ""
+    role: str = Field(default="main", pattern=r"^(main|docs|service|lib)$")
+    default_branch: str = ""
+
+
+class RepoBindingUpdateReq(BaseModel):
+    role: str | None = Field(default=None, pattern=r"^(main|docs|service|lib)$")
+    default_branch: str | None = None

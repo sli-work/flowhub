@@ -208,10 +208,10 @@ export function useApp() {
 
 /* 角色 → 可见导航（PRD §5 功能权限，原型 ROLE_NAV） */
 export const ROLE_NAV: Record<RoleKey, PageId[]> = {
-  leader: ['os-overview', 'aichat', 'tasks', 'notif', 'dashboard', 'projects', 'templates', 'expert-center', 'skill-center', 'mcp-center', 'provider-center', 'knowledge', 'memory', 'runtime-center', 'approvals', 'docs', 'channel', 'external-tools'],
-  org: ['os-overview', 'aichat', 'tasks', 'notif', 'dashboard', 'projects', 'templates', 'expert-center', 'skill-center', 'mcp-center', 'provider-center', 'knowledge', 'memory', 'runtime-center', 'approvals', 'docs', 'org', 'channel', 'matrix', 'audit', 'external-tools'],
-  dev: ['os-overview', 'aichat', 'tasks', 'notif', 'projects', 'templates', 'expert-center', 'skill-center', 'mcp-center', 'provider-center', 'knowledge', 'memory', 'runtime-center', 'approvals', 'docs', 'external-tools'],
-  sales: ['os-overview', 'aichat', 'tasks', 'notif', 'projects', 'templates', 'expert-center', 'skill-center', 'mcp-center', 'provider-center', 'knowledge', 'memory', 'runtime-center', 'approvals', 'docs', 'external-tools'],
+  leader: ['os-overview', 'aichat', 'tasks', 'notif', 'dashboard', 'projects', 'workitems', 'repos', 'templates', 'expert-center', 'skill-center', 'mcp-center', 'provider-center', 'knowledge', 'memory', 'runtime-center', 'approvals', 'docs', 'channel', 'external-tools'],
+  org: ['os-overview', 'aichat', 'tasks', 'notif', 'dashboard', 'projects', 'workitems', 'repos', 'templates', 'expert-center', 'skill-center', 'mcp-center', 'provider-center', 'knowledge', 'memory', 'runtime-center', 'approvals', 'docs', 'org', 'channel', 'matrix', 'audit', 'external-tools'],
+  dev: ['os-overview', 'aichat', 'tasks', 'notif', 'projects', 'workitems', 'repos', 'templates', 'expert-center', 'skill-center', 'mcp-center', 'provider-center', 'knowledge', 'memory', 'runtime-center', 'approvals', 'docs', 'external-tools'],
+  sales: ['os-overview', 'aichat', 'tasks', 'notif', 'projects', 'workitems', 'templates', 'expert-center', 'skill-center', 'mcp-center', 'provider-center', 'knowledge', 'memory', 'runtime-center', 'approvals', 'docs', 'external-tools'],
 }
 
 export { toast }

@@ -1,16 +1,18 @@
-"""工作项路由（docs/02 §六）：列表 / 详情 / 新建（发起流程）。"""
+"""工作项路由（docs/02 §六）：列表 / 详情 / 新建（发起流程）/ 停止。"""
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select
+from sqlalchemy import Text, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from flowhub_api.authz.authorizer import build_authorizer, get_current_user
 from flowhub_api.core.response import BizError, BizCode, ok
 from flowhub_api.db.session import get_db
-from flowhub_api.models import DocItem, TaskItem, User, WorkItem
+from flowhub_api.models import DocItem, NotificationItem, TagItem, TaskItem, User, WorkItem
 from flowhub_api.schemas.api import CreateWorkItemReq
+from flowhub_api.seed.init import gen_id
 from flowhub_api.services.audit import AuditService
 from flowhub_api.services.workflow import WorkflowService
 
@@ -40,6 +42,7 @@ async def list_work_items(
     session: Annotated[AsyncSession, Depends(get_db)],
     _: Annotated[User, Depends(get_current_user)],
     type: str = "", status: str = "", project: str = "", priority: str = "",
+    q: str = "", label: str = "",
     page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100),
 ):
     stmt = select(WorkItem)
@@ -51,6 +54,11 @@ async def list_work_items(
         stmt = stmt.where(WorkItem.project.contains(project))
     if priority:
         stmt = stmt.where(WorkItem.priority == priority)
+    if q:
+        stmt = stmt.where(WorkItem.title.contains(q))
+    if label:
+        # labels 为 JSON 数组列：序列化成文本后按带引号的完整串匹配，避免子串误命中
+        stmt = stmt.where(WorkItem.labels.cast(Text).contains(f'"{label}"'))
     total = len((await session.execute(stmt)).scalars().all())
     rows = (await session.execute(stmt.order_by(WorkItem.id.collate("C").desc()).offset((page - 1) * page_size).limit(page_size))).scalars().all()
     return ok({"items": [_brief(w) for w in rows], "total": total, "page": page, "page_size": page_size})
@@ -94,6 +102,12 @@ async def create_work_item(
     service = WorkflowService(session)
     result = await service.create_instance(body.project_id, body.template_id, body.start_values, user)
     wi = result["item"]
+    if body.labels:
+        # 只允许绑定预定义标签：剔除未登记的（宽松处理，避免表单过期标签阻塞创建）
+        registered = set((await session.execute(
+            select(TagItem.name).where(TagItem.name.in_(body.labels), TagItem.deleted == False)  # noqa: E712
+        )).scalars().all())
+        wi.labels = [l for l in dict.fromkeys(body.labels) if l in registered]
     attachment_ids = _attachment_ids(body.start_values)
     if attachment_ids:
         # 起始表单在工作项 ID 生成前上传。仅归档当前用户在同项目上传的未绑定文档，防止借 ID 关联他人文件。
@@ -118,3 +132,63 @@ async def create_work_item(
         {"item": _brief(wi), "instance": {"id": result["instance"].id, "current_node": result["next_node"]}},
         "工作项已创建，流程实例已发起",
     )
+
+
+@router.post("/{wi_id}/stop")
+async def stop_work_item(
+    wi_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_db)],
+):
+    """手动停止工作项：实例置 cancelled，未终结任务全部取消，工作项状态置 cancelled。"""
+    auth = build_authorizer(user)
+    auth.require("workflow_instance:cancel")
+    wi = (await session.execute(
+        select(WorkItem).options(selectinload(WorkItem.instance)).where(WorkItem.id == wi_id)
+    )).scalar_one_or_none()
+    if wi is None:
+        raise BizError(BizCode.NOT_FOUND, "工作项不存在")
+    if wi.status in ("closed", "cancelled", "archived"):
+        raise BizError(BizCode.VALIDATION, f"工作项当前状态（{wi.status}）已终结，无需停止", http_status=409)
+    # 未终结任务全部取消（含待处理与 AI 执行中的任务；后台 Expert Run 完成回调检测到非
+    # pending_confirmation 会自行放弃采纳，无需额外中断）
+    open_tasks = (await session.execute(
+        select(TaskItem).where(
+            TaskItem.wi_id == wi_id, TaskItem.status.not_in(["completed", "cancelled"])
+        )
+    )).scalars().all()
+    for t in open_tasks:
+        t.status = "cancelled"
+    if wi.instance is not None:
+        wi.instance.state = "cancelled"
+    wi.status = "cancelled"
+    wi.progress = f"{wi.progress}（手动停止）" if wi.progress else "手动停止"
+    await AuditService(session).record(
+        actor=user.name, action="workflow_instance:cancel",
+        target=f"{wi.id} · {wi.title}", result="success",
+        after={"cancelledTasks": [t.id for t in open_tasks]},
+    )
+    await session.commit()
+
+    # 站内通知：创建人 + 被取消任务的处理人（去重）
+    from flowhub_api.services.notify import deliver_channels
+
+    now = datetime.now(UTC).strftime("%m-%d %H:%M")
+    names = {wi.creator, *(t.assignee for t in open_tasks)} - {"—", ""}
+    users = (await session.execute(
+        select(User).where(User.name.in_(names))
+    )).scalars().all() if names else []
+    notified: set[str] = set()
+    for u in users:
+        if u.account in notified:
+            continue
+        notified.add(u.account)
+        channels = await deliver_channels("工作项已停止", f"「{wi.title}」已被 {user.name} 手动停止，未完成任务已取消", u)
+        session.add(NotificationItem(
+            id=gen_id("ntf"), title="工作项已停止",
+            body=f"「{wi.title}」已被 {user.name} 手动停止，未完成任务已取消",
+            time=now, channels=channels, kind="info", unread=True,
+            failed=any(not c["ok"] for c in channels), target_user=u.account, wi_id=wi.id,
+        ))
+    await session.commit()
+    return ok({"item": _brief(wi)}, "工作项已停止，流程实例已取消")

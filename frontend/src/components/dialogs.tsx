@@ -583,12 +583,19 @@ export function CreateWorkItemDialog({ onClose }: { onClose: () => void }) {
   const [latestVersion, setLatestVersion] = useState<string>('')
   const [latestStatus, setLatestStatus] = useState<string>('')
   const [schemaLoading, setSchemaLoading] = useState(false)
+  /* 预定义标签（如版本号）：创建时绑定，列表页可按 tag 分类筛选 */
+  const [tags, setTags] = useState<{ id: string; name: string; color: string }[]>([])
+  const [selLabels, setSelLabels] = useState<string[]>([])
 
-  /* 项目 + 模板池：来自后端 */
+  /* 项目 + 模板池 + 标签：来自后端 */
   useEffect(() => {
     api.get<{ items: { id: string; name: string; code: string; status: string; templateBindings: { templateId: string; name: string; type: string; version: string; status: string }[] }[] }>('/api/v1/projects').then((d) => setProjects(d.items)).catch(() => {})
     api.get<{ items: { id: string; name: string; type: string; versions: string[]; startSchema: unknown[] }[] }>('/api/v1/templates/pool').then((d) => setTplPool(d.items)).catch(() => {})
+    api.get<{ items: { id: string; name: string; color: string }[] }>('/api/v1/tags').then((d) => setTags(d.items)).catch(() => {})
   }, [])
+
+  const toggleLabel = (name: string) =>
+    setSelLabels((prev) => (prev.includes(name) ? prev.filter((l) => l !== name) : [...prev, name]))
 
   /* 选择模板 → 拉取该模板最新版本的硬性要求表单（跟随最新发布版本，而非模板级静态 startSchema） */
   useEffect(() => {
@@ -629,7 +636,7 @@ export function CreateWorkItemDialog({ onClose }: { onClose: () => void }) {
     setBusy(true)
     try {
       // 真实创建：POST /work-items（标题去重、发起流程实例）
-      await api.post('/api/v1/work-items', { project_id: projId, template_id: templateId, start_values: values })
+      await api.post('/api/v1/work-items', { project_id: projId, template_id: templateId, start_values: values, labels: selLabels })
       toast.success(`已创建${tpl!.type === 'requirement' ? '需求' : tpl!.type === 'issue' ? '问题' : '变更'}并启动「${bind.templateId} ${bind.status}」：${String(values.title || '未命名')}`)
       bumpTask()  // 触发「我的任务」列表刷新（起始节点任务 + 下一节点待办可见）
       onClose()
@@ -696,6 +703,25 @@ export function CreateWorkItemDialog({ onClose }: { onClose: () => void }) {
                 </div>
               )}
             </>
+          )}
+
+          {tags.length > 0 && (
+            <div className="space-y-1.5">
+              <label className="text-[13px] font-medium text-slate-600 dark:text-slate-300">绑定标签 <span className="text-[11.5px] font-normal text-slate-400">（预定义，可多选，如迭代版本号）</span></label>
+              <div className="flex flex-wrap gap-1.5">
+                {tags.map((t) => (
+                  <button key={t.id} type="button"
+                    className={cn('rounded-full border px-2.5 py-1 text-[11.5px] transition-colors',
+                      selLabels.includes(t.name)
+                        ? 'border-blue-500 bg-blue-50 text-blue-600 dark:bg-blue-500/15 dark:text-blue-300'
+                        : 'border-slate-200 text-slate-500 hover:border-blue-300 hover:text-blue-500 dark:border-slate-700 dark:text-slate-400')}
+                    onClick={() => toggleLabel(t.name)}>
+                    {t.name}
+                  </button>
+                ))}
+              </div>
+              {tags.length === 0 && <p className="text-[11.5px] text-slate-400">暂无预定义标签，可在「工作项」页面管理。</p>}
+            </div>
           )}
         </div>
         <DialogFooter className="gap-2">
