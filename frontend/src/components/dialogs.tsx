@@ -814,6 +814,149 @@ function ValidateDialog() {
   )
 }
 
+/* ============ 创建本地用户（组织管理）：POST /org/users，初始状态 invited ============ */
+function CreateUserDialog() {
+  const { closeDialog, refreshOrgUsers } = useApp()
+  const [form, setForm] = useState({ account: '', name: '', email: '', dept: '', role_id: 'developer', password: '' })
+  const [busy, setBusy] = useState(false)
+  const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
+    setForm((prev) => ({ ...prev, [k]: e.target.value }))
+
+  const submit = async () => {
+    if (!form.account.trim() || !form.name.trim() || form.password.length < 8) {
+      toast.error('请填写账号/姓名，密码至少 8 位'); return
+    }
+    setBusy(true)
+    try {
+      await api.post('/api/v1/org/users', { ...form, account: form.account.trim(), name: form.name.trim() })
+      toast.success(`已创建本地用户「${form.name.trim()}」（待激活），首登强制改密`)
+      refreshOrgUsers()
+      closeDialog()
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '创建失败')
+    } finally { setBusy(false) }
+  }
+
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) closeDialog() }}>
+      <DialogContent className="sm:max-w-[440px]">
+        <DialogHeader><DialogTitle className="text-[15px]">创建本地用户</DialogTitle></DialogHeader>
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-2.5">
+            <div>
+              <label className="mb-1 block text-[12px] font-medium text-slate-500 dark:text-slate-400">账号 <span className="text-red-500">*</span></label>
+              <Input value={form.account} onChange={set('account')} placeholder="登录账号（唯一）" />
+            </div>
+            <div>
+              <label className="mb-1 block text-[12px] font-medium text-slate-500 dark:text-slate-400">姓名 <span className="text-red-500">*</span></label>
+              <Input value={form.name} onChange={set('name')} placeholder="真实姓名" />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-2.5">
+            <div>
+              <label className="mb-1 block text-[12px] font-medium text-slate-500 dark:text-slate-400">邮箱</label>
+              <Input value={form.email} onChange={set('email')} placeholder="name@company.com" />
+            </div>
+            <div>
+              <label className="mb-1 block text-[12px] font-medium text-slate-500 dark:text-slate-400">部门</label>
+              <Input value={form.dept} onChange={set('dept')} placeholder="如 平台研发部 / 平台组" />
+            </div>
+          </div>
+          <div>
+            <label className="mb-1 block text-[12px] font-medium text-slate-500 dark:text-slate-400">初始角色</label>
+            <select className="h-9 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm outline-none focus:border-blue-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+              value={form.role_id} onChange={set('role_id')}>
+              {['system_admin', 'organization_admin', 'project_admin', 'leader', 'product_manager', 'developer', 'after_sales', 'pre_sales', 'second_line'].map((r) => (
+                <option key={r} value={r}>{r}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="mb-1 block text-[12px] font-medium text-slate-500 dark:text-slate-400">初始密码 <span className="text-red-500">*</span></label>
+            <Input type="password" value={form.password} onChange={set('password')} placeholder="至少 8 位，首登强制改密" />
+          </div>
+          <p className="text-[11px] text-slate-400">创建后为「待激活（invited）」状态，管理员在注册审批列表中激活。</p>
+        </div>
+        <DialogFooter className="gap-2">
+          <Button variant="outline" onClick={closeDialog}>取消</Button>
+          <Button disabled={busy} onClick={submit}>{busy ? '创建中…' : '创建'}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+/* ============ 注册本地账号（登录页自注册）：POST /auth/register ============ */
+function RegisterAccountDialog() {
+  const { closeDialog } = useApp()
+  const [form, setForm] = useState({ account: '', name: '', email: '', dept: '', role_id: 'developer', password: '' })
+  const [busy, setBusy] = useState(false)
+  const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
+    setForm((prev) => ({ ...prev, [k]: e.target.value }))
+
+  const submit = async () => {
+    if (!form.account.trim() || !form.name.trim() || form.password.length < 8) {
+      toast.error('请填写账号/姓名，密码至少 8 位'); return
+    }
+    setBusy(true)
+    try {
+      await api.post('/api/v1/auth/register', { ...form, account: form.account.trim(), name: form.name.trim() })
+      toast.success('注册成功，等待管理员审批激活')
+      closeDialog()
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '注册失败')
+    } finally { setBusy(false) }
+  }
+
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) closeDialog() }}>
+      <DialogContent className="sm:max-w-[440px]">
+        <DialogHeader><DialogTitle className="text-[15px]">注册本地账号</DialogTitle></DialogHeader>
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-2.5">
+            <div>
+              <label className="mb-1 block text-[12px] font-medium text-slate-500 dark:text-slate-400">账号 <span className="text-red-500">*</span></label>
+              <Input value={form.account} onChange={set('account')} placeholder="登录账号（唯一）" />
+            </div>
+            <div>
+              <label className="mb-1 block text-[12px] font-medium text-slate-500 dark:text-slate-400">姓名 <span className="text-red-500">*</span></label>
+              <Input value={form.name} onChange={set('name')} placeholder="真实姓名" />
+            </div>
+          </div>
+          <div>
+            <label className="mb-1 block text-[12px] font-medium text-slate-500 dark:text-slate-400">邮箱 <span className="text-red-500">*</span></label>
+            <Input value={form.email} onChange={set('email')} placeholder="name@company.com" />
+          </div>
+          <div className="grid grid-cols-2 gap-2.5">
+            <div>
+              <label className="mb-1 block text-[12px] font-medium text-slate-500 dark:text-slate-400">部门</label>
+              <Input value={form.dept} onChange={set('dept')} placeholder="如 平台研发部 / 平台组" />
+            </div>
+            <div>
+              <label className="mb-1 block text-[12px] font-medium text-slate-500 dark:text-slate-400">申请角色</label>
+              <select className="h-9 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm outline-none focus:border-blue-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                value={form.role_id} onChange={set('role_id')}>
+                {['developer', 'product_manager', 'after_sales', 'pre_sales', 'second_line', 'leader'].map((r) => (
+                  <option key={r} value={r}>{r}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <div>
+            <label className="mb-1 block text-[12px] font-medium text-slate-500 dark:text-slate-400">密码 <span className="text-red-500">*</span></label>
+            <Input type="password" value={form.password} onChange={set('password')} placeholder="至少 8 位" />
+          </div>
+          <p className="text-[11px] text-slate-400">提交后生成待审批申请，管理员在「注册审批」中激活后即可登录。</p>
+        </div>
+        <DialogFooter className="gap-2">
+          <Button variant="outline" onClick={closeDialog}>取消</Button>
+          <Button disabled={busy} onClick={submit}>{busy ? '提交中…' : '提交注册'}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 /* ============ 注册表 ============ */
 const DIALOGS: Record<string, () => React.ReactElement> = {
   submit: SubmitDialog,
@@ -821,6 +964,8 @@ const DIALOGS: Record<string, () => React.ReactElement> = {
   transfer: TransferDialog,
   expertApproval: ExpertApprovalDialog,
   validate: ValidateDialog,
+  createUser: CreateUserDialog,
+  registerAccount: RegisterAccountDialog,
 }
 
 export function DialogHost() {
