@@ -6,19 +6,27 @@ import {
   ThreadPrimitive,
   useLocalRuntime,
 } from "@assistant-ui/react";
-import type { FileMessagePartProps } from "@assistant-ui/react";
+import type { FileMessagePartProps, TextMessagePartProps } from "@assistant-ui/react";
 import { MarkdownTextPrimitive } from "@assistant-ui/react-markdown";
 import remarkGfm from "remark-gfm";
-import { Bot, LoaderCircle, Plus, Send, Square } from "lucide-react";
+import {
+  ArrowDown, Bot, Check, ChevronRight, Copy, Cpu, Eraser, FolderGit2, LoaderCircle,
+  Pencil, Plus, RotateCcw, Search, Send, Square, Trash2, Wrench,
+} from "lucide-react";
 import { api, getToken } from "../lib/api";
+import { Badge } from "../components/common";
 import { DocumentViewerDrawer } from "../components/document-viewer-drawer";
 import { createContext, useContext } from "react";
 import { toast } from "../store/app-store";
 import { useExpertOs } from "../store/expert-os-store";
+import { cn } from "../lib/utils";
 
 /** 消息附件 → 统一预览抽屉（OutputFile 由 assistant-ui 无 props 渲染，经 Context 唤起） */
 type PreviewRequest = { files: { id: string; name: string; srcUrl?: string }[]; initialId?: string };
 const DocPreviewContext = createContext<{ openPreview: (req: PreviewRequest) => void }>({ openPreview: () => {} });
+
+/** 消息元数据：Text 部件渲染时回传全文，供消息级「复制」使用 */
+const TextCaptureContext = createContext<{ capture: (text: string) => void }>({ capture: () => {} });
 
 interface PersistedSession {
   id: string;
@@ -26,6 +34,7 @@ interface PersistedSession {
   expertVersionId: string | null;
   deploymentId: string | null;
   providerModelId: string | null;
+  projectName: string | null;
   title: string;
   updated: string;
 }
@@ -53,15 +62,20 @@ interface PersistedMessage {
   compacted?: boolean;
 }
 
+const WELCOME_SUGGESTIONS = ["查询我的待办任务", "项目进度概览", "最近的问题单有哪些？"];
+
 export function AiChatPage() {
   const { state } = useExpertOs();
   const [preview, setPreview] = useState<PreviewRequest | null>(null);
   const openPreview = (req: PreviewRequest) => setPreview(req);
   const [sessions, setSessions] = useState<PersistedSession[]>([]);
+  const [sessionQuery, setSessionQuery] = useState("");
   const [sessionId, setSessionId] = useState("");
   const [messages, setMessages] = useState<PersistedMessage[]>([]);
   const [expertId, setExpertId] = useState("");
   const [providerModelId, setProviderModelId] = useState("");
+  const [projectName, setProjectName] = useState("");
+  const [projects, setProjects] = useState<{ id: string; name: string }[]>([]);
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const [isRunning, setIsRunning] = useState(false);
@@ -71,6 +85,10 @@ export function AiChatPage() {
   const [executingTrace, setExecutingTrace] = useState<TraceItem[]>([]);
   const stopRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
+  const runtimeRef = useRef<ReturnType<typeof useLocalRuntime> | null>(null);
+  /** 流式回调的会话守卫：切换会话后，旧会话在途 Run 的事件不再写入当前界面 */
+  const sessionIdRef = useRef(sessionId);
+  sessionIdRef.current = sessionId;
   /** 停止正在进行的生成：中断打字机 + 取消挂起的请求。 */
   const stopGeneration = () => {
     stopRef.current = true;
@@ -129,6 +147,8 @@ export function AiChatPage() {
             .join("") ?? "";
         stopRef.current = false;
         setStopped(false);
+        setExecutingTrace([]);
+        const sid = sessionId;
         const abort = new AbortController();
         abortRef.current = abort;
         setIsRunning(true);
@@ -157,8 +177,7 @@ export function AiChatPage() {
               .get("content-type")
               ?.startsWith("text/event-stream")
           ) {
-            // Expert / 版本绑定会话：服务端不做逐 token 流式，返回整段 ok 包络结果。
-            // 此前这里误按错误抛出，导致 Expert 会话永远显示「发送失败」——正确语义是消费 assistantMessage。
+            // 兜底：服务端返回整段 ok 包络结果（如旧后端），按最终消息消费
             const payload = (await response.json()) as {
               code?: number;
               message?: string;
@@ -198,6 +217,7 @@ export function AiChatPage() {
               .find((line) => line.startsWith("data: "))
               ?.slice(6);
             if (!event || !raw) return;
+            if (sid !== sessionIdRef.current) return;
             const data = JSON.parse(raw) as TraceItem & {
               text?: string;
               message?: PersistedMessage;
@@ -266,12 +286,31 @@ export function AiChatPage() {
           };
         } finally {
           setIsRunning(false);
+          // Run 已结束：清空执行中 trace，过程面板回落到最终消息的 toolTrace（状态均已定稿），
+          // 避免开头占位的 running 事件永远挂着导致 spinner 不消失
+          setExecutingTrace([]);
           abortRef.current = null;
         }
       },
     },
     { initialMessages },
   );
+  runtimeRef.current = runtime;
+
+  /* 会话内全部产出文件（assistant 消息 files，按出现顺序去重）→ 右侧产出文件栏 */
+  const sessionFiles = useMemo(() => {
+    const seen = new Set<string>();
+    const out: OutputFile[] = [];
+    for (const m of messages) {
+      for (const f of m.files ?? []) {
+        if (f.id && !seen.has(f.id)) {
+          seen.add(f.id);
+          out.push(f);
+        }
+      }
+    }
+    return out;
+  }, [messages]);
 
   useEffect(() => {
     api
@@ -283,12 +322,28 @@ export function AiChatPage() {
           setSessionId(first.id);
           setExpertId(first.expertId ?? "");
           setProviderModelId(first.providerModelId ?? "");
+          setProjectName(first.projectName ?? "");
         }
       })
+      .catch(() => {});
+    api
+      .get<{ items: { id: string; name: string }[] }>("/api/v1/projects")
+      .then((data) =>
+        // 下拉用固定顺序：按名称中文拼音排序（后端按 updated 展示串排序，对选择器无意义）
+        setProjects(
+          [...data.items].sort((a, b) =>
+            a.name.localeCompare(b.name, "zh-CN"),
+          ),
+        ),
+      )
       .catch(() => {});
   }, []);
 
   useEffect(() => {
+    // 切换/清空会话：线程状态全部复位，避免上一会话的执行过程/提示串显到当前会话
+    setExecutingTrace([]);
+    setStopped(false);
+    setLastCompacted(false);
     if (!sessionId) {
       setMessages([]);
       return;
@@ -311,6 +366,7 @@ export function AiChatPage() {
         {
           deployment_id: activeDeployment?.id ?? "",
           provider_model_id: providerModelId,
+          project_name: projectName,
           title: activeDeployment ? "新会话" : "FlowHub 默认对话",
         },
       );
@@ -321,6 +377,7 @@ export function AiChatPage() {
       setExecutingTrace([]);
       setLastCompacted(false);
       setStopped(false);
+      setSessionQuery("");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "创建会话失败");
     }
@@ -330,11 +387,13 @@ export function AiChatPage() {
     setSessionId(session.id);
     setExpertId(session.expertId ?? "");
     setProviderModelId(session.providerModelId ?? "");
+    setProjectName(session.projectName ?? "");
   };
-  /** 更新当前会话的 Expert/模型绑定（保留会话选中，不新建/不清空）。 */
+  /** 更新当前会话的 Expert/模型/项目绑定（保留会话选中，不新建/不清空）。 */
   const patchSessionBinding = async (body: {
     expert_id?: string;
     provider_model_id?: string;
+    project_name?: string;
   }) => {
     if (!sessionId) return;
     try {
@@ -348,6 +407,7 @@ export function AiChatPage() {
         ),
       );
       setProviderModelId(data.session.providerModelId ?? "");
+      setProjectName(data.session.projectName ?? "");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "更新会话绑定失败");
     }
@@ -367,6 +427,7 @@ export function AiChatPage() {
           {
             deployment_id: deployment?.id ?? "",
             provider_model_id: providerModelId,
+            project_name: projectName,
             title: "新会话",
           },
         );
@@ -386,7 +447,26 @@ export function AiChatPage() {
       try {
         const data = await api.post<{ session: PersistedSession }>(
           "/api/v1/expert-chat/sessions",
-          { provider_model_id: value, title: "FlowHub 默认对话" },
+          { provider_model_id: value, project_name: projectName, title: "FlowHub 默认对话" },
+        );
+        setSessions((current) => [data.session, ...current]);
+        setSessionId(data.session.id);
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "创建会话失败");
+      }
+    }
+  };
+  /** 切换项目：有会话 → 更新绑定；无会话 → 带项目新建默认会话并选中。
+   *  绑定后，后端会为该项目注入绑定仓库的"地图层"上下文（目录/README/依赖清单）。 */
+  const changeProject = async (value: string) => {
+    setProjectName(value);
+    if (sessionId) {
+      await patchSessionBinding({ project_name: value });
+    } else if (value) {
+      try {
+        const data = await api.post<{ session: PersistedSession }>(
+          "/api/v1/expert-chat/sessions",
+          { provider_model_id: providerModelId, project_name: value, title: "FlowHub 默认对话" },
         );
         setSessions((current) => [data.session, ...current]);
         setSessionId(data.session.id);
@@ -451,6 +531,7 @@ export function AiChatPage() {
         setSessionId(next?.id ?? "");
         setExpertId(next?.expertId ?? "");
         setProviderModelId(next?.providerModelId ?? "");
+        setProjectName(next?.projectName ?? "");
         setMessages([]);
         setMessagesVersion((v) => v + 1);
       }
@@ -459,6 +540,17 @@ export function AiChatPage() {
       toast.error(error instanceof Error ? error.message : "删除失败");
     }
   };
+  /** 重新生成：重发当前会话最后一条用户消息 */
+  const regenerate = () => {
+    if (isRunning || !sessionId) return;
+    const lastUser = [...messages].reverse().find((m) => m.role === "user");
+    if (!lastUser) { toast.error("没有可重新生成的消息"); return; }
+    runtimeRef.current?.thread.append({
+      role: "user",
+      content: [{ type: "text", text: lastUser.content }],
+    });
+  };
+
   const availableExperts = state.experts.filter(
     (item) =>
       item.status === "published" &&
@@ -477,116 +569,167 @@ export function AiChatPage() {
           (message) =>
             message.role === "assistant" && message.toolTrace?.length,
         )?.toolTrace ?? []);
+
+  /** 会话搜索 + 时间分组：updated 含「:」视为今天（HH:MM / 刚刚），否则归入更早 */
+  const filteredSessions = sessions.filter(
+    (s) => !sessionQuery || s.title.toLowerCase().includes(sessionQuery.toLowerCase()),
+  );
+  const todaySessions = filteredSessions.filter((s) => s.updated.includes(":"));
+  const earlierSessions = filteredSessions.filter((s) => !s.updated.includes(":"));
+  const renderSessionItem = (session: PersistedSession) => (
+    <div
+      key={session.id}
+      className={cn(
+        "group relative mb-0.5 w-full rounded-lg px-3 py-2.5 text-left transition-colors",
+        session.id === sessionId
+          ? "bg-white shadow-sm dark:bg-slate-800"
+          : "hover:bg-white/70 dark:hover:bg-slate-800/60",
+      )}
+    >
+      <button className="block w-full text-left" onClick={() => selectSession(session)}>
+        <b className={cn("block truncate text-xs", session.id === sessionId ? "text-slate-800 dark:text-slate-100" : "text-slate-600 dark:text-slate-300")}>
+          {session.title}
+        </b>
+        <span className="text-[10px] text-slate-400">{session.updated}</span>
+      </button>
+      <div className="absolute right-2 top-2 hidden gap-1 group-hover:flex">
+        <button
+          title="清空消息（保留会话）"
+          className="rounded p-1 text-slate-400 hover:bg-slate-200/70 hover:text-blue-600 dark:hover:bg-slate-700"
+          onClick={(event) => {
+            event.stopPropagation();
+            void clearSession(session.id);
+          }}
+        >
+          <Eraser className="h-3 w-3" />
+        </button>
+        <button
+          title="删除会话"
+          className="rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-500/10"
+          onClick={(event) => {
+            event.stopPropagation();
+            void deleteSession(session.id);
+          }}
+        >
+          <Trash2 className="h-3 w-3" />
+        </button>
+      </div>
+    </div>
+  );
+  const sessionGroup = (label: string, items: PersistedSession[]) =>
+    items.length > 0 && (
+      <div key={label} className="mb-2">
+        <div className="px-3 pb-1 pt-1 text-[10px] font-medium uppercase tracking-wide text-slate-400">{label}</div>
+        {items.map(renderSessionItem)}
+      </div>
+    );
+
+  const expertName =
+    activeSession?.expertVersionId && !activeSession.deploymentId
+      ? (availableExperts.find((item) => item.id === activeSession.expertId)?.name ?? "草稿版本")
+      : (availableExperts.find((item) => item.id === expertId)?.name ?? "");
+  const subtitle = activeSession?.expertVersionId && !activeSession.deploymentId
+    ? `${expertName} · 版本测试会话（发布前对话测试）`
+    : (expertName ||
+      (providerModelId ? "FlowHub 默认能力 + 已选模型" : "FlowHub 默认能力：任务、工作项、流程状态查询"));
+
   return (
     <DocPreviewContext.Provider value={{ openPreview }}>
     <div className="flex h-[calc(100vh-60px)] min-h-[620px] overflow-hidden bg-slate-50 dark:bg-slate-950">
       <aside className="hidden w-[270px] flex-none flex-col border-r border-slate-200 bg-slate-50 lg:flex dark:border-slate-800 dark:bg-slate-900/60">
-        <div className="flex items-center justify-between px-4 py-4">
+        <div className="flex items-center justify-between px-4 py-3">
           <b className="text-[13px]">AiChat</b>
           <button
-            className="flex h-7 w-7 items-center justify-center rounded-lg bg-blue-600 text-white"
+            className="flex h-7 w-7 items-center justify-center rounded-lg bg-blue-600 text-white transition-colors hover:bg-blue-700"
             onClick={() => void newSession()}
             aria-label="新建会话"
           >
             <Plus className="h-4 w-4" />
           </button>
         </div>
-        <div className="flex-1 overflow-y-auto px-2">
-          {sessions.map((session) => (
-            <div
-              key={session.id}
-              className={`group relative mb-1 w-full rounded-lg px-3 py-2.5 text-left ${session.id === sessionId ? "bg-white shadow-sm dark:bg-slate-800" : "hover:bg-white/70 dark:hover:bg-slate-800/60"}`}
-            >
-              <button
-                className="block w-full text-left"
-                onClick={() => selectSession(session)}
-              >
-                <b className="block truncate text-xs">{session.title}</b>
-                <span className="text-[10px] text-slate-400">
-                  {session.updated}
-                </span>
-              </button>
-              <div className="absolute right-2 top-2 hidden gap-1 group-hover:flex">
-                <button
-                  title="清空消息（保留会话）"
-                  className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500 hover:text-blue-600 dark:bg-slate-700 dark:text-slate-300"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    void clearSession(session.id);
-                  }}
-                >
-                  清空
-                </button>
-                <button
-                  title="删除会话"
-                  className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500 hover:text-red-600 dark:bg-slate-700 dark:text-slate-300"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    void deleteSession(session.id);
-                  }}
-                >
-                  删除
-                </button>
-              </div>
-            </div>
-          ))}
-          {!sessions.length && (
+        <div className="px-3 pb-2">
+          <div className="relative">
+            <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+            <input
+              className="h-8 w-full rounded-lg border border-slate-200 bg-white pl-8 pr-2 text-xs outline-none focus:border-blue-400 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+              placeholder="搜索会话…"
+              value={sessionQuery}
+              onChange={(event) => setSessionQuery(event.target.value)}
+            />
+          </div>
+        </div>
+        <div className="flex-1 overflow-y-auto px-2 pb-3">
+          {sessionGroup("今天", todaySessions)}
+          {sessionGroup("更早", earlierSessions)}
+          {!filteredSessions.length && (
             <p className="p-4 text-xs text-slate-400">
-              可直接创建 FlowHub 默认对话，或先选择 Expert。
+              {sessionQuery ? "无匹配会话" : "可直接创建 FlowHub 默认对话，或先选择 Expert。"}
             </p>
           )}
         </div>
       </aside>
       <main className="flex min-w-0 flex-1 flex-col bg-white dark:bg-slate-950">
-        <header className="flex min-h-[64px] items-center gap-3 border-b border-slate-200 px-5 dark:border-slate-800">
-          <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-violet-50 text-violet-600">
+        <header className="flex min-h-[60px] items-center gap-3 border-b border-slate-200 px-5 dark:border-slate-800">
+          <span className="flex h-9 w-9 flex-none items-center justify-center rounded-xl bg-gradient-to-br from-violet-500 to-blue-500 text-white shadow-sm">
             <Bot className="h-4 w-4" />
           </span>
           <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
-              <b className="block truncate text-[13px]">
+            <div className="flex items-center gap-1.5">
+              <b className="block truncate text-[13px] text-slate-900 dark:text-slate-100">
                 {activeSession?.title ?? "新会话"}
               </b>
               {activeSession && (
                 <button
-                  className="text-[10px] text-blue-600 hover:underline"
+                  className="rounded p-0.5 text-slate-300 hover:bg-slate-100 hover:text-blue-600 dark:hover:bg-slate-800"
+                  title="重命名"
                   onClick={() => {
                     setRenameValue(activeSession.title);
                     setRenameOpen(true);
                   }}
                 >
-                  重命名
+                  <Pencil className="h-3 w-3" />
                 </button>
               )}
               {activeSession && (
                 <button
-                  className="text-[10px] text-slate-400 hover:text-red-500 hover:underline"
+                  className="rounded p-0.5 text-slate-300 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-500/10"
                   title="删除会话"
                   onClick={() => void deleteSession(activeSession.id)}
                 >
-                  删除
+                  <Trash2 className="h-3 w-3" />
                 </button>
               )}
             </div>
-            <span className="text-[10.5px] text-slate-400">
-              {activeSession?.expertVersionId && !activeSession.deploymentId
-                ? `${availableExperts.find((item) => item.id === activeSession.expertId)?.name ?? "草稿版本"} · 版本测试会话（发布前对话测试）`
-                : (availableExperts.find((item) => item.id === expertId)
-                    ?.name ??
-                  (providerModelId
-                    ? "FlowHub 默认能力 + 已选模型"
-                    : "FlowHub 默认能力：任务、工作项、流程状态查询"))}
-            </span>
+            <span className="block truncate text-[10.5px] text-slate-400">{subtitle}</span>
           </div>
-          <div className="flex items-center gap-2">
-            <label className="text-[11px] text-slate-400">
-              Expert{" "}
+          <div className="flex flex-none items-center gap-2">
+            <label className="relative inline-flex items-center">
+              <FolderGit2 className="pointer-events-none absolute left-2 h-3.5 w-3.5 text-emerald-500" />
+              <select
+                value={projectName}
+                onChange={(event) => {
+                  void changeProject(event.target.value);
+                }}
+                className="h-8 max-w-[190px] rounded-lg border border-slate-200 bg-white pl-7 pr-2 text-xs text-slate-600 outline-none focus:border-blue-400 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300"
+                aria-label="选择项目"
+              >
+                <option value="">不关联项目</option>
+                {projects.map((item) => (
+                  <option key={item.id} value={item.name}>
+                    {item.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="relative inline-flex items-center">
+              <Bot className="pointer-events-none absolute left-2 h-3.5 w-3.5 text-violet-500" />
               <select
                 value={expertId}
                 onChange={(event) => {
                   void changeExpert(event.target.value);
                 }}
-                className="ml-2 h-8 rounded-lg border border-slate-300 bg-white px-2 text-xs dark:border-slate-700 dark:bg-slate-900"
+                className="h-8 max-w-[190px] rounded-lg border border-slate-200 bg-white pl-7 pr-2 text-xs text-slate-600 outline-none focus:border-blue-400 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300"
+                aria-label="选择 Expert"
               >
                 <option value="">不使用 Expert</option>
                 {availableExperts.map((item) => (
@@ -596,14 +739,15 @@ export function AiChatPage() {
                 ))}
               </select>
             </label>
-            <label className="text-[11px] text-slate-400">
-              模型{" "}
+            <label className="relative inline-flex items-center">
+              <Cpu className="pointer-events-none absolute left-2 h-3.5 w-3.5 text-blue-500" />
               <select
                 value={providerModelId}
                 onChange={(event) => {
                   void changeModel(event.target.value);
                 }}
-                className="ml-2 h-8 rounded-lg border border-slate-300 bg-white px-2 text-xs dark:border-slate-700 dark:bg-slate-900"
+                className="h-8 max-w-[190px] rounded-lg border border-slate-200 bg-white pl-7 pr-2 text-xs text-slate-600 outline-none focus:border-blue-400 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300"
+                aria-label="选择模型"
               >
                 <option value="">选择模型（可选）</option>
                 {providerModels.map((model) => (
@@ -615,117 +759,204 @@ export function AiChatPage() {
             </label>
           </div>
         </header>
+        <div className="flex min-h-0 flex-1">
         <AssistantRuntimeProvider
           key={`${sessionId || "empty"}-${messagesVersion}`}
           runtime={runtime}
         >
-          <ThreadPrimitive.Root className="flex min-h-0 flex-1 flex-col">
+          <ThreadPrimitive.Root className="relative flex min-h-0 flex-1 flex-col">
             <ThreadPrimitive.Viewport className="flex-1 overflow-y-auto px-5 py-6">
-              <ThreadPrimitive.Messages
-                components={{
-                  UserMessage: UserMessage,
-                  AssistantMessage: AssistantMessage,
-                }}
-              />
-              <ThreadPrimitive.Empty>
-                <div className="mx-auto mt-16 max-w-md rounded-xl border border-dashed border-slate-200 p-6 text-center text-sm text-slate-400 dark:border-slate-700">
-                  {activeDeployment
-                    ? providerModelId
-                      ? "输入消息即可创建真实 Expert LangGraph Run，并使用所选模型。"
-                      : "输入消息即可创建真实 Expert LangGraph Run。"
-                    : providerModelId
-                      ? "默认 FlowHub 能力会携带只读业务上下文交给所选模型推理。"
-                      : "FlowHub 默认对话可查询项目、任务、问题和流程状态；也可在右上角选择模型进行推理。"}
-                </div>
-              </ThreadPrimitive.Empty>
-            </ThreadPrimitive.Viewport>
-            <div className="border-t border-slate-200 p-4 dark:border-slate-800">
-              {isRunning && (
-                <div className="mx-auto mb-2 flex max-w-[780px] items-center gap-2 rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-700 dark:border-blue-500/20 dark:bg-blue-500/10 dark:text-blue-300">
-                  <LoaderCircle className="h-4 w-4 animate-spin" />
-                  <span>
-                    <b>正在执行 LangGraph</b> · 读取上下文、调用工具并生成回答…
-                  </span>
-                </div>
-              )}
-              {lastCompacted && (
-                <div className="mx-auto mb-2 flex max-w-[780px] items-center gap-2 rounded-lg border border-violet-100 bg-violet-50 px-3 py-2 text-xs text-violet-700 dark:border-violet-500/20 dark:bg-violet-500/10 dark:text-violet-300">
-                  <span className="flex-none">🧠 上下文已自动压缩</span>
-                  <span className="text-[11px] opacity-80">
-                    会话较长，早期对话已摘要（保留最近 6
-                    轮全文），模型仍可基于摘要理解前文。
-                  </span>
-                </div>
-              )}
-              {latestTrace.length > 0 && (
-                <div className="mx-auto mb-2 max-w-[780px] rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-500 dark:bg-slate-900">
-                  {latestTrace.map((trace, index) => (
-                    <div key={`${trace.tool}-${index}`}>
-                      <b>{trace.tool}</b> · {trace.status} ·{" "}
-                      {typeof trace.summary === "string"
-                        ? trace.summary
-                        : JSON.stringify(trace.summary)}
-                    </div>
-                  ))}
-                </div>
-              )}
-              {stopped && (
-                <div className="mx-auto mb-2 flex max-w-[780px] items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-900">
-                  <span>
-                    已停止生成（完整内容已保存，刷新或切换会话可查看）。
-                  </span>
-                </div>
-              )}
-              <ComposerPrimitive.Root className="mx-auto flex max-w-[780px] items-end gap-2 rounded-xl border border-slate-300 p-2 focus-within:border-blue-500 dark:border-slate-700">
-                <ComposerPrimitive.Input
-                  placeholder={
-                    sessionId
-                      ? "询问 FlowHub 或向 Expert 描述工作…"
-                      : "点击左侧 + 创建会话"
-                  }
-                  disabled={!sessionId || isRunning}
-                  className="max-h-32 min-h-10 flex-1 resize-none bg-transparent px-2 py-2 text-sm outline-none"
+              <div className="mx-auto max-w-[820px]">
+                <ThreadPrimitive.Messages
+                  components={{
+                    UserMessage: UserMessage,
+                    AssistantMessage: AssistantMessage,
+                  }}
                 />
-                {isRunning && (
-                  <button
-                    onClick={stopGeneration}
-                    className="flex h-9 items-center gap-1 rounded-lg border border-red-200 px-3 text-xs font-medium text-red-600 hover:bg-red-50 dark:border-red-500/30 dark:text-red-400"
-                    title="停止生成"
-                  >
-                    <Square className="h-3 w-3 fill-current" />
-                    停止
-                  </button>
+                {/* 过程面板：最近一次运行的工具/Skill 调用（实时更新），默认折叠 */}
+                {latestTrace.length > 0 && (
+                  <TracePanel trace={latestTrace} onRegenerate={regenerate} />
                 )}
-                <ComposerPrimitive.Send
-                  disabled={!sessionId || isRunning}
-                  className="flex h-9 items-center gap-1 rounded-lg bg-blue-600 px-3 text-xs font-medium text-white disabled:opacity-40"
-                >
-                  <Send className="h-3.5 w-3.5" />
-                  {isRunning ? "执行中" : "发送"}
-                </ComposerPrimitive.Send>
-              </ComposerPrimitive.Root>
+                {/* 流式状态内联条：随消息流滚动，不遮挡输入区 */}
+                {isRunning && (
+                  <div className="mb-4 flex items-center gap-2 rounded-lg px-1 py-1 text-[12px] text-slate-400">
+                    <LoaderCircle className="h-3.5 w-3.5 animate-spin text-blue-500" />
+                    <span>
+                      {executingTrace.length
+                        ? `正在执行：${executingTrace[executingTrace.length - 1].tool}…`
+                        : "正在思考…"}
+                    </span>
+                  </div>
+                )}
+                {lastCompacted && (
+                  <div className="mb-4 rounded-lg bg-violet-50 px-3 py-2 text-[11.5px] text-violet-600 dark:bg-violet-500/10 dark:text-violet-300">
+                    🧠 会话较长，早期对话已自动压缩（保留最近 6 轮全文），模型仍可基于摘要理解前文。
+                  </div>
+                )}
+                {stopped && (
+                  <div className="mb-4 rounded-lg bg-slate-50 px-3 py-2 text-[11.5px] text-slate-500 dark:bg-slate-900 dark:text-slate-400">
+                    已停止生成（完整内容已保存，刷新或切换会话可查看）。
+                  </div>
+                )}
+                <ThreadPrimitive.Empty>
+                  <div className="mt-14 flex flex-col items-center text-center">
+                    <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-violet-500 to-blue-500 text-white shadow-md">
+                      <Bot className="h-6 w-6" />
+                    </span>
+                    <h2 className="mt-4 text-[16px] font-semibold text-slate-800 dark:text-slate-100">
+                      {activeDeployment ? "向 Expert 描述你的工作" : "有什么可以帮你？"}
+                    </h2>
+                    <p className="mt-1.5 max-w-md text-[12.5px] leading-relaxed text-slate-400">
+                      {activeDeployment
+                        ? providerModelId
+                          ? "消息将创建真实 Expert LangGraph Run，并使用所选模型。"
+                          : "消息将创建真实 Expert LangGraph Run。"
+                        : providerModelId
+                          ? "默认能力会携带只读业务上下文交给所选模型推理。"
+                          : "可查询项目、任务、问题和流程状态；也可在右上角选择模型进行推理。"}
+                    </p>
+                    {sessionId && (
+                      <div className="mt-5 flex flex-wrap justify-center gap-2">
+                        {WELCOME_SUGGESTIONS.map((text) => (
+                          <button
+                            key={text}
+                            className="rounded-full border border-slate-200 px-3.5 py-1.5 text-[12px] text-slate-600 transition-colors hover:border-blue-400 hover:text-blue-600 dark:border-slate-700 dark:text-slate-300 dark:hover:border-blue-500"
+                            onClick={() =>
+                              runtimeRef.current?.thread.append({
+                                role: "user",
+                                content: [{ type: "text", text }],
+                              })
+                            }
+                          >
+                            {text}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </ThreadPrimitive.Empty>
+              </div>
+            </ThreadPrimitive.Viewport>
+            <ThreadPrimitive.ScrollToBottom asChild>
+              <button
+                className="absolute bottom-[150px] right-6 z-10 flex h-8 w-8 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 shadow-md transition-colors hover:text-blue-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300"
+                aria-label="回到底部"
+              >
+                <ArrowDown className="h-4 w-4" />
+              </button>
+            </ThreadPrimitive.ScrollToBottom>
+            <div className="border-t border-slate-100 p-4 dark:border-slate-800">
+              <div className="mx-auto max-w-[820px]">
+                <ComposerPrimitive.Root className="flex w-full flex-col rounded-2xl border border-slate-300 bg-white p-2 shadow-sm transition-colors focus-within:border-blue-500 focus-within:ring-[3px] focus-within:ring-blue-500/10 dark:border-slate-700 dark:bg-slate-900">
+                  <ComposerPrimitive.Input
+                    placeholder={
+                      sessionId
+                        ? "询问 FlowHub 或向 Expert 描述工作…"
+                        : "点击左侧 + 创建会话"
+                    }
+                    disabled={!sessionId || isRunning}
+                    className="max-h-32 min-h-10 w-full flex-1 resize-none bg-transparent px-2 py-2 text-sm outline-none dark:text-slate-200"
+                  />
+                  <div className="flex items-center justify-between px-2 pt-1">
+                    <span className="text-[10.5px] text-slate-400">
+                      Enter 发送 · Shift+Enter 换行
+                      {expertName ? ` · ${expertName}` : ""}
+                      {projectName ? ` · 项目 ${projectName}` : ""}
+                      {providerModelId
+                        ? ` · ${providerModels.find((m) => m.id === providerModelId)?.model ?? ""}`
+                        : ""}
+                    </span>
+                    {isRunning ? (
+                      <button
+                        onClick={stopGeneration}
+                        className="flex h-8 items-center gap-1.5 rounded-lg bg-red-500 px-3 text-xs font-medium text-white transition-colors hover:bg-red-600"
+                        title="停止生成"
+                      >
+                        <Square className="h-3 w-3 fill-current" />
+                        停止
+                      </button>
+                    ) : (
+                      <ComposerPrimitive.Send
+                        disabled={!sessionId}
+                        className="flex h-8 items-center gap-1.5 rounded-lg bg-blue-600 px-3.5 text-xs font-medium text-white transition-colors hover:bg-blue-700 disabled:opacity-40"
+                      >
+                        <Send className="h-3.5 w-3.5" />
+                        发送
+                      </ComposerPrimitive.Send>
+                    )}
+                  </div>
+                </ComposerPrimitive.Root>
+              </div>
             </div>
           </ThreadPrimitive.Root>
         </AssistantRuntimeProvider>
+        {/* 右侧产出文件栏：本次会话内 AI 生成的文档，可下载/预览 */}
+        {sessionFiles.length > 0 && (
+          <aside className="hidden w-[260px] flex-none flex-col overflow-y-auto border-l border-slate-200 bg-slate-50/70 p-3 lg:flex dark:border-slate-800 dark:bg-slate-900/60">
+            <div className="mb-2 flex items-center justify-between px-1">
+              <b className="text-[12.5px] font-semibold text-slate-600 dark:text-slate-300">产出文件</b>
+              <Badge tone="info">{sessionFiles.length}</Badge>
+            </div>
+            <div className="space-y-2">
+              {sessionFiles.map((f) => (
+                <div key={f.id} className="rounded-lg border border-slate-200 bg-white p-2.5 dark:border-slate-700 dark:bg-slate-900">
+                  <div className="truncate text-[12px] font-medium text-slate-700 dark:text-slate-200" title={f.filename}>{f.filename}</div>
+                  <div className="mt-0.5 text-[10.5px] text-slate-400">{f.mimeType}</div>
+                  <div className="mt-2 flex gap-1.5">
+                    <button
+                      className="flex-1 rounded-md bg-blue-600 px-2 py-1 text-[11px] font-medium text-white transition-colors hover:bg-blue-700"
+                      onClick={() => {
+                        const token = getToken();
+                        void fetch(f.downloadUrl, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+                          .then((r) => { if (!r.ok) throw new Error("文件下载失败"); return r.blob(); })
+                          .then((blob) => {
+                            const url = URL.createObjectURL(blob);
+                            const a = document.createElement("a");
+                            a.href = url;
+                            a.download = f.filename;
+                            a.click();
+                            URL.revokeObjectURL(url);
+                          })
+                          .catch(() => toast.error("文件下载失败"));
+                      }}
+                    >
+                      下载
+                    </button>
+                    <button
+                      className="flex-1 rounded-md border border-blue-200 px-2 py-1 text-[11px] font-medium text-blue-600 transition-colors hover:bg-blue-50 dark:border-blue-500/30 dark:text-blue-300 dark:hover:bg-blue-500/10"
+                      onClick={() => openPreview({ files: sessionFiles.map((x) => ({ id: x.id, name: x.filename, srcUrl: x.downloadUrl })), initialId: f.id })}
+                    >
+                      预览
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </aside>
+        )}
+        </div>
         {renameOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/30">
-            <div className="w-full max-w-sm rounded-xl bg-white p-5 shadow-xl dark:bg-slate-900">
-              <b className="text-sm">重命名会话</b>
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/30 p-4">
+            <div className="w-full max-w-sm rounded-xl border border-slate-200 bg-white p-5 shadow-xl dark:border-slate-700 dark:bg-slate-900">
+              <b className="text-sm text-slate-800 dark:text-slate-100">重命名会话</b>
               <input
                 value={renameValue}
                 onChange={(event) => setRenameValue(event.target.value)}
-                className="mt-3 h-9 w-full rounded-lg border border-slate-300 px-3 text-sm dark:border-slate-700 dark:bg-slate-800"
+                className="mt-3 h-9 w-full rounded-lg border border-slate-300 px-3 text-sm outline-none focus:border-blue-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
                 autoFocus
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") void renameSession();
+                }}
               />
               <div className="mt-4 flex justify-end gap-2">
                 <button
-                  className="rounded-lg border px-3 py-2 text-xs"
+                  className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
                   onClick={() => setRenameOpen(false)}
                 >
                   取消
                 </button>
                 <button
-                  className="rounded-lg bg-blue-600 px-3 py-2 text-xs text-white"
+                  className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs text-white hover:bg-blue-700"
                   onClick={() => void renameSession()}
                 >
                   保存
@@ -809,21 +1040,106 @@ function OutputFile({ data, filename, mimeType }: FileMessagePartProps) {
 
 function UserMessage() {
   return (
-    <MessagePrimitive.Root className="mx-auto mb-4 flex max-w-[780px] justify-end">
-      <div className="max-w-[80%] rounded-xl bg-blue-600 px-4 py-3 text-sm text-white">
+    <MessagePrimitive.Root className="mb-6 flex justify-end">
+      <div className="max-w-[80%] rounded-2xl rounded-br-md bg-blue-50 px-4 py-2.5 text-[14px] leading-relaxed text-slate-800 dark:bg-blue-500/15 dark:text-blue-50">
         <MessagePrimitive.Content />
       </div>
     </MessagePrimitive.Root>
   );
 }
+
+/** AI 回复：无气泡全宽 Markdown + 头像行 + 复制操作 */
 function AssistantMessage() {
+  const [copied, setCopied] = useState(false);
+  const textRef = useRef("");
+  const capture = (text: string) => { textRef.current = text; };
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(textRef.current);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      toast.error("复制失败");
+    }
+  };
   return (
-    <MessagePrimitive.Root className="mx-auto mb-4 flex max-w-[780px]">
-      <div className="max-w-[80%] rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200">
-        <MessagePrimitive.Content
-          components={{ Text: AssistantMarkdown, File: OutputFile }}
-        />
+    <MessagePrimitive.Root className="mb-6 flex gap-3">
+      <span className="mt-0.5 flex h-7 w-7 flex-none items-center justify-center rounded-lg bg-gradient-to-br from-violet-500 to-blue-500 text-white">
+        <Bot className="h-3.5 w-3.5" />
+      </span>
+      <div className="min-w-0 flex-1 text-[14px] text-slate-700 dark:text-slate-200 group/msg">
+        <TextCaptureContext.Provider value={{ capture }}>
+          <MessagePrimitive.Content
+            components={{ Text: AssistantText, File: OutputFile }}
+          />
+        </TextCaptureContext.Provider>
+        <div className="mt-1 flex items-center gap-1 opacity-0 transition-opacity group-hover/msg:opacity-100">
+          <button
+            className="rounded p-1 text-slate-300 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800"
+            title="复制"
+            onClick={() => void copy()}
+          >
+            {copied ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
+          </button>
+        </div>
       </div>
     </MessagePrimitive.Root>
   );
+}
+
+/** 最近一次运行的工具/Skill 过程：默认折叠一行，可展开明细；附「重新生成」 */
+function TracePanel({ trace, onRegenerate }: { trace: TraceItem[]; onRegenerate: () => void }) {
+  const [open, setOpen] = useState(false);
+  const running = trace.some((item) => item.status === "running");
+  return (
+    <div className="mb-6 flex gap-3">
+      <span className="mt-0.5 flex h-7 w-7 flex-none items-center justify-center">
+        <Wrench className="h-3.5 w-3.5 text-slate-300 dark:text-slate-600" />
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <button
+            className="flex items-center gap-1.5 text-[11.5px] text-slate-400 transition-colors hover:text-blue-600"
+            onClick={() => setOpen((v) => !v)}
+          >
+            {running
+              ? <><LoaderCircle className="h-3 w-3 animate-spin text-amber-500" />正在执行工具/Skill…</>
+              : <>已执行 {trace.length} 次工具/Skill</>}
+            <ChevronRight className={cn("h-3 w-3 transition-transform", open && "rotate-90")} />
+          </button>
+          <button
+            className="rounded p-1 text-slate-300 hover:bg-slate-100 hover:text-blue-600 dark:hover:bg-slate-800"
+            title="重新生成（重发上一条消息）"
+            onClick={onRegenerate}
+          >
+            <RotateCcw className="h-3.5 w-3.5" />
+          </button>
+        </div>
+        {open && (
+          <div className="mt-1.5 space-y-1 rounded-lg bg-slate-50 px-3 py-2 dark:bg-slate-900">
+            {trace.map((item, index) => (
+              <div key={`${item.tool}-${index}`} className="flex items-start gap-1.5 text-[11px] leading-5">
+                <span
+                  className={cn(
+                    "mt-1.5 h-1.5 w-1.5 flex-none rounded-full",
+                    item.status === "failed" ? "bg-red-400" : item.status === "running" ? "bg-amber-400" : "bg-emerald-400",
+                  )}
+                />
+                <span className="font-medium text-slate-600 dark:text-slate-300">{item.tool}</span>
+                <span className="truncate text-slate-400">
+                  {typeof item.summary === "string" ? item.summary : JSON.stringify(item.summary)}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AssistantText(props: TextMessagePartProps) {
+  const { capture } = useContext(TextCaptureContext);
+  useEffect(() => { capture(props.text); }, [props.text, capture]);
+  return <AssistantMarkdown />;
 }

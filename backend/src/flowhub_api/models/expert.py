@@ -206,6 +206,8 @@ class ExpertChatSession(Base):
     expert_version_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     deployment_id: Mapped[str | None] = mapped_column(ForeignKey("expert_deployments.id"), nullable=True)
     provider_model_id: Mapped[str | None] = mapped_column(ForeignKey("llm_provider_models.id"), nullable=True)
+    # 会话绑定的项目（存项目名称，与 WorkItem.project 一致）：用于注入项目绑定仓库的地图层上下文
+    project_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
     title: Mapped[str] = mapped_column(String(160), default="新会话")
     created_at: Mapped[str] = mapped_column(String(40), default="")
     updated_at: Mapped[str] = mapped_column(String(40), default="")

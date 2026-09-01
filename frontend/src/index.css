@@ -146,3 +146,11 @@
   .aui-markdown hr { @apply my-5 border-slate-200 dark:border-slate-700; }
   .aui-markdown input[type='checkbox'] { @apply mr-2 align-middle accent-blue-600; }
 }
+
+@layer components {
+  /* 流程画布：节点悬浮 / 端口放大反馈 */
+  .canvas-node .node-body { @apply transition-all; }
+  .canvas-node:hover .node-body { stroke: #60a5fa; stroke-width: 1.8; }
+  .canvas-node .node-port { transition: r 0.15s ease; }
+  .canvas-node:hover .node-port { r: 7.5; }
+}
