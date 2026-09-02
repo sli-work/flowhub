@@ -17,8 +17,7 @@ import hmac
 import smtplib
 import time
 import urllib.parse
-from email.header import Header
-from email.mime.text import MIMEText
+from email.message import EmailMessage
 from email.utils import formataddr
 from typing import Any
 
@@ -123,27 +122,82 @@ async def _send_wecom_app(corp_id: str, app_secret: str, agent_id: str, user_id:
         return False
 
 
-def _send_email_sync(host: str, port: int, user: str, password: str, from_addr: str, to: str, title: str, text: str) -> bool:
-    """SMTP 发送（同步，供线程池调用）。"""
-    msg = MIMEText(text, "plain", "utf-8")
-    msg["Subject"] = Header(title, "utf-8")
-    msg["From"] = from_addr
+def _site_link(settings) -> str:
+    """外发通知附带的站点访问地址：public_base_url 配置优先，缺省内网部署地址。"""
+    base = (getattr(settings, "public_base_url", "") or "").rstrip("/")
+    return base or "http://192.168.21.195:8088"
+
+
+def _email_html(title: str, body: str, site: str) -> str:
+    """通知邮件 HTML 版（与纯文本互为 alternative）。
+
+    邮件客户端兼容性约束：不用外部 CSS/图片，全部内联样式 + 表格布局，
+    品牌色与前端一致（blue-600 #2563eb）。
+    """
+    lines = "".join(
+        f'<tr><td style="padding:0 0 10px;font-size:14px;line-height:1.7;color:#334155;">{l}</td></tr>'
+        for l in body.splitlines() if l.strip()
+    )
+    return (
+        '<!DOCTYPE html><html lang="zh-CN"><body style="margin:0;padding:0;background:#f1f5f9;">'
+        '<div style="display:none;max-height:0;overflow:hidden;opacity:0;">'  # 预览头部：客户端列表摘要
+        f'{body[:88]}</div>'
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f1f5f9;padding:24px 12px;">'
+        '<tr><td align="center">'
+        '<table role="presentation" width="600" cellpadding="0" cellspacing="0" '
+        'style="max-width:600px;width:100%;background:#ffffff;border-radius:12px;overflow:hidden;'
+        'box-shadow:0 1px 3px rgba(15,23,42,.08);">'
+        # 页头：品牌标识
+        '<tr><td style="background:#2563eb;padding:22px 32px;">'
+        '<span style="display:inline-block;background:rgba(255,255,255,.18);color:#ffffff;'
+        'font-size:17px;font-weight:600;letter-spacing:.5px;padding:6px 14px;border-radius:8px;">FlowHub</span>'
+        '</td></tr>'
+        # 标题
+        '<tr><td style="padding:28px 32px 8px;">'
+        f'<h1 style="margin:0;font-size:19px;font-weight:600;color:#0f172a;line-height:1.4;">{title}</h1>'
+        '<div style="margin-top:12px;height:1px;background:#e2e8f0;"></div>'
+        '</td></tr>'
+        # 正文
+        f'<tr><td style="padding:12px 32px 4px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0">{lines}</table></td></tr>'
+        # 按钮
+        '<tr><td style="padding:16px 32px 28px;">'
+        f'<a href="{site}" style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;'
+        'font-size:14px;font-weight:600;padding:10px 28px;border-radius:8px;">前往 FlowHub 处理</a>'
+        f'<p style="margin:12px 0 0;font-size:12px;color:#94a3b8;">按钮无法点击？复制链接访问：{site}</p>'
+        '</td></tr>'
+        # 页脚
+        '<tr><td style="background:#f8fafc;padding:16px 32px;border-top:1px solid #e2e8f0;">'
+        '<p style="margin:0;font-size:11.5px;color:#94a3b8;line-height:1.7;">'
+        'FlowHub · 让每个流程节点可运行、可追溯、可审计<br>'
+        '此邮件由系统自动发送，请勿直接回复。</p>'
+        '</td></tr>'
+        '</table></td></tr></table></body></html>'
+    )
+
+
+def _send_email_sync(host: str, port: int, user: str, password: str, from_addr: str, to: str, title: str, text: str, html: str) -> bool:
+    """SMTP 发送（同步，供线程池调用）：HTML 为主、纯文本回退（multipart/alternative）。"""
+    msg = EmailMessage()
+    msg["Subject"] = title
+    msg["From"] = formataddr(("FlowHub", from_addr))
     msg["To"] = to
+    msg.set_content(text)
+    msg.add_alternative(html, subtype="html")
     if port == 465:
         server = smtplib.SMTP_SSL(host, port, timeout=8)
     else:
         server = smtplib.SMTP(host, port, timeout=8)
     try:
         server.login(user, password)
-        server.sendmail(from_addr, [to], msg.as_string())
+        server.send_message(msg)
         return True
     finally:
         server.quit()
 
 
-async def _send_email(host: str, port: int, user: str, password: str, from_addr: str, to: str, title: str, text: str) -> bool:
+async def _send_email(host: str, port: int, user: str, password: str, from_addr: str, to: str, title: str, text: str, html: str) -> bool:
     try:
-        return await asyncio.to_thread(_send_email_sync, host, port, user, password, from_addr, to, title, text)
+        return await asyncio.to_thread(_send_email_sync, host, port, user, password, from_addr, to, title, text, html)
     except Exception:
         return False
 
@@ -152,39 +206,42 @@ async def deliver_channels(title: str, body: str, target: User | str | None = No
     """按配置把通知投递到已启用渠道，返回 channels 结果列表（仅含已启用渠道）。
 
     target 可为本地 User（优先使用其钉钉/企微 userid 点对点投递）或邮件地址。
+    外发渠道（钉钉/企微/邮件）正文统一附带站点链接；站内通知在应用内展示，不附。
     """
     settings = runtime_settings()
+    site = _site_link(settings)
     results: list[dict[str, Any]] = [{"name": "站内", "ok": True}]
+    out_body = f"{body}\n\n请访问 FlowHub：{site}"
 
     recipient = target if isinstance(target, User) else None
     email = target if isinstance(target, str) and "@" in target else ""
     if recipient and settings.dingtalk_app_key and settings.dingtalk_app_secret and settings.dingtalk_agent_id and recipient.ding_talk:
         ok = await _send_dingtalk_app(
             settings.dingtalk_app_key, settings.dingtalk_app_secret, settings.dingtalk_agent_id,
-            recipient.ding_talk, title, body,
+            recipient.ding_talk, title, out_body,
         )
         results.append({"name": "钉钉", "ok": ok})
 
     if recipient and settings.wecom_corp_id and settings.wecom_app_secret and settings.wecom_agent_id and recipient.wecom:
         ok = await _send_wecom_app(
             settings.wecom_corp_id, settings.wecom_app_secret, settings.wecom_agent_id,
-            recipient.wecom, title, body,
+            recipient.wecom, title, out_body,
         )
         results.append({"name": "企微", "ok": ok})
 
     if settings.dingtalk_webhook:
-        ok = await _send_dingtalk(settings.dingtalk_webhook, settings.dingtalk_secret, title, body)
+        ok = await _send_dingtalk(settings.dingtalk_webhook, settings.dingtalk_secret, title, out_body)
         results.append({"name": "钉钉群", "ok": ok})
 
     if settings.wecom_webhook:
-        ok = await _send_wecom(settings.wecom_webhook, title, body)
+        ok = await _send_wecom(settings.wecom_webhook, title, out_body)
         results.append({"name": "企微群", "ok": ok})
 
     if settings.smtp_host and settings.smtp_user and email:
         ok = await _send_email(
             settings.smtp_host, settings.smtp_port, settings.smtp_user,
             settings.smtp_password, settings.smtp_from or settings.smtp_user,
-            email, title, body,
+            email, title, out_body, _email_html(title, body, site),
         )
         results.append({"name": "邮件", "ok": ok})
     return results

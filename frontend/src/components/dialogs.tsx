@@ -957,6 +957,99 @@ function RegisterAccountDialog() {
   )
 }
 
+/* ============ 注册审批：单人通过 / 批量多选通过（openApproval(uid?) 设置目标） ============ */
+function RegisterApproveDialog() {
+  const { closeDialog, approvalTargetId, refreshOrgUsers } = useApp()
+  const single = approvalTargetId != null
+  const [items, setItems] = useState<{ id: string; name: string; account: string; email: string; dept: string; role: string }[]>([])
+  const [checked, setChecked] = useState<Record<string, boolean>>({})
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    api.get<{ items: typeof items }>('/api/v1/auth/approvals')
+      .then((d) => {
+        setItems(d.items)
+        // 单人模式预勾选目标；批量模式默认全选
+        const init: Record<string, boolean> = {}
+        d.items.forEach((r) => { init[r.id] = single ? r.id === approvalTargetId : true })
+        setChecked(init)
+      })
+      .catch((e) => toast.error(e instanceof ApiError ? e.message : '待审批列表加载失败'))
+  }, [single, approvalTargetId])
+
+  const checkedIds = items.filter((r) => checked[r.id]).map((r) => r.id)
+
+  const approve = async () => {
+    if (!checkedIds.length) { toast.error('请先勾选要通过的申请'); return }
+    setBusy(true)
+    try {
+      let okCount = 0
+      for (const id of checkedIds) {
+        try {
+          await api.post(`/api/v1/auth/approvals/${id}/approve`)
+          okCount += 1
+        } catch (e) {
+          toast.error(e instanceof ApiError ? e.message : `审批失败：${items.find((r) => r.id === id)?.name ?? id}`)
+        }
+      }
+      if (okCount) {
+        toast.success(single ? '已通过并激活，欢迎通知已发送' : `已批量通过 ${okCount} 个申请，欢迎通知已发送`)
+        refreshOrgUsers()
+        closeDialog()
+      }
+    } finally { setBusy(false) }
+  }
+
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) closeDialog() }}>
+      <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-[520px]">
+        <DialogHeader><DialogTitle className="text-[15px]">{single ? '注册审批 · 通过' : '批量审批'}</DialogTitle></DialogHeader>
+        <div className="space-y-3">
+          {items.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-slate-200 p-6 text-center text-[12.5px] text-slate-400 dark:border-slate-700">
+              当前没有待审批的注册申请。
+            </div>
+          ) : (
+            <>
+              {!single && (
+                <label className="flex items-center gap-2 text-[12.5px] font-medium text-slate-600 dark:text-slate-300">
+                  <input type="checkbox" className="h-4 w-4 accent-blue-600"
+                    checked={items.length > 0 && checkedIds.length === items.length}
+                    onChange={(e) => setChecked(Object.fromEntries(items.map((r) => [r.id, e.target.checked])))} />
+                  全选（{checkedIds.length}/{items.length}）
+                </label>
+              )}
+              <div className="space-y-2">
+                {items.map((r) => (
+                  <label key={r.id} className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/50">
+                    <input type="checkbox" className="h-4 w-4 accent-blue-600"
+                      checked={!!checked[r.id]} disabled={busy}
+                      onChange={(e) => setChecked((prev) => ({ ...prev, [r.id]: e.target.checked }))} />
+                    <div className="min-w-0 flex-1">
+                      <div className="text-[13px] font-semibold text-slate-800 dark:text-slate-100">
+                        {r.name} <span className="font-normal text-slate-400">（{r.account}）</span>
+                      </div>
+                      <div className="truncate text-[11px] text-slate-400">
+                        {[r.email, r.dept, r.role].filter(Boolean).join(' · ')}
+                      </div>
+                    </div>
+                    <Badge tone="warn">待审批</Badge>
+                  </label>
+                ))}
+              </div>
+              <p className="text-[11px] text-slate-400">通过后账号激活（首登强制改密），并发送欢迎通知（站内 + 邮件）。</p>
+            </>
+          )}
+        </div>
+        <DialogFooter className="gap-2">
+          <Button variant="outline" onClick={closeDialog}>取消</Button>
+          <Button disabled={busy || items.length === 0} onClick={approve}>{busy ? '处理中…' : `通过${single ? '' : `（${checkedIds.length}）`}`}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 /* ============ 注册表 ============ */
 const DIALOGS: Record<string, () => React.ReactElement> = {
   submit: SubmitDialog,
@@ -966,6 +1059,7 @@ const DIALOGS: Record<string, () => React.ReactElement> = {
   validate: ValidateDialog,
   createUser: CreateUserDialog,
   registerAccount: RegisterAccountDialog,
+  registerApprove: RegisterApproveDialog,
 }
 
 export function DialogHost() {

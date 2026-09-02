@@ -615,14 +615,15 @@ async def create_chat_message(session_id: str, body: ExpertChatMessageReq, sessi
     else:
         assistant_text, tool_trace = await run_native_flowhub_chat(session, body.content, user, chat.provider_model_id, history=history_text, project_name=chat.project_name)
         run_id, run_status = None, "completed"
-        ref = await save_chat_output_document(session, project_name=chat.project_name, output=assistant_text, user=user)
+    chat_files: list[dict] = []
+    if not bound_version:
+        ref = await save_chat_output_document(session, project_name=chat.project_name, output=assistant_text, user=user, prompt=body.content)
         if ref:
             chat_files = [ref]
-    chat_files: list[dict] = []
     if bound_version:
         tool_trace = [{"tool": event.title, "status": event.status, "summary": event.payload} for event in (await session.execute(select(ExpertRunEvent).where(ExpertRunEvent.run_id == run.id).order_by(ExpertRunEvent.sequence))).scalars().all()]
         if run_status == "succeeded" and run.output:
-            ref = await save_chat_output_document(session, project_name=chat.project_name, output=run.output, user=user)
+            ref = await save_chat_output_document(session, project_name=chat.project_name, output=run.output, user=user, prompt=run.input)
             if ref:
                 chat_files = [ref]
         if not deployment:
@@ -712,7 +713,7 @@ async def stream_chat_message(session_id: str, body: ExpertChatMessageReq, sessi
                     # 长文档型产出自动归档为项目文档，挂到消息 files（右侧产出文件栏可下载/预览）
                     chat_files: list[dict] = []
                     if run.status == "succeeded" and run.output:
-                        ref = await save_chat_output_document(worker_session, project_name=worker_chat.project_name, output=run.output, user=worker_user)
+                        ref = await save_chat_output_document(worker_session, project_name=worker_chat.project_name, output=run.output, user=worker_user, prompt=run.input)
                         if ref:
                             chat_files = [ref]
                             await emit("trace", {"kind": "tool", "tool": "flowhub.doc.save", "status": "succeeded", "summary": {"summary": f"产出已归档为文档：{ref['name']}"}})
@@ -745,7 +746,7 @@ async def stream_chat_message(session_id: str, body: ExpertChatMessageReq, sessi
                         await queue.put(("token", {"text": assistant_text}))
                     # 长文档型产出自动归档为项目文档，挂到消息 files（右侧产出文件栏可下载/预览）
                     chat_files = []
-                    ref = await save_chat_output_document(worker_session, project_name=worker_chat.project_name, output=assistant_text, user=worker_user)
+                    ref = await save_chat_output_document(worker_session, project_name=worker_chat.project_name, output=assistant_text, user=worker_user, prompt=body.content)
                     if ref:
                         chat_files = [ref]
                         await emit("trace", {"kind": "tool", "tool": "flowhub.doc.save", "status": "succeeded", "summary": {"summary": f"产出已归档为文档：{ref['name']}"}})

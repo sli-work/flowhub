@@ -172,7 +172,8 @@ def build_graph(provider: LlmProvider, model: LlmProviderModel, system_prompt: s
     async def model_node(state: GraphState) -> dict:
         llm = ChatOpenAI(model=model.model, base_url=provider.base_url, api_key=decrypt_secret(provider.api_key), temperature=0, timeout=15, max_retries=0)
         history = (state.get("history") or "").strip()
-        messages = [("system", system_prompt)]
+        deliverable_rule = "产出约定：仅当本次回答是用户明确要求的完整交付物（文档/方案/用例等）时，在回答最后另起一行写「【交付文件】文档标题」声明交付（系统会据此生成可下载文档）；普通问答不要声明。"
+        messages = [("system", f"{system_prompt}\n\n{deliverable_rule}")]
         if history:
             messages.append(("system", f"以下是会话历史（含已压缩的早期轮次）：\n{history}"))
         flowhub_context = (state.get("flowhub_context") or "").strip()
@@ -586,15 +587,47 @@ def chat_file_entry(ref: dict) -> dict:
     }
 
 
-async def save_chat_output_document(session: AsyncSession, *, project_name: str | None, output: str, user: User) -> dict | None:
-    """AiChat 长文档型产出自动归档：成功回答 ≥400 字且会话绑定了项目时，
-    把 Markdown 产出落库为项目文档（文档中心可见），返回消息 files 条目；否则 None。"""
+DELIVERABLE_MARK = "【交付文件】"
+
+def extract_deliverable(output: str) -> tuple[str, str] | None:
+    """提取模型显式声明的交付文件：回答中含「【交付文件】标题」行 → (标题, 正文)。无声明返回 None。
+
+    普通问答（即使较长）不再自动落文档——只有模型按提示词约定声明交付时才生成文件。
+    兼容模型把声明写在末尾以外位置的情况：取最后一次出现的声明行。"""
+    lines = (output or "").strip().splitlines()
+    decl_idx = max((i for i, l in enumerate(lines) if DELIVERABLE_MARK in l), default=-1)
+    if decl_idx < 0:
+        return None
+    title = lines[decl_idx].strip().replace(DELIVERABLE_MARK, "").strip().strip(":：")[:80]
+    if not title:
+        return None
+    # 正文剔除全部声明行（避免重复声明混入交付文档）
+    body = "\n".join(l for l in lines if DELIVERABLE_MARK not in l).strip()
+    return title, body
+
+
+_DELIVERABLE_INTENT = re.compile(r"(生成|整理|输出|编写|写|产出|提供|做|出).{0,24}(文档|方案|规范|用例|计划|报告|说明|清单|指南|手册)")
+
+def has_deliverable_intent(prompt: str) -> bool:
+    """用户消息是否带有"产出文档类交付物"的明确意图。"""
+    return bool(_DELIVERABLE_INTENT.search(prompt or ""))
+
+async def save_chat_output_document(session: AsyncSession, *, project_name: str | None, output: str, user: User, prompt: str = "") -> dict | None:
+    """会话绑定项目 + 用户有明确交付意图 + 回答足够长（≥400字）时，把 Markdown 产出归档为项目文档。
+
+    模型若按约定声明了【交付文件】标题则采用之；否则用意图关键词匹配出的文档名兜底。"""
     if not project_name or len((output or "").strip()) < 400:
+        return None
+    declared = extract_deliverable(output)
+    if declared:
+        title, body = declared
+    elif has_deliverable_intent(prompt):
+        title, body = f"AI产出-{datetime.now(UTC).strftime('%m%d-%H%M%S')}", output.strip()
+    else:
         return None
     ref = await create_document_from_text(
         session, wi_id="", project=project_name,
-        name=f"AI产出-{datetime.now(UTC).strftime('%m%d-%H%M%S')}.md",
-        content=output, uploader=user,
+        name=f"{title}.md", content=body, uploader=user,
     )
     return chat_file_entry(ref)
 
@@ -781,7 +814,7 @@ async def run_native_flowhub_chat(session: AsyncSession, prompt: str, user: User
                 if history_text:
                     human_parts.append(f"会话历史（早期轮次可能已压缩）：\n{history_text}")
                 human_parts.append(f"{context}\n\n已查询结果：\n{answer}\n\n用户问题：{text}")
-                messages = [("system", "你是 FlowHub 默认助手。仅基于提供的 FlowHub 只读上下文回答；不可声称已执行创建、提交、删除或发布。需要写操作时，提示用户选择已发布 Expert。回答简洁，给出任务/工作项 ID 便于用户定位。"), ("human", "\n\n".join(human_parts))]
+                messages = [("system", "你是 FlowHub 默认助手。仅基于提供的 FlowHub 只读上下文回答；不可声称已执行创建、提交、删除或发布。需要写操作时，提示用户选择已发布 Expert。回答简洁，给出任务/工作项 ID 便于用户定位。 只有当用户明确要求生成文档/方案/用例等完整交付物时，才在回答最后另起一行写「【交付文件】文档标题」声明交付（系统会据此生成可下载文档）；普通问答不要声明。"), ("human", "\n\n".join(human_parts))]
                 if on_token:
                     chunks: list[str] = []
                     stream = llm.astream(messages)
