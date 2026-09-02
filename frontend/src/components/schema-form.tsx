@@ -226,8 +226,10 @@ function UploadWidget({ value, multiple, onChange, error, workItemId, project }:
           headers: token ? { Authorization: `Bearer ${token}` } : {},
           body: fd,
         })
-        const j = await r.json().catch(() => ({}))
-        if (!r.ok || j.code !== 0) throw new Error(j?.message || '上传失败')
+        const j = await r.json().catch(() => ({})
+        ) as { code?: number; message?: string; data?: { doc?: { id: string; name: string } } }
+        if (!r.ok || j.code !== 0) throw new Error(`${f.name}：${j.message || `HTTP ${r.status}`}`)
+        if (!j.data?.doc) throw new Error(`${f.name}：响应缺少文档信息`)
         refs.push({ id: j.data.doc.id, name: j.data.doc.name })
       }
       const existing = value.map(asUploadedFileRef)

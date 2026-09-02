@@ -28,6 +28,7 @@ router = APIRouter(prefix="/api/v1/documents", tags=["documents"])
 
 ALLOWED_EXT = {".pdf", ".md", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".fig", ".zip", ".png", ".jpg", ".yaml", ".txt"}
 ALLOWED_MIME = {"application/pdf", "text/markdown", "text/plain", "application/zip",
+                "application/x-zip-compressed",  # Windows 浏览器对 .zip 的常见 MIME
                 "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 "image/png", "image/jpeg", "application/octet-stream"}
 
