@@ -744,6 +744,7 @@ function ValidateDialog() {
   const [busy, setBusy] = useState(true)
   const [result, setResult] = useState<{ ok: boolean; errors: { node_id: string; message: string }[] } | null>(null)
   const [error, setError] = useState('')
+  const [publishing, setPublishing] = useState(false)
 
   const run = () => {
     setBusy(true)
@@ -766,6 +767,27 @@ function ValidateDialog() {
     closeDialog()
     openCanvas(tplId, tplName, version)
     locateCanvasNode(nodeId)
+  }
+
+  /** 发布：以当前画布内容走 save-and-publish（自动创建新版本并发布） */
+  const publish = async () => {
+    setPublishing(true)
+    setError('')
+    try {
+      const canvas = await api.get<{ nodes: unknown[]; edges: unknown[]; fallbacks: unknown[] }>(`/api/v1/templates/${tplId}/versions/${version}/canvas`)
+      const r = await api.post<{ version: string; status: string }>(
+        `/api/v1/templates/${tplId}/versions/save-and-publish`,
+        { nodes: canvas.nodes, edges: canvas.edges, fallbacks: canvas.fallbacks },
+      )
+      toast.success(`已发布新版本 ${r.version}：静态校验通过`)
+      closeDialog()
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : '发布失败'
+      setError(msg)
+      toast.error(msg)
+    } finally {
+      setPublishing(false)
+    }
   }
 
   return (
@@ -807,7 +829,10 @@ function ValidateDialog() {
         )}
         <DialogFooter className="gap-2">
           <Button variant="outline" onClick={closeDialog}>关闭</Button>
-          <Button disabled={busy} onClick={run}>重新校验</Button>
+          <Button variant="outline" disabled={busy} onClick={run}>重新校验</Button>
+          <Button disabled={busy || publishing || !result?.ok} onClick={() => void publish()} title={!result?.ok ? '校验通过后才能发布' : undefined}>
+            {publishing ? '发布中…' : '发布'}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
