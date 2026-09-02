@@ -63,10 +63,9 @@ function fieldLabel(schema: FormField[] | undefined, key: string): string {
   return schema?.find((field) => field.key === key)?.label ?? key
 }
 
-/* Run 产出展示：有解析快照 → 按节点 schema 逐字段预览（Markdown 渲染/文档 chip），
-   「采纳回填」所见即所得；无快照 → 原文渲染。原始输出（JSON 墙）一律折叠进展开块。 */
+/* Run 产出展示（人机协同主阅读区）：AI 产出全文渲染优先——Markdown 直接读、JSON 美化展示；
+   下方紧凑摘要提示「采纳将回填哪些字段」（辅助信息，不替代全文、不做字段盒子/裁剪）。 */
 function RunOutputPreview({ run, schema }: { run: ExpertRunBrief; schema: FormField[] }) {
-  const [showRaw, setShowRaw] = useState(false)
   if (run.status === 'failed') {
     return (
       <div className="mt-1.5 max-h-72 overflow-y-auto rounded-md pr-1">
@@ -75,94 +74,44 @@ function RunOutputPreview({ run, schema }: { run: ExpertRunBrief; schema: FormFi
     )
   }
   const parsed = run.parsed
-  const hasParsed = run.status === 'succeeded' && parsed && parsed.values && Object.keys(parsed.values).length > 0
-  const prettyRaw = (() => {
-    const text = run.output || ''
-    // JSON 美化：能解析为对象/数组时缩进两格输出，其余原样
-    const t = text.trim()
-    if ((t.startsWith('{') && t.endsWith('}')) || (t.startsWith('[') && t.endsWith(']'))) {
-      try { return JSON.stringify(JSON.parse(t), null, 2) } catch { /* 非合法 JSON 原样展示 */ }
-    }
-    return text
-  })()
+  const filled = parsed?.values
+    ? schema.filter((f) => {
+        const v = parsed.values[f.key]
+        return !(v === undefined || v === null || v === '' || (Array.isArray(v) && v.length === 0))
+      })
+    : []
+  const text = run.output || ''
+  const t = text.trim()
+  const isJson = (t.startsWith('{') && t.endsWith('}')) || (t.startsWith('[') && t.endsWith(']'))
+  const prettyJson = isJson ? (() => { try { return JSON.stringify(JSON.parse(t), null, 2) } catch { return null } })() : null
   return (
     <div className="mt-1.5">
-      {hasParsed && schema.length > 0 ? (
-        <div className="space-y-2">
-          {parsed!.warnings.map((w, i) => (
-            <div key={i} className="rounded-md border border-amber-200 bg-amber-50/60 px-2.5 py-1.5 text-[11.5px] text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300">{w}</div>
-          ))}
-          {schema.map((f) => {
-            const v = parsed!.values[f.key]
-            const empty = v === undefined || v === null || v === '' || (Array.isArray(v) && v.length === 0)
-            return (
-              <div key={f.key} className="rounded-md border border-violet-100 bg-white/60 px-3 py-2 dark:border-violet-500/20 dark:bg-slate-900/40">
-                <div className="flex items-center gap-1.5 text-[11px] font-semibold text-violet-600 dark:text-violet-300">
-                  <span>将回填「{f.label}」</span>
-                  {empty && <span className="font-normal text-slate-400">（未生成）</span>}
-                </div>
-                {!empty && (
-                  <div className="mt-1">
-                    {(f.type === 'upload' || f.type === 'file') ? (
-                      <div className="flex flex-wrap gap-1.5">
-                        {(Array.isArray(v) ? v : [v]).map((item, i) => {
-                          const o = (item ?? {}) as { id?: string; name?: string }
-                          return (
-                            <span key={o.id ?? i} className="inline-flex items-center gap-1 rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-medium text-violet-700 dark:bg-violet-500/20 dark:text-violet-300">
-                              {o.name ?? String(item)}
-                            </span>
-                          )
-                        })}
-                        <span className="text-[10.5px] text-slate-400 self-center">采纳时自动生成文档</span>
-                      </div>
-                    ) : f.type === 'textarea' ? (
-                      <LongTextPreview text={String(v)} />
-                    ) : (
-                      <div className="break-words text-[12.5px] leading-relaxed text-slate-600 dark:text-slate-300">{String(v)}</div>
-                    )}
-                  </div>
-                )}
-              </div>
-            )
-          })}
+      {/* 主视图：产出全文（人先读懂 AI 做了什么） */}
+      {prettyJson ? (
+        <div className="max-h-96 overflow-y-auto rounded-md border border-slate-100 bg-slate-50/60 p-2 dark:border-slate-800 dark:bg-slate-900/60">
+          <pre className="whitespace-pre-wrap break-words text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">{prettyJson}</pre>
         </div>
-      ) : run.output ? (
-        <div className="max-h-72 overflow-y-auto rounded-md pr-1">
-          <MarkdownView text={run.output} className="text-[12.5px] leading-relaxed" />
+      ) : text ? (
+        <div className="max-h-96 overflow-y-auto rounded-md pr-1">
+          <MarkdownView text={text} className="text-[12.5px] leading-relaxed" />
         </div>
       ) : (
-        <p className="rounded-md text-[12.5px] text-slate-400">（无文本输出）</p>
+        <p className="text-[12.5px] text-slate-400">（无文本输出）</p>
       )}
-      {run.status === 'succeeded' && !!run.output && (
-        <div className="mt-1.5">
-          <button className="text-[11px] font-medium text-slate-400 transition-colors hover:text-slate-600 dark:hover:text-slate-300" onClick={() => setShowRaw((p) => !p)}>
-            {showRaw ? '收起原始输出' : '查看原始输出'}
-          </button>
-          {showRaw && (
-            <div className="mt-1 max-h-72 overflow-y-auto rounded-md border border-slate-100 bg-slate-50/60 p-2 dark:border-slate-800 dark:bg-slate-900/60">
-              <pre className="whitespace-pre-wrap break-words text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">{prettyRaw}</pre>
-            </div>
-          )}
+      {/* 解析警告（轻量提示） */}
+      {run.status === 'succeeded' && !!parsed?.warnings?.length && (
+        <div className="mt-1.5 space-y-0.5">
+          {parsed.warnings.map((w, i) => (
+            <p key={i} className="text-[11.5px] text-amber-600 dark:text-amber-300">⚠ {w}</p>
+          ))}
         </div>
       )}
-    </div>
-  )
-}
-
-/* 长文本预览：默认收起显示前 6 行，展开看全文（Markdown 渲染） */
-function LongTextPreview({ text }: { text: string }) {
-  const [expanded, setExpanded] = useState(false)
-  const lines = text.split('\n')
-  const clipped = !expanded && lines.length > 6
-  return (
-    <div>
-      <div className="max-h-72 overflow-y-auto rounded-md pr-1">
-        <MarkdownView text={clipped ? lines.slice(0, 6).join('\n') + '\n\n…' : text} className="text-[12.5px] leading-relaxed text-slate-600 dark:text-slate-300" />
-      </div>
-      {lines.length > 6 && (
-        <button className="mt-0.5 text-[11px] font-medium text-violet-500 transition-colors hover:text-violet-600" onClick={() => setExpanded((p) => !p)}>
-          {expanded ? '收起' : `展开全文（${lines.length} 行）`}
-        </button>
+      {/* 采纳回填摘要：一条紧凑信息，点采纳前就知道会发生什么 */}
+      {run.status === 'succeeded' && filled.length > 0 && (
+        <div className="mt-1.5 rounded-md border border-violet-100 bg-violet-50/50 px-2.5 py-1.5 text-[11.5px] text-violet-700 dark:border-violet-500/20 dark:bg-violet-500/10 dark:text-violet-300">
+          采纳将回填 {filled.length} 个字段：{filled.map((f) => `「${f.label}」`).join('、')}
+          {filled.some((f) => f.type === 'upload' || f.type === 'file') && '（附件字段采纳时自动生成文档）'}
+        </div>
       )}
     </div>
   )
