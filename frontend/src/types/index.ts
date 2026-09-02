@@ -481,4 +481,6 @@ export interface ExpertRunBrief {
   startedAt: string
   /** 用户重新执行时补充的执行上下文（空串=按任务书原样生成） */
   context?: string
+  /** 解析快照：后端按节点 schema 预解析的 {values, warnings}，供字段预览渲染 */
+  parsed?: { values: Record<string, unknown>; warnings: string[] } | null
 }

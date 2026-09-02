@@ -360,6 +360,37 @@ def test_adopt_run_reuses_spawned_run(client, org_headers, fake_model):
     assert len(td2["expertRuns"]) == len(runs)
 
 
+def test_adopt_run_parsed_snapshot_and_idempotent(client, org_headers, fake_model):
+    """解析快照：Run 成功后按 schema 预解析存 parsed（详情可见，供前端预览）；
+    重复采纳幂等——upload 字段不重复生成文档。"""
+    headers = org_headers
+    model_id, dep_id = _publish_expert_with_deployment(client, headers, "fill-dep-snap")
+    tpl_id = _publish_flow_template(client, headers, dep_id)
+    pid = _make_project(client, headers, tpl_id, "v1", [])
+    FakeChatOpenAI.payload = json.dumps({"conclusion": "快照结论", "verdict": "通过", "report": "# 快照报告正文"})
+    wi_id = _create_wi(client, headers, pid, tpl_id, "AI快照-E2E")
+    task_id = _get_open_tasks(client, headers, wi_id)[0]["id"]
+
+    runs = _wait_run_succeeded(client, headers, task_id)
+    assert runs and runs[0]["status"] == "succeeded"
+    # 详情携带 parsed 快照（前端字段预览的数据源）
+    snap = runs[0].get("parsed")
+    assert snap and snap["values"]["conclusion"] == "快照结论", "Run 详情应携带解析快照"
+
+    # 第一次采纳：生成文档并回填
+    r1 = client.post(f"/api/v1/tasks/{task_id}/adopt-run", headers=headers, json={"run_id": runs[0]["id"]})
+    assert r1.status_code == 200, r1.text
+    ref1 = r1.json()["data"]["values"]["report"][0]
+    # 第二次采纳：幂等，文档引用不变（不重复生成）
+    r2 = client.post(f"/api/v1/tasks/{task_id}/adopt-run", headers=headers, json={"run_id": runs[0]["id"]})
+    assert r2.status_code == 200, r2.text
+    ref2 = r2.json()["data"]["values"]["report"][0]
+    assert ref2["id"] == ref1["id"], "重复采纳应复用同一文档（快照幂等）"
+    # 快照中 upload 值已被替换为文档引用
+    snap2 = client.get(f"/api/v1/tasks/{task_id}", headers=headers).json()["data"]["expertRuns"][0]["parsed"]
+    assert isinstance(snap2["values"]["report"], list) and snap2["values"]["report"][0]["id"] == ref1["id"]
+
+
 # ---------- Expert 自动：run 成功后免审批自动采纳并流转 ----------
 
 def _publish_auto_template(client, headers, deployment_id):

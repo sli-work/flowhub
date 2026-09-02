@@ -260,6 +260,7 @@ async def execute_run(session: AsyncSession, run: ExpertRun, version: ExpertVers
         run.output = str(result.get("output", ""))
         run.status = "succeeded"
         await add_event(session, run.id, 3, "model", "succeeded", "LangGraph 模型节点完成", {"output": run.output[:1000]})
+        await _snapshot_parsed_for_task(session, run)
     except Exception as exc:  # noqa: BLE001
         run.status = "failed"
         run.error = "模型服务暂不可用，请检查 Provider 连接或稍后重试"
@@ -268,6 +269,35 @@ async def execute_run(session: AsyncSession, run: ExpertRun, version: ExpertVers
             await emitter("trace", {"kind": "model", "tool": "模型调用", "status": "failed", "summary": run.error})
     finally:
         run.finished_at = now_iso()
+
+
+async def _snapshot_parsed_for_task(session: AsyncSession, run: ExpertRun) -> None:
+    """Run 成功且关联流程任务时，按节点 schema 预解析产出存 parsed 快照。
+
+    快照 = {values, warnings}：前端 Run 卡片据此渲染字段预览（用户不必看 JSON 墙），
+    采纳接口直接消费（幂等，重复采纳不再重复生成文档）。解析失败存空 values + warnings。"""
+    if not run.task_id:
+        return
+    task = await session.get(TaskItem, run.task_id)
+    if task is None:
+        return
+    # 解析任务所属项目绑定的激活模板 → 节点 schema（与 routes.tasks._resolve_task_template 同逻辑）
+    from flowhub_api.models import GlobalTemplate, Project
+
+    project = (await session.execute(select(Project).where(Project.name == task.project))).scalar_one_or_none()
+    binding = next((b for b in project.template_bindings if b.status == "active"), None) if project else None
+    tpl = await session.get(GlobalTemplate, binding.template_id) if binding else None
+    if tpl is None:
+        return
+    from flowhub_api.services.workflow import WorkflowService
+
+    cfg = await WorkflowService(session)._node_cfg_of(tpl, task.node_id) or {}
+    schema = cfg.get("schema") or []
+    if not schema:
+        run.parsed = None
+        return
+    values, warnings = parse_schema_output(schema, run.output or "")
+    run.parsed = {"values": values, "warnings": warnings}
 
 
 async def resume_approved_run(session: AsyncSession, approval: ExpertApproval, user: User) -> ExpertRun:
@@ -355,6 +385,7 @@ async def schedule_deployment_run(session: AsyncSession, deployment_id: str, pro
         run.context = context
         run.output = ""
         run.error = ""
+        run.parsed = None
         run.trace_id = new_id("trace")
         run.started_at = now_iso()
         run.finished_at = ""

@@ -421,11 +421,18 @@ class WorkflowService:
 
     # ---------- 节点表单 AI 填充 ----------
     async def fill_task_from_run(self, task: TaskItem, run, cfg: dict, actor: User) -> tuple[dict, list[str]]:
-        """把 Expert Run 产出解析为节点表单值（upload 字段自动生成工作项文档）。"""
+        """把 Expert Run 产出解析为节点表单值（upload 字段自动生成工作项文档）。
+
+        优先消费 Run 成功时预生成的 parsed 快照（幂等：重复采纳不重复解析/生成文档）；
+        快照缺失（存量 Run/无 schema 节点）时回退现场解析。"""
         from flowhub_api.services.expert_runtime import parse_schema_output
 
         schema = cfg.get("schema") or []
-        values, warnings = parse_schema_output(schema, run.output or "")
+        snapshot = run.parsed if isinstance(run.parsed, dict) else None
+        if snapshot is not None:
+            values, warnings = dict(snapshot.get("values") or {}), list(snapshot.get("warnings") or [])
+        else:
+            values, warnings = parse_schema_output(schema, run.output or "")
         for f in schema:
             key, ftype = f.get("key", ""), f.get("type", "")
             if ftype in ("upload", "file") and isinstance(values.get(key), str) and values[key].strip():

@@ -161,6 +161,8 @@ class ExpertRun(Base):
     # 用户重新执行时补充的执行上下文（留空=按任务书原样生成）；展示 + prompt 拼接
     context: Mapped[str] = mapped_column(Text, default="")
     output: Mapped[str] = mapped_column(Text, default="")
+    # 解析快照：Run 成功后按节点 schema 解析的 {values, warnings}，供前端预览与采纳幂等消费
+    parsed: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     trace_id: Mapped[str] = mapped_column(String(64), unique=True)
     error: Mapped[str] = mapped_column(Text, default="")
     started_at: Mapped[str] = mapped_column(String(40), default="")

@@ -237,7 +237,7 @@ async def get_task(
             "split": node_cfg.get("split") or {"mode": "off"},
         },
         "expertRuns": [
-            {"id": r.id, "status": r.status, "output": r.output or "", "error": r.error, "startedAt": r.started_at, "context": r.context or ""}
+            {"id": r.id, "status": r.status, "output": r.output or "", "error": r.error, "startedAt": r.started_at, "context": r.context or "", "parsed": r.parsed}
             for r in linked_runs
         ],
     })
@@ -635,6 +635,17 @@ async def adopt_run(
     values, warnings = await service.fill_task_from_run(t, run, cfg, user)
     if not values:
         raise BizError(BizCode.FLOW_VALIDATE, warnings[0] if warnings else "Run 产出未能解析出表单值；可点击「重新生成」重试", http_status=422)
+    # 幂等：采纳后把快照里 upload 字段的正文替换为文档引用，重复采纳不再重复生成文档
+    if isinstance(run.parsed, dict):
+        parsed_values = dict(run.parsed.get("values") or {})
+        changed = False
+        for f in (cfg.get("schema") or []):
+            key, ftype = f.get("key", ""), f.get("type", "")
+            if ftype in ("upload", "file") and isinstance(parsed_values.get(key), str) and isinstance(values.get(key), list):
+                parsed_values[key] = values[key]
+                changed = True
+        if changed:
+            run.parsed = {**run.parsed, "values": parsed_values}
     await AuditService(session).record(
         actor=user.name, action="task:adopt_run", target=f"{t.id} · {t.node}", result="success",
         after={"runId": run.id, "fields": list(values.keys()), "warnings": warnings[:5]},

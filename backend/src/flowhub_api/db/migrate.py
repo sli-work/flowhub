@@ -181,6 +181,11 @@ async def migrate(conn: AsyncConnection) -> None:
     if "task_id" not in ntf_cols:
         await conn.execute(text('ALTER TABLE notifications ADD COLUMN "task_id" VARCHAR(64) DEFAULT \'\''))
         logger.info("migrate: notifications.task_id 已补充")
+    # expert_runs.parsed：解析快照（{values, warnings}），前端预览与采纳幂等消费
+    run_cols = await _existing_columns(conn, "expert_runs")
+    if "parsed" not in run_cols:
+        await conn.execute(text('ALTER TABLE expert_runs ADD COLUMN "parsed" JSON'))
+        logger.info("migrate: expert_runs.parsed 已补充")
     # work_items.title 不再全局唯一（去掉重复性校验）：移除唯一索引（保留普通标题搜索索引）
     title_idx = (await conn.execute(text(
         "SELECT indexdef FROM pg_indexes WHERE tablename='work_items' AND indexname='ix_work_items_title'"
