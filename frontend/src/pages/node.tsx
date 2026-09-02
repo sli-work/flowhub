@@ -85,15 +85,15 @@ function RunOutputPreview({ run, schema }: { run: ExpertRunBrief; schema: FormFi
   const isJson = (t.startsWith('{') && t.endsWith('}')) || (t.startsWith('[') && t.endsWith(']'))
   const prettyJson = isJson ? (() => { try { return JSON.stringify(JSON.parse(t), null, 2) } catch { return null } })() : null
   return (
-    <div className="mt-1.5">
-      {/* 主视图：产出全文（人先读懂 AI 做了什么） */}
+    <div className="mt-1.5 min-w-0">
+      {/* 主视图：产出全文（人先读懂 AI 做了什么）；max-w-full 防长表格/长串撑宽父容器 */}
       {prettyJson ? (
-        <div className="max-h-96 overflow-y-auto rounded-md border border-slate-100 bg-slate-50/60 p-2 dark:border-slate-800 dark:bg-slate-900/60">
-          <pre className="whitespace-pre-wrap break-words text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">{prettyJson}</pre>
+        <div className="max-h-96 max-w-full overflow-y-auto rounded-md border border-slate-100 bg-slate-50/60 p-2 dark:border-slate-800 dark:bg-slate-900/60">
+          <pre className="max-w-full whitespace-pre-wrap break-words text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">{prettyJson}</pre>
         </div>
       ) : text ? (
-        <div className="max-h-96 overflow-y-auto rounded-md pr-1">
-          <MarkdownView text={text} className="text-[12.5px] leading-relaxed" />
+        <div className="max-h-96 min-w-0 max-w-full overflow-y-auto rounded-md pr-1 [&_.aui-markdown_table]:max-w-full">
+          <MarkdownView text={text} className="min-w-0 max-w-full break-words text-[12.5px] leading-relaxed" />
         </div>
       ) : (
         <p className="text-[12.5px] text-slate-400">（无文本输出）</p>
@@ -526,8 +526,8 @@ export function NodeProcessPage() {
         </div>
       </div>
 
-      {/* 三栏主体 */}
-      <div className="grid gap-5 lg:grid-cols-[240px_1fr_340px]">
+      {/* 三栏主体：中栏 min-w-0 防止长表格/长串内容把 1fr 列与整页撑宽 */}
+      <div className="grid gap-5 lg:grid-cols-[240px_minmax(0,1fr)_340px]">
         {/* 左栏：流程进度 */}
         <SectionCard title="流程进度" bodyClassName="p-4" className="self-start">
           <FlowSteps nodes={flowSteps as never[]} />
@@ -537,7 +537,7 @@ export function NodeProcessPage() {
         </SectionCard>
 
         {/* 中栏：任务书 + 表单 + 拆分 + 继承上下文 + Expert Run 结果 */}
-        <div className="space-y-5">
+        <div className="min-w-0 space-y-5">
           {curNodeType !== 'start' && (curCfg.purpose || curCfg.deliverable?.instruction || task?.brief || Object.keys(acceptance).length > 0) && (
             /* 任务书：人与 AI 共用同一份产出契约 */
             <SectionCard title="任务书" extra={<Badge tone="cyn"><ClipboardList className="mr-1 h-3 w-3" />产出契约</Badge>} bodyClassName="p-4">
@@ -778,7 +778,7 @@ export function NodeProcessPage() {
                 </div>
               )}
               {expertRuns.map((s) => (
-                <div key={s.id} className={cn('rounded-lg border p-3.5', s.status === 'failed' ? 'border-red-100 bg-red-50/50 dark:border-red-500/20 dark:bg-red-500/5' : 'border-violet-100 bg-violet-50/50 dark:border-violet-500/20 dark:bg-violet-500/5')}>
+                <div key={s.id} className={cn('min-w-0 overflow-hidden rounded-lg border p-3.5', s.status === 'failed' ? 'border-red-100 bg-red-50/50 dark:border-red-500/20 dark:bg-red-500/5' : 'border-violet-100 bg-violet-50/50 dark:border-violet-500/20 dark:bg-violet-500/5')}>
                   <div className="flex items-center justify-between gap-2">
                     <span className="flex items-center gap-1.5 text-[12.5px] font-semibold text-violet-700 dark:text-violet-300">
                       <Bot className="h-4 w-4" />{s.id}
