@@ -1,30 +1,23 @@
-# FlowHub 后端镜像：Python 3.13 + 内置 opencode CLI
+# FlowHub 后端镜像：Python 3.13
 # 构建：docker build -t flowhub-backend -f backend/Dockerfile backend
 FROM python:3.13-slim
 
-# 构建时可通过 --build-arg HTTP_PROXY/HTTPS_PROXY 使用临时代理；默认不配置。
-ARG HTTP_PROXY
-ARG HTTPS_PROXY
-ARG NO_PROXY
-ENV HTTP_PROXY=${HTTP_PROXY} HTTPS_PROXY=${HTTPS_PROXY} NO_PROXY=${NO_PROXY}
-
-# opencode 官方安装脚本依赖 curl / unzip / ca-certificates；git 供仓库镜像 bare clone 使用
+# 依赖统一走内网 PyPI 仓库（直连），不再通过 HTTP 代理构建
+# git 供仓库镜像 bare clone 使用
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        curl unzip ca-certificates git \
+        ca-certificates git \
     && rm -rf /var/lib/apt/lists/*
-
-# 内置安装 opencode（官方脚本 → /root/.opencode/bin/opencode）；网络不稳时重试 3 次，
-# 仍失败则跳过（opencode 为可选运行时，缺失只影响 opencode 执行器，不影响 FlowHub 主体）
-RUN for i in 1 2 3; do curl -fsSL --connect-timeout 20 https://opencode.ai/install | bash && break || sleep 5; done; \
-    test -x /root/.opencode/bin/opencode || echo "WARN: opencode install skipped (network unavailable)"
-ENV PATH="/root/.opencode/bin:${PATH}"
 
 WORKDIR /app
 
-# 依赖层（利用缓存）
+# 依赖层（利用缓存）；默认走内网 PyPI 仓库（可 --build-arg PIP_INDEX_URL 覆盖）
+ARG PIP_INDEX_URL=http://192.168.239.230:8887/repository/mc-group-pypi/simple/
+ARG PIP_TRUSTED_HOST=192.168.239.230
 COPY pyproject.toml README.md ./
 COPY src ./src
-RUN pip install --no-cache-dir .
+# uv 安装依赖（并行下载/硬链接缓存，比 pip 快很多）；uv 本身也取自内网仓库
+RUN pip install --no-cache-dir --index-url=${PIP_INDEX_URL} --trusted-host ${PIP_TRUSTED_HOST} uv \
+    && uv pip install --system --no-cache --index-url=${PIP_INDEX_URL} --allow-insecure-host=${PIP_TRUSTED_HOST} .
 
 # 运行配置
 ENV PYTHONUNBUFFERED=1

@@ -227,7 +227,7 @@ class TestPublish:
 
 
 class TestSaveAndPublish:
-    """发布（自动创建新版本）：每次发布都创建新版本号 → 保存画布 → 校验 → 自动发布。"""
+    """发布：优先发布最新草稿（同版本号转 published），无草稿才创建新版本。"""
 
     VALID = {
         "nodes": [{"id": "a", "type": "start"}, {"id": "b", "type": "task"}, {"id": "c", "type": "end"}],
@@ -262,19 +262,19 @@ class TestSaveAndPublish:
         v1_item = next(x for x in vers if x["version"] == v1)
         assert v1_item["status"] == "published"
 
-    def test_save_publish_invalid_keeps_new_draft(self, client: TestClient, org_headers: dict):
-        """非法画布：422 阻断，新版本保留为草稿；修复后再次发布创建下一个新版本。"""
+    def test_save_publish_invalid_keeps_draft(self, client: TestClient, org_headers: dict):
+        """非法画布：422 阻断，草稿保留为 draft；修复后再次发布复用同一草稿版本。"""
         code, body = self._save(client, org_headers, self.INVALID)
         assert code == 422
         assert "发布校验未通过" in body["message"]
-        # 新版本保留为草稿
+        # 草稿保留为 draft
         vers = client.get("/api/v1/templates/tpl-issue/versions", headers=org_headers).json()["data"]["items"]
         latest = vers[0]["version"]
         assert vers[0]["status"] == "draft"
-        # 修复后再次发布 → 创建下一个新版本（不再是同一版本）
+        # 修复后再次发布 → 复用同一草稿版本（不跳号）
         code2, body2 = self._save(client, org_headers, self.VALID)
         assert code2 == 200
-        assert int(body2["data"]["version"][1:]) > int(latest[1:])
+        assert body2["data"]["version"] == latest
         assert body2["data"]["status"] == "published"
 
     def test_save_publish_no_perm(self, client: TestClient, dev_headers: dict):
@@ -317,18 +317,18 @@ class TestSaveDraft:
         assert body2["data"]["created"] is False
         assert body2["data"]["status"] == "draft"
 
-    def test_save_draft_then_publish_creates_new_version(self, client: TestClient, org_headers: dict):
-        """保存草稿 → 再发布：发布自动创建下一个新版本并转 published（草稿→发布闭环，草稿本身保留）。"""
+    def test_save_draft_then_publish_publishes_same_version(self, client: TestClient, org_headers: dict):
+        """保存草稿 → 再发布：发布复用该草稿版本号转 published（不跳号、不留孤儿草稿）。"""
         vd = self._save(client, org_headers, self.VALID)[1]["data"]["version"]
         r = client.post("/api/v1/templates/tpl-issue/versions/save-and-publish", headers=org_headers, json=self.VALID)
         assert r.status_code == 200
         vp = r.json()["data"]["version"]
-        assert int(vp[1:]) > int(vd[1:])
+        assert vp == vd
         assert r.json()["data"]["status"] == "published"
-        # 草稿版本仍保留为 draft（发布不顶替草稿）
+        # 该版本已是 published（不再保留 draft）
         vers = client.get("/api/v1/templates/tpl-issue/versions", headers=org_headers).json()["data"]["items"]
         vd_item = next(x for x in vers if x["version"] == vd)
-        assert vd_item["status"] == "draft"
+        assert vd_item["status"] == "published"
 
 
 class TestStartSchema:

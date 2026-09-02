@@ -158,6 +158,8 @@ class ExpertRun(Base):
     requested_by: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
     status: Mapped[str] = mapped_column(String(16), default="queued")
     input: Mapped[str] = mapped_column(Text, default="")
+    # 用户重新执行时补充的执行上下文（留空=按任务书原样生成）；展示 + prompt 拼接
+    context: Mapped[str] = mapped_column(Text, default="")
     output: Mapped[str] = mapped_column(Text, default="")
     trace_id: Mapped[str] = mapped_column(String(64), unique=True)
     error: Mapped[str] = mapped_column(Text, default="")

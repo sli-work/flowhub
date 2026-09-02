@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 
 import bcrypt
 from jose import JWTError, jwt
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from flowhub_api.core.config import get_settings
@@ -44,7 +44,12 @@ class AuthService:
 
     # ---------- 本地登录 ----------
     async def login(self, account: str, password: str) -> tuple[User, str]:
-        user = (await self.session.execute(select(User).where(User.account == account))).scalar_one_or_none()
+        # 登录名兼容两种输入：账号名（account）或邮箱（email，登录页「用户名/邮箱」）。
+        # 仅当输入含 @ 时才匹配邮箱（email 默认空串，避免空值误匹配）
+        cond = User.account == account
+        if "@" in account:
+            cond = or_(cond, User.email == account)
+        user = (await self.session.execute(select(User).where(cond))).scalar_one_or_none()
         if user is None or user.deleted or not user.password_hash or not self.verify_password(password, user.password_hash):
             raise BizError(BizCode.UNAUTH, "账号或密码错误", http_status=401)
         if user.status == "invited":
@@ -59,9 +64,15 @@ class AuthService:
 
     # ---------- 注册 / 审批 ----------
     async def register(self, account: str, name: str, email: str, dept: str, role_id: str, password: str) -> User:
-        exists = (await self.session.execute(select(User).where(User.account == account))).scalar_one_or_none()
+        # 邮箱仅在非空时参与查重（email 默认空串，不能用空值去匹配存量用户）
+        cond = User.account == account
+        if email.strip():
+            cond = or_(cond, User.email == email.strip())
+        exists = (await self.session.execute(
+            select(User).where(cond, User.deleted == False)  # noqa: E712
+        )).scalar_one_or_none()
         if exists:
-            raise BizError(BizCode.DUPLICATE_OPERATION, "账号已存在")
+            raise BizError(BizCode.DUPLICATE_OPERATION, "账号或邮箱已存在")
         role = await self.session.get(Role, role_id)
         if role is None:
             raise BizError(BizCode.VALIDATION, "角色不存在")

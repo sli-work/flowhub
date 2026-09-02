@@ -244,7 +244,7 @@ export function CanvasPage() {
     }
   }
 
-  /* ---------- 发布：自动创建/复用最新版本 → 静态校验 → 自动发布（POST /versions/save-and-publish） ---------- */
+  /* ---------- 发布：复用最新草稿版本（无草稿则自动创建新版本）→ 静态校验 → 自动发布（POST /versions/save-and-publish） ---------- */
   const publishCanvas = async () => {
     setSnapshotDraft()
     setMode('view')
@@ -254,7 +254,7 @@ export function CanvasPage() {
         `/api/v1/templates/${tplId}/versions/save-and-publish`,
         { nodes, edges, fallbacks },
       )
-      toast.success(`已保存并发布新版本 ${r.version}：静态校验通过，进入 published 状态`)
+      toast.success(`已保存并发布版本 ${r.version}：静态校验通过，进入 published 状态`)
     } catch (e) {
       if (e instanceof ApiError && e.status === 422) {
         // 校验未通过：画布已存为新版本草稿（可复用重试），打开发布校验弹框查看完整问题清单并定位

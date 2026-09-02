@@ -500,10 +500,12 @@ async def save_draft_and_publish(
     user: Annotated[User, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """发布（自动创建新版本）：每次发布都创建新版本 v_next → 保存画布 → 校验 → 自动发布。
+    """发布：优先发布最新草稿版本（同版本号转 published），无草稿才自动创建新版本。
 
-    - 已发布版本只读，不提供发布（前端禁用入口）；本端点始终创建新版本号，不会对任何既有版本重复发布。
-    - 校验失败时新版本保留为草稿（可继续编辑），返回 422 + 首个阻断问题。
+    - 保存草稿后直接发布 → 发布的就是该草稿版本号（不会跳号）；
+    - 无草稿（或最新版本已发布）→ 自动创建下一个新版本号；
+    - 已发布版本只读，不提供发布（前端禁用入口）；不会对既有 published 版本重复发布。
+    - 校验失败时草稿保留为 draft（可继续编辑），返回 422 + 首个阻断问题。
     """
     auth = build_authorizer(user)
     auth.require("workflow_template:update")
@@ -512,21 +514,24 @@ async def save_draft_and_publish(
     if tpl is None:
         raise BizError(BizCode.NOT_FOUND, "模板不存在")
 
-    # 总是创建新版本：综合模板数组 + 版本表计算下一个版本号（兼容历史孤儿版本）
-    import re
-    table_vers = (await session.execute(
-        select(TemplateVersion.version).where(TemplateVersion.template_id == template_id)
-    )).scalars().all()
-    all_vers = set(table_vers) | set(tpl.versions)
-    nums = [int(m.group(1)) for v in all_vers if (m := re.match(r"v(\d+)$", v))]
-    next_v = f"v{(max(nums) + 1) if nums else 1}"
-    target = TemplateVersion(
-        id=f"{template_id}:{next_v}", template_id=template_id, version=next_v,
-        status="draft", updated="刚刚", updated_by=user.name, instances=0, nodes=0,
-    )
-    if next_v not in tpl.versions:
-        tpl.versions = [*tpl.versions, next_v]
-    session.add(target)
+    # 复用最新草稿版本（若有）：与 save-draft 一致取 tpl.versions 末位；无草稿才创建新版本
+    latest_ver = tpl.versions[-1] if tpl.versions else None
+    target = await session.get(TemplateVersion, f"{template_id}:{latest_ver}") if latest_ver else None
+    if target is None or target.status != "draft":
+        import re
+        table_vers = (await session.execute(
+            select(TemplateVersion.version).where(TemplateVersion.template_id == template_id)
+        )).scalars().all()
+        all_vers = set(table_vers) | set(tpl.versions)
+        nums = [int(m.group(1)) for v in all_vers if (m := re.match(r"v(\d+)$", v))]
+        next_v = f"v{(max(nums) + 1) if nums else 1}"
+        target = TemplateVersion(
+            id=f"{template_id}:{next_v}", template_id=template_id, version=next_v,
+            status="draft", updated="刚刚", updated_by=user.name, instances=0, nodes=0,
+        )
+        if next_v not in tpl.versions:
+            tpl.versions = [*tpl.versions, next_v]
+        session.add(target)
 
     # 保存画布
     canvas = await session.get(TemplateCanvas, target.id)
@@ -539,7 +544,7 @@ async def save_draft_and_publish(
     target.nodes = len(canvas.nodes)
     _sync_tpl_nodes(tpl, canvas.nodes)
 
-    # 静态校验：未通过 → 新版本保留为草稿（可继续编辑），返回 422
+    # 静态校验：未通过 → 草稿保留为 draft（可继续编辑），返回 422
     errors = _validate_canvas(payload)
     if errors:
         await AuditService(session).record(
@@ -550,7 +555,7 @@ async def save_draft_and_publish(
         raise BizError(
             BizCode.FLOW_VALIDATE,
             f"发布校验未通过：{len(errors)} 个阻断问题（{errors[0]['message']}）；"
-            f"画布已保留为 {target.version} 草稿，修复后可再次发布（将创建下一个新版本）",
+            f"画布已保留为 {target.version} 草稿，修复后可再次发布",
         )
 
     # 自动发布
@@ -559,12 +564,12 @@ async def save_draft_and_publish(
     target.updated_by = user.name
     await AuditService(session).record(
         actor=user.name, action="workflow_template:publish",
-        target=f"{tpl.name} {target.version}（发布自动创建新版本）", result="success",
+        target=f"{tpl.name} {target.version}", result="success",
     )
     await session.commit()
     return ok(
         {"version": target.version, "status": "published"},
-        f"「{tpl.name}」{target.version} 已发布：静态校验通过（自动创建新版本）",
+        f"「{tpl.name}」{target.version} 已发布：静态校验通过",
     )
 
 

@@ -119,6 +119,9 @@ async def migrate(conn: AsyncConnection) -> None:
     if run_columns and "task_id" not in run_columns:
         await conn.execute(text('ALTER TABLE expert_runs ADD COLUMN "task_id" VARCHAR(40)'))
         logger.info("migrate: expert_runs.task_id added")
+    if run_columns and "context" not in run_columns:
+        await conn.execute(text("ALTER TABLE expert_runs ADD COLUMN \"context\" TEXT DEFAULT ''"))
+        logger.info("migrate: expert_runs.context added")
     message_columns = await _existing_columns(conn, "expert_chat_messages")
     if "tool_trace" not in message_columns:
         await conn.execute(text("ALTER TABLE expert_chat_messages ADD COLUMN \"tool_trace\" JSON DEFAULT '[]'"))

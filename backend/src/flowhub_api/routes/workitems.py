@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import Text, select
+from sqlalchemy import Text, select, text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -192,3 +192,41 @@ async def stop_work_item(
         ))
     await session.commit()
     return ok({"item": _brief(wi)}, "工作项已停止，流程实例已取消")
+
+
+@router.delete("/{wi_id}")
+async def delete_work_item(
+    wi_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_db)],
+):
+    """删除工作项（仅限已取消的工作项）：硬删工作项 + 流程实例 + 全部任务（数据库级联）。
+
+    仅 cancelled 可删：运行中/已完成的工作项不可删除，取消是删除的前置状态。
+    文档不删（挂在工作项下的文档解除关联后保留在文档中心）；通知/审计仅保留 ID 引用。
+    """
+    auth = build_authorizer(user)
+    auth.require("workflow_instance:cancel")
+    wi = (await session.execute(
+        select(WorkItem).options(selectinload(WorkItem.instance)).where(WorkItem.id == wi_id)
+    )).scalar_one_or_none()
+    if wi is None:
+        raise BizError(BizCode.NOT_FOUND, "工作项不存在")
+    if wi.status != "cancelled":
+        raise BizError(BizCode.VALIDATION, f"仅已取消的工作项可删除（当前状态 {wi.status}），请先停止流程", http_status=409)
+    audit_target = f"{wi.id} · {wi.title}"
+    task_count = len((await session.execute(
+        select(TaskItem.id).where(TaskItem.wi_id == wi_id)
+    )).scalars().all())
+    # 实例/任务/追加信息均为 ondelete=CASCADE，随工作项硬删；文档解除关联保留
+    await session.execute(
+        sa_text("UPDATE documents SET wi = '' WHERE wi = :wi_id"), {"wi_id": wi_id},
+    )
+    await session.delete(wi)
+    await AuditService(session).record(
+        actor=user.name, action="workflow_instance:delete",
+        target=audit_target, result="success",
+        after={"deletedTasks": task_count},
+    )
+    await session.commit()
+    return ok(message=f"工作项「{wi.title}」已删除（含 {task_count} 个任务）")

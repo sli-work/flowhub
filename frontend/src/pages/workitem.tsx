@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowLeft, Paperclip, Tag, Calendar, User, Target, Inbox, StopCircle } from 'lucide-react'
+import { ArrowLeft, Paperclip, Tag, Calendar, User, Target, Inbox, StopCircle, Trash2 } from 'lucide-react'
 import { useApp, toast } from '../store/app-store'
 import { api, ApiError, getToken } from '../lib/api'
 import { cn } from '../lib/utils'
@@ -66,6 +66,19 @@ export function WorkItemPage() {
   }
 
   const stoppable = !!wi && !['closed', 'cancelled', 'archived'].includes(wi.status)
+  /* 删除工作项：仅取消态可删（后端强校验），硬删工作项+实例+全部任务 */
+  const deletable = wi?.status === 'cancelled'
+  const deleteWi = async () => {
+    if (!wi) return
+    if (!confirm(`确认删除工作项「${wi.title}」？工作项、流程实例及全部任务将被删除且不可恢复。`)) return
+    try {
+      await api.del(`/api/v1/work-items/${wi.id}`)
+      toast.success('工作项及其任务已删除')
+      navigate('workitems')
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '删除失败')
+    }
+  }
 
   const pendingTask = taskList.find((t) => !['completed', 'cancelled'].includes(t.status))
   /* 去处理：打开当前待处理任务（携带真实任务 ID），无待处理则回任务列表 */
@@ -136,6 +149,11 @@ export function WorkItemPage() {
             {stoppable && (
               <button className="rounded-lg border border-red-200 bg-white px-3.5 py-2 text-[13px] font-medium text-red-500 transition-colors hover:border-red-400 hover:bg-red-50 dark:border-red-500/40 dark:bg-slate-900 dark:hover:bg-red-500/10" onClick={stopFlow}>
                 <StopCircle className="mr-1 inline h-4 w-4" />停止流程
+              </button>
+            )}
+            {deletable && (
+              <button className="rounded-lg border border-red-200 bg-white px-3.5 py-2 text-[13px] font-medium text-red-500 transition-colors hover:border-red-400 hover:bg-red-50 dark:border-red-500/40 dark:bg-slate-900 dark:hover:bg-red-500/10" onClick={deleteWi}>
+                <Trash2 className="mr-1 inline h-4 w-4" />删除工作项
               </button>
             )}
             <button className="rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-[13px] font-medium text-slate-600 transition-colors hover:border-blue-400 hover:text-blue-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300" onClick={() => fileRef.current?.click()}>

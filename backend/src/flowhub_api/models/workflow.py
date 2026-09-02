@@ -39,7 +39,10 @@ class WorkItem(Base):
     instance: Mapped["WorkflowInstance"] = relationship(
         back_populates="work_item", cascade="all, delete-orphan", uselist=False
     )
-    tasks: Mapped[list["TaskItem"]] = relationship(back_populates="work_item", lazy="selectin")
+    # delete-orphan：删除工作项时任务随 ORM 级联 DELETE（DB 层 wi_id 亦有 ondelete=CASCADE 兜底）
+    tasks: Mapped[list["TaskItem"]] = relationship(
+        back_populates="work_item", lazy="selectin", cascade="all, delete-orphan"
+    )
 
 
 class WorkflowInstance(Base):

@@ -58,7 +58,7 @@ async def _seed_bootstrap_admin(session: AsyncSession) -> None:
     """干净模式：确保存在一个系统管理员账号（settings.bootstrap_admin_*）。"""
     settings = get_settings()
     exists = await session.execute(
-        select(User).where(User.account == settings.bootstrap_admin_account)
+        select(User).where(User.account == settings.bootstrap_admin_account, User.deleted == False)  # noqa: E712
     )
     if exists.scalar_one_or_none():
         return

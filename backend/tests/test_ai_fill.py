@@ -1,4 +1,5 @@
 """节点表单 AI 填充：schema 解析矫正 / 协助填充 / Expert 自动闭环 / 失败兜底。"""
+import asyncio
 import json
 import time
 import uuid
@@ -43,10 +44,28 @@ def test_parse_schema_output_rejects_invalid_option():
     assert values["report"] == "x"
 
 
-def test_parse_schema_output_unparsable():
+def test_parse_schema_output_plain_text_fallback():
+    """非 JSON 产出（纯 Markdown 评审报告）→ 全文回填必填 textarea + upload 字段，可采纳由人审核。"""
     from flowhub_api.services.expert_runtime import parse_schema_output
 
-    values, warnings = parse_schema_output(SCHEMA, "模型胡言乱语，没有 JSON")
+    raw = "### 一、需求合理性结论\n**结论：有条件可行。**\n\n### 二、影响范围分析\n| 后端模块 | drcc-backend |\n"
+    values, warnings = parse_schema_output(SCHEMA, raw)
+    assert values["conclusion"] == raw.strip(), "全文应回填到首个必填 textarea（conclusion）"
+    assert values["report"] == raw.strip(), "upload 字段应回填全文并转文档"
+    assert warnings and "不是 JSON" in warnings[0]
+    # select/number/multiselect 不做猜测，保持为空
+    assert "verdict" not in values and "score" not in values and "tags" not in values
+
+
+def test_parse_schema_output_unparsable_no_target():
+    """连可回填的文本字段都没有时才放弃：返回空 + warnings。"""
+    from flowhub_api.services.expert_runtime import parse_schema_output
+
+    values, warnings = parse_schema_output(
+        [{"key": "verdict", "label": "结论", "type": "select", "required": True,
+          "options": [{"label": "通过", "value": "pass"}]}],
+        "模型胡言乱语，没有 JSON",
+    )
     assert values == {}
     assert warnings
 
@@ -62,11 +81,14 @@ class FakeChatOpenAI:
     """替换 expert_runtime.ChatOpenAI：ainvoke 返回预置 JSON 产出。"""
     payload = "{}"
     should_fail = False
+    delay = 0.0
 
     def __init__(self, *args, **kwargs):
         pass
 
     async def ainvoke(self, messages):
+        if FakeChatOpenAI.delay:
+            await asyncio.sleep(FakeChatOpenAI.delay)
         if FakeChatOpenAI.should_fail:
             raise ConnectionError("provider unreachable")
         return _FakeCompletion(FakeChatOpenAI.payload)
@@ -77,6 +99,10 @@ def fake_model(monkeypatch):
     from flowhub_api.services import expert_runtime as er
 
     monkeypatch.setattr(er, "ChatOpenAI", FakeChatOpenAI)
+    # 用例内 should_fail/delay 改动即使断言失败也不外泄（避免污染后续用例）
+    yield
+    FakeChatOpenAI.should_fail = False
+    FakeChatOpenAI.delay = 0.0
 
 
 def _publish_expert_with_deployment(client, headers, deployment_name):
@@ -165,14 +191,30 @@ def test_ai_fill_generates_values_and_document(client, org_headers, fake_model):
     FakeChatOpenAI.payload = json.dumps({
         "conclusion": "范围已明确", "verdict": "通过", "report": "# 分析报告\n正文",
     })
+    # 覆盖式重跑要求无 running Run：先等到达时的自动 Run 终态，再 ai-fill 覆盖它
+    initial = _wait_run_succeeded(client, headers, task_id)
+    assert initial and initial[0]["status"] == "succeeded", "前置：任务到达应已自动创建并完成 Run"
     r = client.post(f"/api/v1/tasks/{task_id}/ai-fill", headers=headers, json={})
     assert r.status_code == 200, r.text
     data = r.json()["data"]
-    assert data["values"]["conclusion"] == "范围已明确"
-    assert data["values"]["verdict"] == "pass"
-    ref = data["values"]["report"][0]
+    # 新契约：ai-fill 立即返回 running Run（后台执行，覆盖原记录），结果经任务详情轮询获取
+    assert data["run"]["status"] == "running"
+    assert data["run"]["id"] == initial[0]["id"], "重跑应复用原 Run 记录"
+    run_id = data["run"]["id"]
+    runs = _wait_run_succeeded(client, headers, task_id)
+    assert any(x["id"] == run_id for x in runs), "重跑后的 Run 应出现在任务详情"
+    new_run = next(x for x in runs if x["id"] == run_id)
+    assert new_run["status"] == "succeeded"
+    td = client.get(f"/api/v1/tasks/{task_id}", headers=headers).json()["data"]
+    assert td["expertRuns"][0]["id"] == run_id, "最新 Run 应置顶"
+    # 采纳新 Run 产出 → 回填表单
+    r2 = client.post(f"/api/v1/tasks/{task_id}/adopt-run", headers=headers, json={"run_id": run_id})
+    assert r2.status_code == 200, r2.text
+    values = r2.json()["data"]["values"]
+    assert values["conclusion"] == "范围已明确"
+    assert values["verdict"] == "pass"
+    ref = values["report"][0]
     assert ref["id"] and ref["name"], "upload 字段应回填文档引用"
-    assert data["warnings"] == []
 
     # 文档已挂到工作项（kind=节点表单附件）
     detail = client.get(f"/api/v1/work-items/{wi_id}", headers=headers).json()["data"]
@@ -180,9 +222,81 @@ def test_ai_fill_generates_values_and_document(client, org_headers, fake_model):
     assert any(d["id"] == ref["id"] for d in docs), "生成的文档应出现在工作项文档列表"
 
 
+def test_ai_fill_rerun_with_context(client, org_headers, fake_model):
+    """覆盖式重跑：复用原 Run 记录（总数不变、同 id、输出被替换），context 落库供追溯。"""
+    headers = org_headers
+    model_id, dep_id = _publish_expert_with_deployment(client, headers, "fill-dep-ctx")
+    tpl_id = _publish_flow_template(client, headers, dep_id)
+    pid = _make_project(client, headers, tpl_id, "v1", [])
+    wi_id = _create_wi(client, headers, pid, tpl_id, "AI重跑-上下文")
+    task_id = _get_open_tasks(client, headers, wi_id)[0]["id"]
+
+    # 任务到达时已有一次自动 Run；记录覆盖前的 Run 集合
+    initial_runs = _wait_run_succeeded(client, headers, task_id)
+    assert initial_runs, "前置：任务到达应已自动创建 Run"
+    original_id = initial_runs[0]["id"]
+    FakeChatOpenAI.payload = json.dumps({"conclusion": "带上下文的结论", "verdict": "通过", "report": "# 报告"})
+    ctx = "上一轮结论遗漏了备件库存因素；请重点参考附件《Q2 服务复盘》"
+    r = client.post(f"/api/v1/tasks/{task_id}/ai-fill", headers=headers, json={"context": ctx})
+    assert r.status_code == 200, r.text
+    rerun = r.json()["data"]["run"]
+    assert rerun["id"] == original_id, "重跑应复用原 Run 记录（覆盖而非新建）"
+    assert rerun["status"] == "running"
+    assert rerun["context"] == ctx
+    runs = _wait_run_succeeded(client, headers, task_id)
+    assert len(runs) == len(initial_runs), "覆盖式重跑不应新增 Run 记录"
+    rerun_in_detail = next(x for x in runs if x["id"] == original_id)
+    assert rerun_in_detail["status"] == "succeeded"
+    assert rerun_in_detail["context"] == ctx
+    rerun_output = json.loads(rerun_in_detail["output"])
+    assert rerun_output["conclusion"] == "带上下文的结论", "输出应被新一轮结果覆盖"
+    # 采纳覆盖后的 Run → 表单回填为新产出
+    adopted = client.post(f"/api/v1/tasks/{task_id}/adopt-run", headers=headers, json={"run_id": original_id})
+    assert adopted.status_code == 200, adopted.text
+    assert adopted.json()["data"]["values"]["conclusion"] == "带上下文的结论"
+
+
+def test_ai_fill_running_run_blocks_rerun(client, org_headers, fake_model):
+    """Run 执行中（running）→ 重跑被 423 拒绝，防止并发覆盖同一记录。"""
+    headers = org_headers
+    model_id, dep_id = _publish_expert_with_deployment(client, headers, "fill-dep-runlock")
+    tpl_id = _publish_flow_template(client, headers, dep_id)
+    pid = _make_project(client, headers, tpl_id, "v1", [])
+    wi_id = _create_wi(client, headers, pid, tpl_id, "AI重跑-执行中")
+    task_id = _get_open_tasks(client, headers, wi_id)[0]["id"]
+
+    FakeChatOpenAI.payload = json.dumps({"conclusion": "慢生成", "verdict": "通过", "report": "# 报告"})
+    FakeChatOpenAI.delay = 1.5
+    try:
+        # 等自动 Run 进入 running（可达态再发第二请求），确认 423 拦截
+        deadline = time.time() + 8.0
+        while time.time() < deadline:
+            runs = client.get(f"/api/v1/tasks/{task_id}", headers=headers).json()["data"]["expertRuns"]
+            if runs and runs[0]["status"] == "running":
+                break
+            time.sleep(0.02)
+        r = client.post(f"/api/v1/tasks/{task_id}/ai-fill", headers=headers, json={})
+        assert r.status_code == 423, f"执行中重跑应被拒绝: {r.status_code} {r.text}"
+        assert "执行中" in r.json()["message"]
+    finally:
+        FakeChatOpenAI.delay = 0.0
+    _wait_run_succeeded(client, headers, task_id)
+
+
+def test_ai_fill_context_too_long_rejected(client, org_headers, fake_model):
+    """补充上下文超长（>2000 字）→ 422 校验拒绝。"""
+    headers = org_headers
+    model_id, dep_id = _publish_expert_with_deployment(client, headers, "fill-dep-long")
+    tpl_id = _publish_flow_template(client, headers, dep_id)
+    pid = _make_project(client, headers, tpl_id, "v1", [])
+    wi_id = _create_wi(client, headers, pid, tpl_id, "AI重跑-超长")
+    task_id = _get_open_tasks(client, headers, wi_id)[0]["id"]
+    r = client.post(f"/api/v1/tasks/{task_id}/ai-fill", headers=headers, json={"context": "字" * 2001})
+    assert r.status_code == 422
+
+
 def test_ai_fill_requires_expert_binding(client, org_headers):
     headers = org_headers
-    tpl_id = _publish_flow_template(client, headers, deployment_id="dep-none")
     # 重新发布一个无绑定版本：直接用未绑定模板（seed 画布无 expert）走 tpl-req 亦可；这里用自定义模板的草稿节点无法改绑定 → 用未绑定部署 id
     pid = _make_project(client, headers, "tpl-req", "v3", [])
     wi_id = _create_wi(client, headers, pid, "tpl-req", "AI填充-无绑定")
@@ -200,9 +314,24 @@ def test_ai_fill_model_failure_returns_clear_error(client, org_headers, fake_mod
     wi_id = _create_wi(client, headers, pid, tpl_id, "AI填充-失败")
     task_id = _get_open_tasks(client, headers, wi_id)[0]["id"]
     FakeChatOpenAI.should_fail = True
+    # 先等到达时的自动 Run 走完（终态 failed）：覆盖式重跑不允许覆盖 running 中的 Run
+    initial = _wait_run_succeeded(client, headers, task_id)
+    assert initial and initial[0]["status"] == "failed", "前置：should_fail 下自动 Run 应失败落终态"
+    # ai-fill 覆盖该失败 Run 重跑，应放行并立即返回 running Run
     r = client.post(f"/api/v1/tasks/{task_id}/ai-fill", headers=headers, json={})
-    assert r.status_code == 422
-    assert "暂不可用" in r.json()["message"]
+    assert r.status_code == 200, "改为后台执行后，发起本身不应失败"
+    run_id = r.json()["data"]["run"]["id"]
+    assert run_id == initial[0]["id"], "重跑应复用原 Run 记录"
+    # 轮询到终态：失败 Run 保留在详情里，可再次重新执行
+    deadline = time.time() + 8.0
+    runs = []
+    while time.time() < deadline:
+        runs = client.get(f"/api/v1/tasks/{task_id}", headers=headers).json()["data"]["expertRuns"]
+        run = next((x for x in runs if x["id"] == run_id), None)
+        if run and run["status"] != "running":
+            break
+        time.sleep(0.05)
+    assert run and run["status"] == "failed"
     FakeChatOpenAI.should_fail = False
 
 
@@ -294,10 +423,22 @@ def test_expert_auto_model_failure_falls_back_to_human(client, org_headers, fake
     assert auto_task["status"] == "assigned", "后台 Run 失败 → 任务回退人工兜底"
     FakeChatOpenAI.should_fail = False
 
-    # 人工兜底路径可用：协助填充（重新生成）→ 提交
+    # 人工兜底路径可用：协助填充（重新生成）→ 采纳新 Run 产出 → 提交
     r = client.post(f"/api/v1/tasks/{auto_task['id']}/ai-fill", headers=headers, json={})
     assert r.status_code == 200, r.text
-    values = r.json()["data"]["values"]
+    run_id = r.json()["data"]["run"]["id"]
+    deadline = time.time() + 8.0
+    runs = []
+    while time.time() < deadline:
+        runs = client.get(f"/api/v1/tasks/{auto_task['id']}", headers=headers).json()["data"]["expertRuns"]
+        run = next((x for x in runs if x["id"] == run_id), None)
+        if run and run["status"] == "succeeded":
+            break
+        time.sleep(0.05)
+    assert run and run["status"] == "succeeded"
+    adopted = client.post(f"/api/v1/tasks/{auto_task['id']}/adopt-run", headers=headers, json={"run_id": run_id})
+    assert adopted.status_code == 200, adopted.text
+    values = adopted.json()["data"]["values"]
     r2 = client.post(f"/api/v1/tasks/{auto_task['id']}/actions", headers=headers,
                      json={"action": "submit", "form_values": values, "acceptance_checks": {"a1": {"text": "结论完整", "checked": True}}})
     assert r2.status_code == 200, r2.text

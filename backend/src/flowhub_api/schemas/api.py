@@ -112,6 +112,11 @@ class TaskAdoptRunReq(BaseModel):
     run_id: str = Field(min_length=1)
 
 
+class TaskAiFillReq(BaseModel):
+    """Expert 协助填充/重新执行：context 为用户补充的执行上下文（可选，≤2000 字）。"""
+    context: str = Field(default="", max_length=2000)
+
+
 class TaskSplitChild(BaseModel):
     title: str = Field(min_length=1, max_length=120)
     note: str = ""

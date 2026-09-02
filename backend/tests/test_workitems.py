@@ -325,3 +325,45 @@ class TestWorkItemStop:
     def test_stop_not_found(self, client: TestClient, org_headers: dict):
         r = client.post("/api/v1/work-items/NOPE-0000/stop", headers=org_headers)
         assert r.status_code == 404
+
+
+class TestWorkItemDelete:
+    def test_delete_cancelled_work_item_cascades_tasks(self, client: TestClient, org_headers: dict, _created_project: str):
+        """取消后删除：工作项+实例+全部任务硬删；未取消的工作项拒绝删除。"""
+        title = _uniq("待删除需求")
+        r = client.post("/api/v1/work-items", headers=org_headers, json={
+            "project_id": _created_project, "template_id": "tpl-req", "start_values": _start_values(title),
+        })
+        assert r.status_code == 200
+        wi_id = r.json()["data"]["item"]["id"]
+        task_ids = [t["id"] for t in client.get(f"/api/v1/work-items/{wi_id}", headers=org_headers).json()["data"]["tasks"]]
+        assert task_ids, "前置：工作项应有任务"
+
+        # 未取消（running）→ 409 拒绝
+        denied = client.delete(f"/api/v1/work-items/{wi_id}", headers=org_headers)
+        assert denied.status_code == 409, denied.text
+
+        # 停止（cancelled）后删除成功
+        assert client.post(f"/api/v1/work-items/{wi_id}/stop", headers=org_headers).status_code == 200
+        r2 = client.delete(f"/api/v1/work-items/{wi_id}", headers=org_headers)
+        assert r2.status_code == 200, r2.text
+        # 工作项消失，任务一并级联删除
+        assert client.get(f"/api/v1/work-items/{wi_id}", headers=org_headers).status_code == 404
+        for tid in task_ids:
+            assert client.get(f"/api/v1/tasks/{tid}", headers=org_headers).status_code == 404, f"任务 {tid} 应级联删除"
+        # 列表中不再出现
+        listed = client.get(f"/api/v1/work-items?q={title}", headers=org_headers).json()["data"]["items"]
+        assert not [w for w in listed if w["id"] == wi_id]
+
+    def test_delete_requires_perm(self, client: TestClient, leader_headers: dict, org_headers: dict, _created_project: str):
+        """无 workflow_instance:cancel 权限 → 403。"""
+        wi_id = client.post("/api/v1/work-items", headers=org_headers, json={
+            "project_id": _created_project, "template_id": "tpl-req", "start_values": _start_values(_uniq("删除权限")),
+        }).json()["data"]["item"]["id"]
+        assert client.post(f"/api/v1/work-items/{wi_id}/stop", headers=org_headers).status_code == 200
+        r = client.delete(f"/api/v1/work-items/{wi_id}", headers=leader_headers)
+        assert r.status_code == 403
+
+    def test_delete_not_found(self, client: TestClient, org_headers: dict):
+        r = client.delete("/api/v1/work-items/NOPE-0000", headers=org_headers)
+        assert r.status_code == 404

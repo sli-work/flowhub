@@ -9,7 +9,7 @@ from flowhub_api.authz.authorizer import build_authorizer, get_current_user
 from flowhub_api.core.response import BizCode, BizError, ok
 from flowhub_api.db.session import get_db
 from flowhub_api.models import GlobalTemplate, Project, TaskItem, User
-from flowhub_api.schemas.api import TaskActionReq, TaskAdoptRunReq, TaskSplitReq
+from flowhub_api.schemas.api import TaskActionReq, TaskAdoptRunReq, TaskAiFillReq, TaskSplitReq
 from flowhub_api.services.audit import AuditService
 from flowhub_api.services.workflow import WorkflowService
 
@@ -217,7 +217,7 @@ async def get_task(
     from flowhub_api.models import ExpertRun
 
     linked_runs = (await session.execute(
-        select(ExpertRun).where(ExpertRun.task_id == t.id).order_by(ExpertRun.id.desc()).limit(3)
+        select(ExpertRun).where(ExpertRun.task_id == t.id).order_by(ExpertRun.started_at.desc(), ExpertRun.id.desc()).limit(3)
     )).scalars().all()
     return ok({
         "task": {**_brief(t), "frozen": frozen, "acceptanceChecks": t.acceptance_checks or {}},
@@ -237,7 +237,7 @@ async def get_task(
             "split": node_cfg.get("split") or {"mode": "off"},
         },
         "expertRuns": [
-            {"id": r.id, "status": r.status, "output": (r.output or "")[:600], "error": r.error, "startedAt": r.started_at}
+            {"id": r.id, "status": r.status, "output": r.output or "", "error": r.error, "startedAt": r.started_at, "context": r.context or ""}
             for r in linked_runs
         ],
     })
@@ -559,35 +559,51 @@ async def _expert_fill_guard(session: AsyncSession, t: TaskItem, user: User) -> 
 @router.post("/{task_id}/ai-fill")
 async def ai_fill_task(
     task_id: str,
+    body: TaskAiFillReq,
     user: Annotated[User, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """Expert 协助填充（重新生成）：新建 Run 按任务书 + 节点 schema 生成全部字段值，回填表单供人审核。
+    """Expert 协助填充（重新执行）：覆盖任务最新 Run 就地重跑（不新建记录）。
 
-    任务到达时引擎已自动触发一次 Run——优先用「采纳」入口（adopt-run）复用其产出；本接口用于失败重试或重新生成。"""
+    任务到达时引擎已自动触发一次 Run——优先用「采纳」入口（adopt-run）复用其产出；本接口用于失败重试或重新生成。
+    重跑为覆盖语义：原 Run 的状态/产出/上下文被新一轮执行替换（事件与挂起审批一并清空）；
+    任务尚无 Run 时新建。body.context 为用户补充的执行上下文（可选）：拼入 prompt 引导本轮生成，并随 Run 落库便于追溯。
+    立即返回 running 状态的 Run（后台执行），前端沿用任务详情轮询获取结果。
+    """
+    from flowhub_api.models import ExpertRun
+
     t = await session.get(TaskItem, task_id)
     if t is None:
         raise BizError(BizCode.NOT_FOUND, "任务不存在")
     project, tpl, cfg = await _expert_fill_guard(session, t, user)
+    latest = (await session.execute(
+        select(ExpertRun).where(ExpertRun.task_id == t.id).order_by(ExpertRun.started_at.desc(), ExpertRun.id.desc()).limit(1)
+    )).scalar_one_or_none()
+    if latest is not None and latest.status == "running":
+        raise BizError(BizCode.LOCKED, "Expert Run 仍在执行中，请稍后再重跑", http_status=423)
     schema = cfg.get("schema") or []
     deployment_id = (cfg.get("expert") or {}).get("expertDeploymentId") or ""
     service = WorkflowService(session)
     brief = await service.build_task_brief(t, tpl)
-    from flowhub_api.services.expert_runtime import build_schema_output_instruction, generate_task_form_values
+    from flowhub_api.services.expert_runtime import build_schema_output_instruction, schedule_deployment_run
 
     instruction = build_schema_output_instruction(schema)
-    prompt = brief + ("\n\n" + instruction if instruction else "")
-    run, values, warnings = await generate_task_form_values(
-        session, task=t, schema=schema, prompt=prompt, user=user, deployment_id=deployment_id,
+    context = body.context.strip()
+    prompt = brief + ("\n\n## 用户补充执行上下文\n" + context if context else "") + ("\n\n" + instruction if instruction else "")
+    # 后台执行：请求只登记 running Run 即返回，避免被 30s+ 模型调用阻塞（与自动节点同机制）
+    run = await schedule_deployment_run(
+        session, deployment_id, prompt, user, task_id=t.id, context=context,
+        replace_run_id=latest.id if latest is not None else None,
     )
-    if run.status != "succeeded":
-        raise BizError(BizCode.FLOW_VALIDATE, warnings[0] if warnings else "Expert 运行未成功，请稍后重试或手动填写", http_status=422)
     await AuditService(session).record(
         actor=user.name, action="task:ai_fill", target=f"{t.id} · {t.node}", result="success",
-        after={"runId": run.id, "fields": list(values.keys()), "warnings": warnings[:5]},
+        after={"runId": run.id, "replaced": latest.id if latest is not None else "", "contextLen": len(context), "reRun": True},
     )
     await session.commit()
-    return ok({"values": values, "warnings": warnings, "runId": run.id}, "Expert 已生成表单草稿，请审核后提交")
+    return ok(
+        {"run": {"id": run.id, "status": run.status, "output": "", "error": "", "startedAt": run.started_at, "context": context}},
+        "Expert 已重新发起执行，请稍候（轮询任务详情获取结果）",
+    )
 
 
 @router.post("/{task_id}/adopt-run")

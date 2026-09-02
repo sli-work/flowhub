@@ -12,7 +12,7 @@ import { MarkdownView } from '../components/markdown'
 import { api, ApiError } from '../lib/api'
 import { DocumentViewerDrawer, type ViewerDoc } from '../components/document-viewer-drawer'
 import { cn } from '../lib/utils'
-import type { AcceptanceChecks, FormField, NodeDeliverable, TaskItem, WorkItem } from '../types'
+import type { AcceptanceChecks, ExpertRunBrief, FormField, NodeDeliverable, TaskItem, WorkItem } from '../types'
 
 /* ---------- Expert Runtime 状态（后端无数据时兜底展示） ---------- */
 const CAPABILITY_DEFAULT: { name: string; mode: string }[] = [
@@ -86,9 +86,8 @@ export function NodeProcessPage() {
   const [expertCaps] = useState(CAPABILITY_DEFAULT)
   const [flowSteps, setFlowSteps] = useState<{ name: string; status: string; assignee: string; time: string }[]>([])
   const [timeline, setTimeline] = useState<{ id: string; time: string; title: string; desc: string; by: string; kind: string }[]>([])
-  const [expertRuns, setExpertRuns] = useState<{ id: string; status: string; output: string; error: string; startedAt: string }[]>([])
+  const [expertRuns, setExpertRuns] = useState<ExpertRunBrief[]>([])
   const [aiFilledKeys, setAiFilledKeys] = useState<string[]>([])
-  const [fillBusy, setFillBusy] = useState(false)
   const [adoptBusy, setAdoptBusy] = useState<string | null>(null)
   /* 继承上下文：起始表单 + 已执行前序节点表单（来自 GET /tasks/{id} upstream）；按节点折叠、默认收起 */
   type UpstreamSeg = {
@@ -117,7 +116,7 @@ export function NodeProcessPage() {
     if (!activeTaskId || !expertProcessing) return
     const timer = setInterval(() => {
       api.get<{
-        task: TaskItem; expertRuns?: { id: string; status: string; output: string; error: string; startedAt: string }[]
+        task: TaskItem; expertRuns?: ExpertRunBrief[]
       }>(`/api/v1/tasks/${activeTaskId}`)
         .then((td) => {
           setTask((prev) => (prev && prev.id === td.task.id ? td.task : prev))
@@ -128,7 +127,9 @@ export function NodeProcessPage() {
     return () => clearInterval(timer)
   }, [activeTaskId, expertProcessing])
 
-  /* 挂载：任务详情(+Expert Run 摘要 + 继承上下文) → 工作项详情 → 模板画布。 */
+  /* 挂载：任务详情(+Expert Run 摘要 + 继承上下文) → 工作项详情 → 模板画布。
+     注意：本 effect 会重置全部任务级状态，禁止把 task/wiId 等派生数据放进依赖（否则 reset→加载→再 reset 死循环），
+     文档列表由下方独立 effect 在 wiId 就绪后拉取。 */
   useEffect(() => {
     if (!activeTaskId) { navigate('tasks'); return }
     // 切换任务时重置所有任务级状态：避免上一个任务的表单/节点配置/验收清单残留显示
@@ -146,7 +147,7 @@ export function NodeProcessPage() {
       task: TaskItem & { nodeId?: string; acceptanceChecks?: AcceptanceChecks }
       upstream?: typeof upstream
       subtasks?: SubtaskBrief[]
-      expertRuns?: { id: string; status: string; output: string; error: string; startedAt: string }[]
+      expertRuns?: ExpertRunBrief[]
       nodeCfg?: { purpose?: string; handler?: string; sla?: string; schema?: FormField[]; deliverable?: NodeDeliverable; split?: { mode?: string } }
     }>(`/api/v1/tasks/${activeTaskId}`)
       .then((td) => {
@@ -223,13 +224,16 @@ export function NodeProcessPage() {
     api.get<{ users: { name: string; dept?: string }[] }>(`/api/v1/tasks/${activeTaskId}/candidates`)
       .then((d) => setCandidates(d.users))
       .catch(() => {})
-    if (activeTaskId) {
-      // 当前工作项全部文档（表单上传 + Expert 生成 + 聊天产出），供预览抽屉与文档卡
-      api.get<{ items: ViewerDoc[] }>(`/api/v1/documents?wi=${activeTaskId}&page_size=100`)
-        .then((d) => setDocs(d.items))
-        .catch(() => {})
-    }
   }, [activeTaskId, navigate])
+
+  /* 文档列表：按工作项 ID 查询（文档挂在工作项下，不能拿任务 ID 去查）。
+     独立 effect + 只依赖 wiId：任务详情加载出 wiId 后拉一次，避免随任务详情 effect 整体重置循环。 */
+  useEffect(() => {
+    if (!task?.wiId) return
+    api.get<{ items: ViewerDoc[] }>(`/api/v1/documents?wi=${task.wiId}&page_size=100`)
+      .then((d) => setDocs(d.items))
+      .catch(() => {})
+  }, [task?.wiId])
 
   const [submitBusy, setSubmitBusy] = useState(false)
   const submitTask = async () => {
@@ -276,6 +280,8 @@ export function NodeProcessPage() {
   const isExpertNode = curNodeType === 'task' && (curCfg.handler ?? '').includes('Expert')
   const isAutoNode = (curCfg.handler ?? '') === 'Expert 自动'
   const canExpert = isExpertNode && curSchema.length > 0 && !!activeTaskId && !task?.frozen && task?.status !== 'completed'
+  /* 重跑只需节点绑定 Expert：无表单 schema 的节点也能重跑（产出存 Run 供查看，只是无字段可回填） */
+  const canExpertRerun = isExpertNode && !!activeTaskId && !task?.frozen && task?.status !== 'completed'
   const latestRun = expertRuns[0]
 
   const applyExpertValues = (values: Record<string, unknown>, warnings: string[], message: string) => {
@@ -296,17 +302,29 @@ export function NodeProcessPage() {
     } finally { setAdoptBusy(null) }
   }
 
-  const regenerateRun = async () => {
-    if (!activeTaskId) return
-    setFillBusy(true)
+  /* Expert Run 重新执行：展开上下文输入面板的 Run id（同时只开一个）+ 输入草稿 */
+  const [rerunFor, setRerunFor] = useState<string | null>(null)
+  const [rerunText, setRerunText] = useState('')
+  const [rerunBusy, setRerunBusy] = useState(false)
+
+  const openRerun = (runId: string) => {
+    if (rerunBusy) return
+    setRerunFor((prev) => (prev === runId ? null : runId))
+    setRerunText('')
+  }
+
+  const submitRerun = async () => {
+    if (!activeTaskId || rerunBusy) return
+    setRerunBusy(true)
     try {
-      const d = await api.post<{ values: Record<string, unknown>; warnings: string[]; runId: string }>(`/api/v1/tasks/${activeTaskId}/ai-fill`, {})
-      applyExpertValues(d.values, d.warnings, 'Expert 已重新生成表单草稿，请审核后提交')
-      const td = await api.get<{ expertRuns: { id: string; status: string; output: string; error: string; startedAt: string }[] }>(`/api/v1/tasks/${activeTaskId}`)
-      if (td.expertRuns) setExpertRuns(td.expertRuns)
+      const d = await api.post<{ run: ExpertRunBrief }>(`/api/v1/tasks/${activeTaskId}/ai-fill`, { context: rerunText.trim() })
+      // 覆盖式重跑：后端复用原 Run 记录（同 id），置顶进入 running 态提升即时反馈
+      setExpertRuns((prev) => [d.run, ...prev.filter((r) => r.id !== d.run.id)])
+      setRerunFor(null); setRerunText('')
+      toast.success(d.run.context ? `Expert 正在覆盖重跑（附带 ${d.run.context.length} 字补充上下文）` : 'Expert 正在覆盖重跑，请稍候')
     } catch (e) {
-      toast.error(e instanceof ApiError ? e.message : 'Expert 生成失败')
-    } finally { setFillBusy(false) }
+      toast.error(e instanceof ApiError ? e.message : 'Expert 重新执行失败')
+    } finally { setRerunBusy(false) }
   }
 
   const requestInfo = async () => {
@@ -583,7 +601,7 @@ export function NodeProcessPage() {
           ) : (
             <SectionCard title={`${task?.node ?? '当前节点'} 表单`} extra={
               <div className="flex items-center gap-2">
-                {canExpert && (latestRun?.status === 'running' || fillBusy) && (
+                {canExpert && (latestRun?.status === 'running' || rerunBusy) && (
                   <button className="inline-flex cursor-wait items-center gap-1 rounded-lg border border-violet-200 px-2.5 py-1 text-[11.5px] font-medium text-violet-500 dark:border-violet-500/30 dark:text-violet-400" disabled>
                     <Bot className="h-3.5 w-3.5 animate-pulse" />Expert 生成中…
                   </button>
@@ -596,8 +614,8 @@ export function NodeProcessPage() {
                 )}
                 {canExpert && (!latestRun || latestRun.status === 'failed') && (
                   <button className="inline-flex items-center gap-1 rounded-lg border border-violet-200 px-2.5 py-1 text-[11.5px] font-medium text-violet-600 transition-colors hover:bg-violet-50 disabled:opacity-50 dark:border-violet-500/30 dark:text-violet-300 dark:hover:bg-violet-500/10"
-                    disabled={fillBusy} onClick={() => void regenerateRun()}>
-                    <Bot className="h-3.5 w-3.5" />{fillBusy ? 'Expert 生成中…' : 'Expert 协助填充'}
+                    disabled={rerunBusy} onClick={() => openRerun(latestRun?.id ?? '__new__')}>
+                    <Bot className="h-3.5 w-3.5" />Expert 协助填充
                   </button>
                 )}
                 <Badge tone="cyn">Schema 驱动 · 与画布节点一致</Badge>
@@ -706,7 +724,7 @@ export function NodeProcessPage() {
                 </div>
               )}
               {expertRuns.map((s) => (
-                <div key={s.id} className="rounded-lg border border-violet-100 bg-violet-50/50 p-3.5 dark:border-violet-500/20 dark:bg-violet-500/5">
+                <div key={s.id} className={cn('rounded-lg border p-3.5', s.status === 'failed' ? 'border-red-100 bg-red-50/50 dark:border-red-500/20 dark:bg-red-500/5' : 'border-violet-100 bg-violet-50/50 dark:border-violet-500/20 dark:bg-violet-500/5')}>
                   <div className="flex items-center justify-between gap-2">
                     <span className="flex items-center gap-1.5 text-[12.5px] font-semibold text-violet-700 dark:text-violet-300">
                       <Bot className="h-4 w-4" />{s.id}
@@ -719,13 +737,64 @@ export function NodeProcessPage() {
                           {adoptBusy === s.id ? '采纳中…' : '采纳'}
                         </button>
                       )}
+                      {/* 重新执行：失败态为主按钮（最高频场景），其余为次按钮；running 中禁用 */}
+                      {canExpertRerun && s.status !== 'running' && (
+                        <button className={cn('inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium transition-colors disabled:opacity-50',
+                          s.status === 'failed'
+                            ? 'bg-violet-600 text-white hover:bg-violet-700'
+                            : 'border border-violet-300 text-violet-600 hover:bg-violet-100 dark:border-violet-500/40 dark:text-violet-300 dark:hover:bg-violet-500/10')}
+                          disabled={rerunBusy || expertRuns.some((r) => r.status === 'running')}
+                          onClick={() => openRerun(s.id)}>
+                          <Undo2 className="h-3 w-3" />重新执行
+                        </button>
+                      )}
                       {canExpert && s.status === 'running' && (
                         <span className="text-[11px] text-violet-400">生成中…</span>
                       )}
                     </span>
                   </div>
-                  <p className="mt-1.5 whitespace-pre-wrap break-words text-[12.5px] leading-relaxed text-slate-600 dark:text-slate-300">{s.output || s.error || '（无文本输出）'}</p>
-                  <div className="mt-1.5 text-[11px] text-slate-400">{s.startedAt} · 采纳后产出解析为表单值，人工审核后提交</div>
+                  {/* 重新执行上下文面板：在 Run 卡片内展开（旧输出保持可见，可边看边写纠偏要求；提交后覆盖该 Run） */}
+                  {rerunFor === s.id && (
+                    <div className="mt-2.5 rounded-lg border border-violet-200 bg-white p-2.5 dark:border-violet-500/30 dark:bg-slate-900">
+                      <div className="mb-1.5 text-[12px] font-semibold text-slate-700 dark:text-slate-200">补充执行上下文 <span className="font-normal text-slate-400">可选 · 留空则按任务书原样重新生成</span></div>
+                      <textarea
+                        className="min-h-[88px] w-full resize-y rounded-lg border border-slate-300 bg-white px-3 py-2 text-[12.5px] leading-relaxed text-slate-900 outline-none transition focus:border-violet-500 focus:ring-2 focus:ring-violet-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                        maxLength={2000}
+                        autoFocus
+                        placeholder="例如：上一轮结论遗漏了备件库存因素；请重点参考附件《Q2 服务复盘》；输出按「原因 / 影响 / 建议」三段结构…"
+                        value={rerunText}
+                        onChange={(e) => setRerunText(e.target.value)}
+                        onKeyDown={(e) => {
+                          if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); void submitRerun() }
+                          if (e.key === 'Escape') setRerunFor(null)
+                        }}
+                      />
+                      <div className="mt-2 flex items-center justify-between">
+                        <span className="text-[11px] text-slate-400">{rerunText.length}/2000 · ⌘/Ctrl+↵ 提交 · Esc 取消</span>
+                        <span className="flex gap-2">
+                          <button className="rounded-md border border-slate-200 px-2.5 py-1 text-[11.5px] font-medium text-slate-500 transition-colors hover:bg-slate-50 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800"
+                            onClick={() => setRerunFor(null)}>取消</button>
+                          <button className="rounded-md bg-violet-600 px-3 py-1 text-[12px] font-medium text-white transition-colors hover:bg-violet-700 disabled:opacity-50"
+                            disabled={rerunBusy} onClick={() => void submitRerun()}>
+                            <span className="inline-flex items-center gap-1"><Undo2 className="h-3 w-3" />{rerunBusy ? '发起中…' : '重新执行'}</span>
+                          </button>
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                  {/* 输出可能很长：限制高度 + 滚动条，避免撑开整卡 */}
+                  <div className="mt-1.5 max-h-72 overflow-y-auto rounded-md pr-1">
+                    <p className="whitespace-pre-wrap break-words text-[12.5px] leading-relaxed text-slate-600 dark:text-slate-300">{s.output || s.error || '（无文本输出）'}</p>
+                  </div>
+                  <div className="mt-1.5 text-[11px] text-slate-400">
+                    {s.startedAt}
+                    {!!s.context?.length && (
+                      <span className="ml-1.5 inline-flex items-center rounded-full bg-violet-100 px-1.5 py-px text-[10.5px] font-semibold text-violet-700 dark:bg-violet-500/20 dark:text-violet-300" title={s.context}>
+                        上下文 {s.context.length} 字
+                      </span>
+                    )}
+                    · 采纳后产出解析为表单值，人工审核后提交
+                  </div>
                 </div>
               ))}
             </div>

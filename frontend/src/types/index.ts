@@ -471,3 +471,14 @@ export interface TimelineEvent {
   by: string
   kind: 'user' | 'agent' | 'system' | 'action'
 }
+
+/** 任务详情内联展示的 Expert Run 摘要（GET /tasks/{id} 的 expertRuns 项） */
+export interface ExpertRunBrief {
+  id: string
+  status: string
+  output: string
+  error: string
+  startedAt: string
+  /** 用户重新执行时补充的执行上下文（空串=按任务书原样生成） */
+  context?: string
+}

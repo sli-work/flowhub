@@ -2,7 +2,7 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from flowhub_api.authz.authorizer import build_authorizer, get_current_user
@@ -67,9 +67,15 @@ async def create_user(
 ):
     auth = build_authorizer(user)
     auth.require("organization:user_manage")
-    exists = (await session.execute(select(User).where(User.account == body.account))).scalar_one_or_none()
+    # 邮箱仅在非空时参与查重（email 默认空串，不能用空值去匹配存量用户）
+    cond = User.account == body.account
+    if body.email.strip():
+        cond = or_(cond, User.email == body.email.strip())
+    exists = (await session.execute(
+        select(User).where(cond, User.deleted == False)  # noqa: E712
+    )).scalar_one_or_none()
     if exists:
-        raise BizError(BizCode.DUPLICATE_OPERATION, "账号已存在")
+        raise BizError(BizCode.DUPLICATE_OPERATION, "账号或邮箱已存在")
     role = await session.get(Role, body.role_id)
     if role is None:
         raise BizError(BizCode.VALIDATION, "角色不存在")
@@ -134,7 +140,11 @@ async def delete_user(
     user: Annotated[User, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """软删用户：保留审计与历史任务引用，登录与用户列表立即不可见。"""
+    """软删用户：保留审计与历史任务引用，登录与用户列表立即不可见。
+
+    account 加 deleted_ 前缀释放唯一槽位：删除后可用同一账号名/邮箱重建；
+    任务/审计中按 user_id 引用不受影响（assignee 存的是姓名快照）。
+    """
     auth = build_authorizer(user)
     auth.require("organization:user_manage")
     target = await session.get(User, user_id)
@@ -148,6 +158,9 @@ async def delete_user(
     target.deleted = True
     if target.status == "active":
         target.status = "disabled"  # 软删同时停用，防止残留会话继续接任务
+    # account 带唯一约束：软删后释放槽位（保留原值于审计 before 中），避免同名重建撞唯一索引
+    target.account = f"deleted_{target.id}_{target.account}"[:64]
+    target.email = ""
     await AuditService(session).record(
         actor=user.name, action="organization:user_delete",
         target=f"{target.name}（{target.account}）", result="success", before=before,

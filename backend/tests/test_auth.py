@@ -54,6 +54,24 @@ class TestLogin:
         r = client.post("/api/v1/auth/login", json={"account": "' OR '1'='1", "password": "' OR '1'='1"})
         assert r.status_code in (401, 422)
 
+    def test_login_with_email(self, client: TestClient, org_headers: dict):
+        """邮箱 + 密码登录：与账号名等价（登录页「用户名/邮箱」）。"""
+        account = _uniq("mail")
+        email = f"{account}@x.dev"
+        reg = client.post("/api/v1/org/users", headers=org_headers, json={
+            "account": account, "name": "邮箱登录", "email": email,
+            "dept": "测试部", "role_id": "developer", "password": "NewPass@123",
+        })
+        assert reg.status_code == 200, reg.text
+        uid = reg.json()["data"]["user"]["id"]
+        assert client.post(f"/api/v1/auth/approvals/{uid}/approve", headers=org_headers).status_code == 200
+        # 邮箱可登录（invited → active 后）
+        r = client.post("/api/v1/auth/login", json={"account": email, "password": "NewPass@123"})
+        assert r.status_code == 200, r.text
+        assert r.json()["data"]["user"]["account"] == account
+        # 账号名登录同样可用（回归）
+        assert client.post("/api/v1/auth/login", json={"account": account, "password": "NewPass@123"}).status_code == 200
+
 
 class TestEnterpriseSso:
     def test_sso_verifies_state_and_maps_synced_dingtalk_user(self, client: TestClient, monkeypatch: pytest.MonkeyPatch):

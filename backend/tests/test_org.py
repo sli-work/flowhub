@@ -79,6 +79,40 @@ class TestUserCreate:
         })
         assert r.status_code == 403
 
+    def test_create_after_delete_reuses_account(self, client: TestClient, org_headers: dict):
+        """软删用户后，同一账号名（含邮箱）可重建，不再报「账号已存在」。"""
+        account = _uniq("u")
+        r = client.post("/api/v1/org/users", headers=org_headers, json={
+            "account": account, "name": "删除重建", "email": f"{account}@x.dev",
+            "dept": "测试部", "role_id": "developer", "password": "NewPass@123",
+        })
+        assert r.status_code == 200, r.text
+        uid = r.json()["data"]["user"]["id"]
+        # 删除（软删）
+        rd = client.delete(f"/api/v1/org/users/{uid}", headers=org_headers)
+        assert rd.status_code == 200
+        # 同账号名重建 → 成功（account 槽位已释放）
+        r2 = client.post("/api/v1/org/users", headers=org_headers, json={
+            "account": account, "name": "删除重建", "email": f"{account}@x.dev",
+            "dept": "测试部", "role_id": "developer", "password": "NewPass@123",
+        })
+        assert r2.status_code == 200, r2.text
+
+    def test_create_duplicate_email(self, client: TestClient, org_headers: dict):
+        """邮箱被在册用户占用 → 409（登录支持邮箱后不允许邮箱重复）。"""
+        account = _uniq("u")
+        r = client.post("/api/v1/org/users", headers=org_headers, json={
+            "account": account, "name": "x", "email": f"{account}@x.dev",
+            "dept": "", "role_id": "developer", "password": "NewPass@123",
+        })
+        assert r.status_code == 200
+        r2 = client.post("/api/v1/org/users", headers=org_headers, json={
+            "account": _uniq("u2"), "name": "y", "email": f"{account}@x.dev",
+            "dept": "", "role_id": "developer", "password": "NewPass@123",
+        })
+        assert r2.status_code == 409
+        assert r2.json()["code"] == 40902
+
 
 class TestUserUpdate:
     def test_update_skills_and_status(self, client: TestClient, org_headers: dict):

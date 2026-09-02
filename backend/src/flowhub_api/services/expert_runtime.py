@@ -249,7 +249,7 @@ async def execute_run(session: AsyncSession, run: ExpertRun, version: ExpertVers
         snapshot = lambda prompt: flowhub_read_snapshot(session, user, prompt, project_name)  # noqa: E731
         async with AsyncPostgresSaver.from_conn_string(checkpoint_dsn()) as checkpointer:
             graph = build_graph(provider, model, version.system_prompt, flowhub_snapshot=snapshot, emitter=emitter).compile(checkpointer=checkpointer)
-            result = await graph.ainvoke({"run_id": run.id, "prompt": run.input, "write_intent": run.status == "interrupted", "history": history}, {"configurable": {"thread_id": run.id}})
+            result = await graph.ainvoke({"run_id": run.id, "prompt": run.input, "write_intent": run.status == "interrupted", "history": history}, {"configurable": {"thread_id": run.trace_id}})
         for offset, item in enumerate(result.get("tool_trace") or [], start=25):
             await add_event(session, run.id, offset, "tool", item.get("status", "succeeded"), f"FlowHub · {item.get('tool', '')}", {"summary": item.get("summary", "")})
         if "__interrupt__" in result:
@@ -287,7 +287,7 @@ async def resume_approved_run(session: AsyncSession, approval: ExpertApproval, u
         snapshot = lambda prompt: flowhub_read_snapshot(session, user, prompt)  # noqa: E731
         async with AsyncPostgresSaver.from_conn_string(checkpoint_dsn()) as checkpointer:
             graph = build_graph(provider, model, version.system_prompt, flowhub_snapshot=snapshot).compile(checkpointer=checkpointer)
-            result = await graph.ainvoke(Command(resume=True), {"configurable": {"thread_id": run.id}})
+            result = await graph.ainvoke(Command(resume=True), {"configurable": {"thread_id": run.trace_id}})
     except Exception as exc:  # noqa: BLE001
         # 审批后的模型生成可能因 Provider 不可达失败：标记运行失败，任务由人工兜底
         run.status, run.error = "failed", "模型服务暂不可用，请检查 Provider 连接或稍后重试"
@@ -302,7 +302,7 @@ async def resume_approved_run(session: AsyncSession, approval: ExpertApproval, u
     return run
 
 
-async def start_deployment_run(session: AsyncSession, deployment_id: str, prompt: str, user: User, *, write_intent: bool = False, task_id: str | None = None) -> ExpertRun:
+async def start_deployment_run(session: AsyncSession, deployment_id: str, prompt: str, user: User, *, write_intent: bool = False, task_id: str | None = None, context: str = "") -> ExpertRun:
     """Start a workflow-bound Expert Deployment using its pinned version."""
     deployment = await session.get(ExpertDeployment, deployment_id)
     if deployment is None or deployment.status != "active":
@@ -313,7 +313,7 @@ async def start_deployment_run(session: AsyncSession, deployment_id: str, prompt
     run = ExpertRun(
         id=new_id("run"), expert_id=deployment.expert_id, expert_version_id=version.id,
         deployment_id=deployment.id, requested_by=user.id, status="interrupted" if write_intent else "running",
-        task_id=task_id, input=prompt, trace_id=new_id("trace"), started_at=now_iso(),
+        task_id=task_id, input=prompt, context=context, trace_id=new_id("trace"), started_at=now_iso(),
     )
     session.add(run)
     await session.flush()
@@ -321,12 +321,15 @@ async def start_deployment_run(session: AsyncSession, deployment_id: str, prompt
     return run
 
 
-async def schedule_deployment_run(session: AsyncSession, deployment_id: str, prompt: str, user: User, *, task_id: str | None = None, on_finished=None) -> ExpertRun:
+async def schedule_deployment_run(session: AsyncSession, deployment_id: str, prompt: str, user: User, *, task_id: str | None = None, on_finished=None, context: str = "", replace_run_id: str | None = None) -> ExpertRun:
     """后台执行版 start_deployment_run：当前事务只登记 Run（running）即返回，LLM 执行放入事件循环后台任务。
 
     任务提交/生成不应被 30s+ 的模型调用阻塞（此前内联执行导致提交请求挂起数十秒）。
     后台任务用自己的独立 Session 执行并落库；on_finished(session, run) 在同一后台 Session
     内回调（如自动节点的采纳流转），与 Run 结果一起提交。调用方 commit 时 Run 行随之持久化。
+
+    replace_run_id：覆盖式重跑——复用该 Run 行（重置状态/产出/上下文，清空旧事件与挂起审批，
+    换新 trace_id 使 LangGraph 线程全新），而非新建记录；产出历史以最新一轮为准。
     """
     from flowhub_api.db.session import SessionFactory
 
@@ -336,29 +339,67 @@ async def schedule_deployment_run(session: AsyncSession, deployment_id: str, pro
     version = await session.get(ExpertVersion, deployment.expert_version_id)
     if version is None:
         raise ValueError("Deployment 固定的 Expert Version 不存在")
-    run = ExpertRun(
-        id=new_id("run"), expert_id=deployment.expert_id, expert_version_id=version.id,
-        deployment_id=deployment.id, requested_by=user.id, status="running",
-        task_id=task_id, input=prompt, trace_id=new_id("trace"), started_at=now_iso(),
-    )
-    session.add(run)
-    await session.flush()
+
+    run: ExpertRun
+    if replace_run_id is not None:
+        run = await session.get(ExpertRun, replace_run_id)
+        if run is None or (task_id is not None and run.task_id != task_id):
+            raise ValueError("要覆盖的 Run 不存在或不属于该任务")
+        # 覆盖重置：同一条记录变为新一轮执行；trace_id 换新，LangGraph checkpoint 线程不串旧状态
+        run.expert_id = deployment.expert_id
+        run.expert_version_id = version.id
+        run.deployment_id = deployment.id
+        run.requested_by = user.id
+        run.status = "running"
+        run.input = prompt
+        run.context = context
+        run.output = ""
+        run.error = ""
+        run.trace_id = new_id("trace")
+        run.started_at = now_iso()
+        run.finished_at = ""
+        for ev in (await session.execute(select(ExpertRunEvent).where(ExpertRunEvent.run_id == run.id))).scalars():
+            await session.delete(ev)
+        for ap in (await session.execute(select(ExpertApproval).where(ExpertApproval.run_id == run.id, ExpertApproval.status == "pending"))).scalars():
+            await session.delete(ap)
+        await session.flush()
+    else:
+        # started_at 为 ISO 秒级精度：同任务内连续创建的 Run 可能同秒，保证严格递增以稳定「最新置顶」排序
+        started = now_iso()
+        if task_id is not None:
+            latest = (await session.execute(
+                select(ExpertRun.started_at).where(ExpertRun.task_id == task_id).order_by(ExpertRun.started_at.desc()).limit(1)
+            )).scalar()
+            if latest and started <= latest:
+                started = (datetime.fromisoformat(latest) + timedelta(seconds=1)).isoformat(timespec="seconds")
+        run = ExpertRun(
+            id=new_id("run"), expert_id=deployment.expert_id, expert_version_id=version.id,
+            deployment_id=deployment.id, requested_by=user.id, status="running",
+            task_id=task_id, input=prompt, context=context, trace_id=new_id("trace"), started_at=started,
+        )
+        session.add(run)
+        await session.flush()
 
     version_id, user_id = version.id, user.id
 
     async def _bg():
-        # 等待调用方事务提交使 Run 行可见（请求路径在 schedule 后立即 commit，窗口毫秒级；
-        # 自动节点链式派生的内层 Run 需等外层后台事务提交，重试兜底）
+        # 等待调用方事务提交使 Run 新状态可见（请求路径在 schedule 后立即 commit，窗口毫秒级；
+        # 覆盖式重跑时 Run 行早已存在——必须等到 trace_id 变为本轮新值才能读，否则会用旧状态执行）。
+        # 用标量查询轮询：session.get 会命中首轮缓存的 identity map 旧快照，永远看不到提交后的更新。
         async with SessionFactory() as bg:
-            bg_run = None
+            committed = False
             for _ in range(50):
-                bg_run = await bg.get(ExpertRun, run.id)
-                if bg_run is not None:
+                tid = (await bg.execute(
+                    select(ExpertRun.trace_id).where(ExpertRun.id == run.id)
+                )).scalar_one_or_none()
+                if tid == run.trace_id:
+                    committed = True
                     break
                 await asyncio.sleep(0.1)
-            if bg_run is None:
-                logging.warning("后台 Expert Run %s 未找到记录（调用方事务回滚？），跳过执行", run.id)
+            if not committed:
+                logging.warning("后台 Expert Run %s 未找到记录或状态未提交（调用方事务回滚？），跳过执行", run.id)
                 return
+            bg_run = await bg.get(ExpertRun, run.id)
             try:
                 bg_version = await bg.get(ExpertVersion, version_id)
                 bg_user = await bg.get(User, user_id)
@@ -473,6 +514,27 @@ def _coerce_text(raw_value, depth: int = 0) -> str:
     return str(raw_value)
 
 
+def _plain_text_fallback(schema: list[dict], text: str) -> dict:
+    """非 JSON 产出的全文回填：首个必填 textarea 优先，其次任一 textarea/input；
+    upload/file 字段同回全文（调用方转文档）。无可回填字段返回 {}。"""
+    if not text:
+        return {}
+    targets = [f for f in schema if f.get("type") in ("textarea", "input", "upload", "file")]
+    primary = next((f for f in targets if f.get("required") and f.get("type") == "textarea"), None)
+    if primary is None:
+        primary = next((f for f in targets if f.get("type") == "textarea"), None)
+    if primary is None:
+        primary = next((f for f in targets if f.get("required")), None)
+    if primary is None:
+        return {}
+    values: dict = {}
+    values[primary["key"]] = text
+    for f in schema:
+        if f.get("type") in ("upload", "file") and f["key"] not in values:
+            values[f["key"]] = text
+    return values
+
+
 def parse_schema_output(schema: list[dict], raw: str) -> tuple[dict, list[str]]:
     """解析模型输出为表单值：容错提取 JSON（围栏块优先、单引号兼容），按字段类型矫正
     （选项约束/数值/数组），嵌套 dict/list 拍平为可读文本。
@@ -496,6 +558,11 @@ def parse_schema_output(schema: list[dict], raw: str) -> tuple[dict, list[str]]:
             break
     parsed = best[1]
     if parsed is None:
+        # 兜底：模型输出为纯文本/Markdown 评审报告（无任何 JSON 结构）时，
+        # 把全文回填到首个必填长文本字段、upload 字段转文档，保证产出仍可采纳（由人工审核）
+        fallback = _plain_text_fallback(schema, raw.strip())
+        if fallback:
+            return fallback, ["模型输出不是 JSON，已按全文回填，请人工核对字段内容"]
         return {}, ["模型输出无法解析为 JSON"]
     values: dict = {}
     for f in schema:
