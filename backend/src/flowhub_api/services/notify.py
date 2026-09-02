@@ -187,8 +187,31 @@ async def deliver_channels(title: str, body: str, target: User | str | None = No
             email, title, body,
         )
         results.append({"name": "邮件", "ok": ok})
-
     return results
+
+
+def welcome_email_body(name: str) -> str:
+    """用户账号激活后的欢迎邮件正文：系统简介 + 快速上手 + Skill/MCP 使用指南。"""
+    return (
+        f"{name}，你好！\n\n"
+        "你的 FlowHub 账号已激活，首次登录请先修改初始密码。\n\n"
+        "【FlowHub 是什么】\n"
+        "FlowHub 是一个可审计的流程协同平台：需求、问题、任务、文档与 AI Expert 在同一条流程中流转，"
+        "每一步状态变更都可追溯到人、时间与操作，高风险 AI 操作必须经人工确认。\n\n"
+        "【快速上手】\n"
+        "1. 「我的任务」：处理分配给你的节点任务，填写产出表单并提交，流程自动流转到下一节点；\n"
+        "2. 「工作项」：按标签（如版本号）分类查看全部工作项，点击标题进入详情可看到任务树与处理历史；\n"
+        "3. 「AiChat」：直接用自然语言查询项目/任务/流程状态；选择 Expert 后可执行更专业的分析产出；\n"
+        "4. 「文档中心」：上传与预览需求文档、接口文档，支持 Axure 导出包在线预览。\n\n"
+        "【外部 Skill 与 MCP 使用指南】\n"
+        "- MCP 中心：注册 MCP Server（如公司内部工具网关），Expert 运行时可调用其工具；"
+        "外部 Agent 也可通过「MCP / Skill 下载」页获取接入凭证（Access Key）接入 FlowHub；\n"
+        "- Expert Skill：在「Expert Skill」页上传技能包（提示词 + 工具编排），创建 Expert 时勾选即注入其运行上下文；\n"
+        "- 「MCP 下载」页提供的 Skill 包可直接导入 Expert 编辑器，作为构建专属 Expert 的起点；\n"
+        "- 安全约定：Skill 与 MCP 工具遵循最小权限，受治理写入操作会在审批节点中断等待人工确认。\n\n"
+        "如在「代码仓库」页绑定项目仓库，Expert 处理任务时会自动带上仓库结构上下文，分析更精准。\n\n"
+        "—— FlowHub 平台"
+    )
 
 
 def channel_health() -> dict[str, dict[str, Any]]:

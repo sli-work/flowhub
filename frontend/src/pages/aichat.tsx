@@ -83,6 +83,8 @@ export function AiChatPage() {
   const [lastCompacted, setLastCompacted] = useState(false);
   const [stopped, setStopped] = useState(false);
   const [executingTrace, setExecutingTrace] = useState<TraceItem[]>([]);
+  /** 右侧产出文件栏宽度（可向左拖动加宽，200~560px） */
+  const [filesPanelWidth, setFilesPanelWidth] = useState(260);
   const stopRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
   const runtimeRef = useRef<ReturnType<typeof useLocalRuntime> | null>(null);
@@ -890,9 +892,30 @@ export function AiChatPage() {
             </div>
           </ThreadPrimitive.Root>
         </AssistantRuntimeProvider>
-        {/* 右侧产出文件栏：本次会话内 AI 生成的文档，可下载/预览 */}
+        {/* 右侧产出文件栏：本次会话内 AI 生成的文档，可下载/预览；左缘可向左拖动加宽 */}
         {sessionFiles.length > 0 && (
-          <aside className="hidden w-[260px] flex-none flex-col overflow-y-auto border-l border-slate-200 bg-slate-50/70 p-3 lg:flex dark:border-slate-800 dark:bg-slate-900/60">
+          <aside
+            className="relative hidden flex-none flex-col overflow-y-auto border-l border-slate-200 bg-slate-50/70 p-3 lg:flex dark:border-slate-800 dark:bg-slate-900/60"
+            style={{ width: filesPanelWidth }}
+          >
+            <div
+              className="absolute -left-1 top-0 z-10 h-full w-2 cursor-ew-resize select-none"
+              title="拖动调整宽度"
+              onPointerDown={(e) => {
+                e.preventDefault();
+                const startX = e.clientX;
+                const startW = filesPanelWidth;
+                const onMove = (ev: PointerEvent) => {
+                  setFilesPanelWidth(Math.min(560, Math.max(200, startW - (ev.clientX - startX))));
+                };
+                const onUp = () => {
+                  window.removeEventListener("pointermove", onMove);
+                  window.removeEventListener("pointerup", onUp);
+                };
+                window.addEventListener("pointermove", onMove);
+                window.addEventListener("pointerup", onUp);
+              }}
+            />
             <div className="mb-2 flex items-center justify-between px-1">
               <b className="text-[12.5px] font-semibold text-slate-600 dark:text-slate-300">产出文件</b>
               <Badge tone="info">{sessionFiles.length}</Badge>

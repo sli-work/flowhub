@@ -8,14 +8,15 @@ ARG HTTPS_PROXY
 ARG NO_PROXY
 ENV HTTP_PROXY=${HTTP_PROXY} HTTPS_PROXY=${HTTPS_PROXY} NO_PROXY=${NO_PROXY}
 
-# opencode 官方安装脚本依赖 curl / unzip / ca-certificates
+# opencode 官方安装脚本依赖 curl / unzip / ca-certificates；git 供仓库镜像 bare clone 使用
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        curl unzip ca-certificates \
+        curl unzip ca-certificates git \
     && rm -rf /var/lib/apt/lists/*
 
-# 内置安装 opencode（官方脚本 → /root/.opencode/bin/opencode）
-# 本地/生产需通过 opencode login 或配置 api key 后方可调用模型
-RUN curl -fsSL https://opencode.ai/install | bash
+# 内置安装 opencode（官方脚本 → /root/.opencode/bin/opencode）；网络不稳时重试 3 次，
+# 仍失败则跳过（opencode 为可选运行时，缺失只影响 opencode 执行器，不影响 FlowHub 主体）
+RUN for i in 1 2 3; do curl -fsSL --connect-timeout 20 https://opencode.ai/install | bash && break || sleep 5; done; \
+    test -x /root/.opencode/bin/opencode || echo "WARN: opencode install skipped (network unavailable)"
 ENV PATH="/root/.opencode/bin:${PATH}"
 
 WORKDIR /app

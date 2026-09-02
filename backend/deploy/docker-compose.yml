@@ -67,6 +67,11 @@ services:
       BOOTSTRAP_ADMIN_NAME: ${BOOTSTRAP_ADMIN_NAME:-系统管理员}
       # opencode 执行超时（秒）
       OPENCODE_TIMEOUT: ${OPENCODE_TIMEOUT:-180}
+      # 仓库镜像根目录：与 repomirror 卷挂载点一致
+      REPO_MIRROR_ROOT: /app/.repo-mirror
+    volumes:
+      # 仓库镜像缓存：容器重建后不重 clone（backend/.repo-mirror）
+      - repomirror:/app/.repo-mirror
     depends_on:
       postgres:
         condition: service_healthy
@@ -88,3 +93,4 @@ services:
 volumes:
   pgdata:
   miniodata:
+  repomirror:

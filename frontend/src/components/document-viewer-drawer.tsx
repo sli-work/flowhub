@@ -98,7 +98,12 @@ export function DocumentViewerDrawer({ open, docs, initialDocId, onClose }: { op
         setBlobUrl(url)
       })
     Promise.all([previewTask, blobTask])
-      .catch((e) => { if (!revoked) setError(e instanceof Error ? e.message : '文档加载失败') })
+      .catch((e) => {
+        if (!revoked) {
+          const msg = e instanceof Error ? e.message : "文档加载失败";
+          setError(/404|不存在|不可用/.test(msg) ? `${msg}（该文件可能来自已删除的会话产出，或存储对象已清理）` : msg);
+        }
+      })
       .finally(() => { if (!revoked) setLoading(false) })
     return () => {
       revoked = true

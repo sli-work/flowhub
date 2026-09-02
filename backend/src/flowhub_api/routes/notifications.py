@@ -21,6 +21,8 @@ router = APIRouter(prefix="/api/v1/notifications", tags=["notifications"])
 _CONFIG_KEYS = {
     "public_base_url": False, "dingtalk_app_key": False, "dingtalk_app_secret": True, "dingtalk_agent_id": False,
     "wecom_corp_id": False, "wecom_app_secret": True, "wecom_agent_id": False,
+    # 邮件渠道（SMTP）：页面上可直接配置，敏感项（密码/授权码）密文保存不回显
+    "smtp_host": False, "smtp_port": False, "smtp_user": False, "smtp_password": True, "smtp_from": False,
 }
 
 

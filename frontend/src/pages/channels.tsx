@@ -142,6 +142,17 @@ export function ChannelsPage() {
       </section>
 
       <section className="mb-5 rounded-xl border border-slate-200 bg-white p-5 shadow-s dark:border-slate-700 dark:bg-slate-900">
+        <div className="mb-1 text-[14px] font-semibold text-slate-800 dark:text-slate-100">邮件渠道（SMTP）</div>
+        <p className="mb-4 text-[12px] text-slate-500">配置后用户激活欢迎邮件、节点通知将真实发信；凭证加密保存不回显，保存后立即生效。465 端口走 SSL，其他端口走 STARTTLS。</p>
+        <div className="grid gap-3 md:grid-cols-2">
+          {[['smtp_host', 'SMTP 服务器', 'smtp.example.com'], ['smtp_port', 'SMTP 端口', '465'], ['smtp_user', 'SMTP 用户名', 'noreply@example.com'], ['smtp_password', configured.smtp_password ? 'SMTP 密码/授权码（已配置，留空不修改）' : 'SMTP 密码/授权码', ''], ['smtp_from', '发件人地址（可选，默认同用户名）', 'noreply@example.com']].map(([key, label, placeholder]) => (
+            <label key={key} className="space-y-1 text-[12px] font-medium text-slate-600 dark:text-slate-300"><span>{label}</span><input type={key === 'smtp_password' ? 'password' : 'text'} value={config[key] ?? ''} placeholder={placeholder} onChange={(e) => setConfig({ ...config, [key]: e.target.value })} className="h-9 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm outline-none focus:border-blue-500 dark:border-slate-700 dark:bg-slate-900" /></label>
+          ))}
+        </div>
+        <button onClick={saveConfig} disabled={saving} className="mt-4 rounded-lg bg-blue-600 px-4 py-2 text-[13px] font-medium text-white disabled:opacity-60">{saving ? '保存中…' : '保存邮件配置'}</button>
+      </section>
+
+      <section className="mb-5 rounded-xl border border-slate-200 bg-white p-5 shadow-s dark:border-slate-700 dark:bg-slate-900">
         <div className="mb-1 text-[14px] font-semibold text-slate-800 dark:text-slate-100">企业应用与免登配置</div>
         <p className="mb-4 text-[12px] text-slate-500">凭证加密保存且不会回显；保存后立即生效。请将应用主页与 OAuth 回调配置为「公网地址/login」。</p>
         <div className="grid gap-3 md:grid-cols-2">

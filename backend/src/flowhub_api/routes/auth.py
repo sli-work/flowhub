@@ -1,4 +1,5 @@
 """认证路由（docs/02 §一）：登录 / 注册 / 改密 / 免登占位。"""
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request
@@ -116,8 +117,9 @@ async def approve_registration(
     user: Annotated[User, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """审批通过：invited → active，创建凭证并通知（R-152）。"""
+    """审批通过：invited → active，创建凭证并发送欢迎通知（站内 + 邮件）。"""
     from flowhub_api.authz.authorizer import build_authorizer
+    from flowhub_api.services.notify import deliver_channels, welcome_email_body
 
     build_authorizer(user).require("organization:user_manage")
     target = await session.get(User, user_id)
@@ -131,8 +133,18 @@ async def approve_registration(
         actor=user.name, action="auth:registration_approve",
         target=f"{target.name}（{target.account}）", result="success",
     )
+    # 欢迎通知：站内 + 邮件（邮件未配置时 deliver_channels 自动跳过）
+    results = await deliver_channels(
+        "欢迎加入 FlowHub",
+        welcome_email_body(target.name),
+        target.email or None,  # 邮件渠道收件人（未填邮箱时自动跳过邮件渠道）
+    )
+    session.add(NotificationItem(
+        id=gen_id("n"), title="账号已激活", body="管理员已激活你的账号，登录后请先修改初始密码。详见欢迎邮件。",
+        time=datetime.now(UTC).strftime("%m-%d %H:%M"), channels=results, unread=True, kind="complete", target_user=target.account,
+    ))
     await session.commit()
-    return ok(message=f"审批通过：{target.name} 已激活（邮件+站内通知申请者）")
+    return ok({"channels": results}, message=f"审批通过：{target.name} 已激活，欢迎通知已发送")
 
 
 @router.post("/change-password")

@@ -5,6 +5,7 @@
 保证 LLM 用几百~一两千 token 就能了解仓库结构，不注入全量代码。
 """
 import asyncio
+import os
 import logging
 import subprocess
 from pathlib import Path
@@ -18,7 +19,8 @@ from flowhub_api.services.crypto import decrypt_secret
 
 logger = logging.getLogger(__name__)
 
-MIRROR_ROOT = Path(__file__).resolve().parent.parent.parent.parent / ".repo-mirror"
+# 镜像根目录：容器内通过 REPO_MIRROR_ROOT=/app/.repo-mirror 对齐持久化卷；本地默认 backend/.repo-mirror
+MIRROR_ROOT = Path(os.environ.get("REPO_MIRROR_ROOT") or Path(__file__).resolve().parent.parent.parent.parent / ".repo-mirror")
 CLONE_TIMEOUT = 90
 FETCH_TIMEOUT = 30
 _MAX_TREE_ENTRIES = 600
