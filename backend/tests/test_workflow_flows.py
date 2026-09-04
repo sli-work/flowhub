@@ -123,19 +123,14 @@ class TestReturnAndResubmit:
         result = _submit_task(client, headers, start_task)
         assert result["task"]["status"] == "completed"
 
-        # 获取新任务，退回至 n1
+        # v3 的需求分析节点未配置回退边，不能越过画布强行退回至 n1
         new_tasks = _get_open_tasks(client, headers, wi_id)
         if new_tasks:
             n2_task = new_tasks[-1]["id"]
             r = client.post(f"/api/v1/tasks/{n2_task}/actions", headers=headers,
                             json={"action": "return", "to_node_id": "n1"})
-            assert r.status_code == 200
-            assert r.json()["data"]["task"]["node"] == "n1"
-            assert r.json()["data"]["task"]["status"] == "returned"
-
-            # 退回后仍有待处理任务
-            open_tasks = _get_open_tasks(client, headers, wi_id)
-            assert len(open_tasks) >= 1
+            assert r.status_code == 400
+            assert "模板未配置" in r.json()["message"]
 
 
 # ==================== 3. 并发工作项实例隔离 ====================
@@ -583,6 +578,7 @@ class TestSubtaskSplit:
         parent_id = _get_open_tasks(client, headers, wi_id)[0]["id"]
 
         r = client.post(f"/api/v1/tasks/{parent_id}/split", headers=headers, json={
+            "form_values": {"parent_conclusion": "父任务的结论与约束"},
             "children": [
                 {"title": "子线A", "note": "线A说明", "due_hours": 24},
                 {"title": "子线B", "note": "线B说明", "due_hours": 48},
@@ -594,7 +590,13 @@ class TestSubtaskSplit:
         parent = client.get(f"/api/v1/tasks/{parent_id}", headers=headers).json()["data"]["task"]
         assert parent["status"] == "completed", "父任务拆分后完成"
 
-        # 两条子线都在下一节点，携带各自的拆分说明
+        # 拆分不能覆盖父任务的当前表单；子任务应继承它，且不混入拆分控制信息。
+        first_child_detail = client.get(f"/api/v1/tasks/{children[0]['id']}", headers=headers).json()["data"]
+        parent_context = next(item for item in first_child_detail["upstream"] if item["task_id"] == parent_id)
+        assert parent_context["values"] == {"parent_conclusion": "父任务的结论与约束"}
+        assert all("__split__" not in item["values"] and "split_to" not in item["values"] for item in first_child_detail["upstream"])
+
+        # 两条子线在下一节点独立流转，画布实例游标也应同步。
         for child, note in zip(children, ["线A说明", "线B说明"]):
             td = client.get(f"/api/v1/tasks/{child['id']}", headers=headers).json()["data"]
             assert td["task"]["parentTaskId"] == parent_id

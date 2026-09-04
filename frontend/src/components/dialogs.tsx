@@ -287,7 +287,9 @@ export function ProjectDialog({ mode, project, onSave, onClose }: {
   onClose: () => void
 }) {
   /* 模板池 + 用户：来自后端（新建工作项/项目绑定选择） */
-  const [tplPool, setTplPool] = useState<{ id: string; name: string; type: string; versions: string[]; nodes: { id: string; label: string; type: string }[] }[]>([])
+  type CanvasNode = { id: string; label: string; type: string }
+  type CanvasEdge = [string, string]
+  const [tplPool, setTplPool] = useState<{ id: string; name: string; type: string; versions: string[]; nodes: CanvasNode[] }[]>([])
   const [allUsers, setAllUsers] = useState<{ id: string; name: string; dept: string; status: string; roles: string[]; skills: string[] }[]>([])
   useEffect(() => {
     api.get<{ items: { id: string; name: string; type: string; versions: string[]; nodes: { id: string; label: string; type: string }[] }[] }>('/api/v1/templates/pool').then((d) => setTplPool(d.items)).catch(() => {})
@@ -299,9 +301,68 @@ export function ProjectDialog({ mode, project, onSave, onClose }: {
   const [desc, setDesc] = useState(project?.desc ?? '')
   const [manager, setManager] = useState(project?.manager ?? '')
   const [bindings, setBindings] = useState<ProjectTemplateBinding[]>(project?.templateBindings ?? [])
+  // 项目绑定的是某个模板版本，节点处理人必须以该版本的画布顺序和节点集为准，不能读模板当前节点快照。
+  const [canvasNodes, setCanvasNodes] = useState<Record<string, CanvasNode[]>>({})
   /* 节点配置区默认收起（用户手动展开） */
   const [bindExpand, setBindExpand] = useState<Record<string, boolean>>({})
   const [picker, setPicker] = useState<Record<string, 'u' | 'r' | null>>({})
+
+  const bindingKey = (templateId: string, version: string) => `${templateId}:${version}`
+  const bindingVersions = bindings.map((binding) => bindingKey(binding.templateId, binding.version)).sort().join('|')
+
+  const orderByFlow = (nodes: CanvasNode[], edges: CanvasEdge[]): CanvasNode[] => {
+    const sourceOrder = new Map(nodes.map((node, index) => [node.id, index]))
+    const nodeMap = new Map(nodes.map((node) => [node.id, node]))
+    const inbound = new Map(nodes.map((node) => [node.id, 0]))
+    const outgoing = new Map(nodes.map((node) => [node.id, [] as string[]]))
+    edges.forEach(([from, to]) => {
+      if (!nodeMap.has(from) || !nodeMap.has(to)) return
+      outgoing.get(from)!.push(to)
+      inbound.set(to, (inbound.get(to) ?? 0) + 1)
+    })
+    const compare = (left: string, right: string) => {
+      const leftStart = nodeMap.get(left)?.type === 'start' ? 0 : 1
+      const rightStart = nodeMap.get(right)?.type === 'start' ? 0 : 1
+      return leftStart - rightStart || (sourceOrder.get(left)! - sourceOrder.get(right)!)
+    }
+    const ready = [...inbound.entries()].filter(([, count]) => count === 0).map(([id]) => id).sort(compare)
+    const ordered: CanvasNode[] = []
+    while (ready.length) {
+      const id = ready.shift()!
+      ordered.push(nodeMap.get(id)!)
+      outgoing.get(id)!.forEach((next) => {
+        const remaining = (inbound.get(next) ?? 1) - 1
+        inbound.set(next, remaining)
+        if (remaining === 0) ready.push(next)
+      })
+      ready.sort(compare)
+    }
+    // 画布有环或孤立节点时保留其余节点，配置页仍可完整编辑。
+    return ordered.length === nodes.length ? ordered : [...ordered, ...nodes.filter((node) => !ordered.some((item) => item.id === node.id))]
+  }
+
+  useEffect(() => {
+    const wanted = bindings.map((binding) => ({
+      key: bindingKey(binding.templateId, binding.version), templateId: binding.templateId, version: binding.version,
+    }))
+    const missing = wanted.filter(({ key }) => canvasNodes[key] === undefined)
+    if (!missing.length) return
+    let cancelled = false
+    Promise.all(missing.map(async ({ key, templateId, version }) => {
+      try {
+        const canvas = await api.get<{ nodes: CanvasNode[]; edges: CanvasEdge[] }>(`/api/v1/templates/${templateId}/versions/${encodeURIComponent(version)}/canvas`)
+        return [key, orderByFlow(canvas.nodes ?? [], canvas.edges ?? [])] as const
+      } catch {
+        return [key, []] as const
+      }
+    })).then((loaded) => {
+      if (!cancelled) setCanvasNodes((previous) => ({ ...previous, ...Object.fromEntries(loaded) }))
+    })
+    return () => { cancelled = true }
+  }, [bindingVersions, canvasNodes])
+
+  const nodesForBinding = (binding: ProjectTemplateBinding): CanvasNode[] =>
+    canvasNodes[bindingKey(binding.templateId, binding.version)] ?? []
 
   const toggleTemplate = (tplId: string) => {
     const tpl = tplPool.find((t) => t.id === tplId)!
@@ -318,8 +379,7 @@ export function ProjectDialog({ mode, project, onSave, onClose }: {
   const updateAssignments = (tplId: string, nodeId: string, patch: Partial<NodeAssignment>) =>
     setBindings((prev) => prev.map((b) => {
       if (b.templateId !== tplId) return b
-      const tpl = tplPool.find((t) => t.id === tplId)!
-      const node = tpl.nodes.find((n) => n.id === nodeId)
+      const node = nodesForBinding(b).find((item) => item.id === nodeId)
       return {
         ...b,
         assignments: b.assignments.some((a) => a.nodeId === nodeId)
@@ -346,12 +406,18 @@ export function ProjectDialog({ mode, project, onSave, onClose }: {
 
   const save = () => {
     if (!name.trim() || !code.trim()) { toast('项目名称与编码为必填项'); return }
+    if (bindings.some((binding) => canvasNodes[bindingKey(binding.templateId, binding.version)] === undefined)) {
+      toast('流程版本画布仍在加载，请稍后再保存'); return
+    }
     onSave({
       id: project?.id ?? `p${Date.now()}`,
       name: name.trim(), code: code.trim().toUpperCase(), status, desc,
       members: project?.members ?? 0, workItems: project?.workItems ?? 0, progress: project?.progress ?? 0,
       manager, owner: project?.owner ?? '平台研发部', updated: '08-21', readOnly: false,
-      templateBindings: bindings,
+      templateBindings: bindings.map((binding) => {
+        const validNodeIds = new Set(nodesForBinding(binding).map((node) => node.id))
+        return { ...binding, assignments: binding.assignments.filter((assignment) => validNodeIds.has(assignment.nodeId)) }
+      }),
     })
     onClose()
     toast.success(`${mode === 'create' ? '已创建项目' : '已保存项目配置'}：模板绑定变更已写入审计（含 before/after）`)
@@ -412,7 +478,9 @@ export function ProjectDialog({ mode, project, onSave, onClose }: {
               {tplPool.map((tpl) => {
                 const b = bindings.find((x) => x.templateId === tpl.id)
                 const checked = !!b
-                const configured = (b?.assignments ?? []).filter((a) => a.users.length > 0 || a.roles.length > 0).length
+                const versionNodes = b ? nodesForBinding(b) : []
+                const configured = b ? b.assignments.filter((a) => versionNodes.some((node) => node.id === a.nodeId) && (a.users.length > 0 || a.roles.length > 0)).length : 0
+                const nodesLoading = !!b && canvasNodes[bindingKey(b.templateId, b.version)] === undefined
                 return (
                   <div key={tpl.id}>
                     {/* 模板行 */}
@@ -433,9 +501,9 @@ export function ProjectDialog({ mode, project, onSave, onClose }: {
                           <Badge tone={tpl.type === 'requirement' ? 'info' : tpl.type === 'issue' ? 'warn' : 'pur'} className="!px-1.5 !text-[10px]">
                             {tpl.type === 'requirement' ? '需求线' : tpl.type === 'issue' ? '问题线' : '变更线'}
                           </Badge>
-                          {checked && <Badge tone={configured > 0 ? 'suc' : 'gry'} className="!px-1.5 !text-[10px]">{configured}/{tpl.nodes.length} 节点已绑定</Badge>}
+                          {checked && <Badge tone={configured > 0 ? 'suc' : 'gry'} className="!px-1.5 !text-[10px]">{nodesLoading ? '加载节点…' : `${configured}/${versionNodes.length} 节点已绑定`}</Badge>}
                         </div>
-                        <div className="text-[11px] text-slate-400">可用版本：{tpl.versions.join(' / ')} · {tpl.nodes.length} 个节点</div>
+                        <div className="text-[11px] text-slate-400">可用版本：{tpl.versions.join(' / ')}{checked && !nodesLoading ? ` · ${versionNodes.length} 个节点` : ''}</div>
                       </div>
                       {checked && (
                         <div className="flex flex-none items-center gap-2">
@@ -469,7 +537,7 @@ export function ProjectDialog({ mode, project, onSave, onClose }: {
                         </div>
                         {bindExpand[tpl.id] && (
                           <div className="space-y-1.5">
-                            {tpl.nodes.map((node) => {
+                            {nodesLoading ? <div className="px-1 py-2 text-[11px] text-slate-400">正在读取 {b!.version} 的流程节点…</div> : versionNodes.map((node) => {
                               const a = b!.assignments.find((x) => x.nodeId === node.id)
                               const pk = `${tpl.id}:${node.id}`
                               const pick = picker[pk]
@@ -550,6 +618,7 @@ export function ProjectDialog({ mode, project, onSave, onClose }: {
                                 </div>
                               )
                             })}
+                            {!nodesLoading && versionNodes.length === 0 && <div className="px-1 py-2 text-[11px] text-amber-600 dark:text-amber-400">该版本没有可配置的画布节点，请先在模板中保存该版本画布。</div>}
                           </div>
                         )}
                       </div>
@@ -578,7 +647,7 @@ export function CreateWorkItemDialog({ onClose }: { onClose: () => void }) {
   const [busy, setBusy] = useState(false)
   const [projects, setProjects] = useState<{ id: string; name: string; code: string; status: string; templateBindings: { templateId: string; name: string; type: string; version: string; status: string }[] }[]>([])
   const [tplPool, setTplPool] = useState<{ id: string; name: string; type: string; versions: string[]; startSchema: unknown[] }[]>([])
-  /* 最新版本起始表单：来自后端 GET /templates/{id}/start-schema（最新 published 版本画布 start 节点） */
+  /* 已绑定版本起始表单：来自后端 GET /templates/{id}/start-schema。 */
   const [latestSchema, setLatestSchema] = useState<unknown[]>([])
   const [latestVersion, setLatestVersion] = useState<string>('')
   const [latestStatus, setLatestStatus] = useState<string>('')
@@ -597,14 +666,18 @@ export function CreateWorkItemDialog({ onClose }: { onClose: () => void }) {
   const toggleLabel = (name: string) =>
     setSelLabels((prev) => (prev.includes(name) ? prev.filter((l) => l !== name) : [...prev, name]))
 
-  /* 选择模板 → 拉取该模板最新版本的硬性要求表单（跟随最新发布版本，而非模板级静态 startSchema） */
+  const boundVersion = projects.find((p) => p.id === projId)?.templateBindings
+    .find((binding) => binding.templateId === templateId && binding.status === 'active')?.version
+
+  /* 选择项目绑定的模板 → 拉取绑定版本的硬性要求表单，不能因模板后续发布而漂移。 */
   useEffect(() => {
     setLatestSchema([])
     setLatestVersion('')
     setLatestStatus('')
     if (!templateId) return
     setSchemaLoading(true)
-    api.get<{ version: string | null; status: string | null; schema: unknown[]; fallback: boolean }>(`/api/v1/templates/${templateId}/start-schema`)
+    const versionQuery = boundVersion ? `?version=${encodeURIComponent(boundVersion)}` : ''
+    api.get<{ version: string | null; status: string | null; schema: unknown[]; fallback: boolean }>(`/api/v1/templates/${templateId}/start-schema${versionQuery}`)
       .then((d) => {
         setLatestSchema(d.schema)
         if (d.version) setLatestVersion(d.version)
@@ -612,7 +685,7 @@ export function CreateWorkItemDialog({ onClose }: { onClose: () => void }) {
       })
       .catch(() => { /* 后端不可用：保持空表单 */ })
       .finally(() => setSchemaLoading(false))
-  }, [templateId])
+  }, [templateId, boundVersion])
 
   const project = projects.find((p) => p.id === projId)
   const available = (project?.templateBindings ?? []).filter((b) => b.status === 'active')
@@ -696,7 +769,7 @@ export function CreateWorkItemDialog({ onClose }: { onClose: () => void }) {
                     <span className="text-[13px] font-semibold text-slate-700 dark:text-slate-200">硬性要求表单</span>
                     <Badge tone={typeTone}>{typeLabel}</Badge>
                     <span className="text-[11px] text-slate-400">
-                      {schemaLoading ? '加载中…' : latestVersion ? `来自「${tpl.name}」最新版本 ${latestVersion}（${latestStatus === 'published' ? '已发布' : '草稿'}）` : `来自「${tpl.name}」起始节点`}
+                      {schemaLoading ? '加载中…' : latestVersion ? `来自「${tpl.name}」绑定版本 ${latestVersion}（${latestStatus === 'published' ? '已发布' : '草稿'}）` : `来自「${tpl.name}」起始节点`}
                     </span>
                   </div>
                   <SchemaForm fields={fields} values={values} onChange={setValues} project={project.name} />

@@ -35,6 +35,8 @@ interface AppState {
   /** 当前工作项 / 任务（详情页与「去处理」页按此拉取真实数据） */
   activeWiId: string | null
   activeTaskId: string | null
+  /** 当前处理任务的标题（顶栏 banner 显示，替代写死的「节点处理 · 测试」） */
+  activeTaskTitle: string
   updateUser: (u: User) => void
   assignUserRoles: (userId: string, roles: string[]) => void
   /** 重新拉取用户表（审批/解锁等变更后刷新，保证用户管理列表与后端一致） */
@@ -42,8 +44,11 @@ interface AppState {
   navigate: (p: PageId) => void
   /** 打开工作项详情（携带 ID，详情页按真实数据渲染） */
   openWorkItem: (wiId: string) => void
-  /** 打开任务处理页（携带任务 ID，处理页按真实任务渲染；可同时指定所属工作项便于返回） */
-  openTask: (taskId: string, wiId?: string) => void
+  /** 打开任务处理页（携带任务 ID，处理页按真实任务渲染；可同时指定所属工作项便于返回，
+   *  title 用于顶栏 banner 即时显示任务标题，详情加载后以真实数据为准） */
+  openTask: (taskId: string, wiId?: string, title?: string) => void
+  /** 处理页详情加载后回填任务标题（通知/工作项等入口未携带 title 时兜底） */
+  setActiveTaskTitle: (t: string) => void
   login: () => void
   logout: () => void
   openDialog: (d: DialogName) => void
@@ -87,6 +92,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [approvalTargetId, setApprovalTargetId] = useState<string | null>(null)
   const [activeWiId, setActiveWiId] = useState<string | null>(null)
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null)
+  const [activeTaskTitle, setActiveTaskTitle] = useState('')
 
   /* 挂载时从后端拉取用户表（单一事实源：组织管理 ↔ 权限矩阵角色成员同步） */
   useEffect(() => {
@@ -122,10 +128,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     window.scrollTo({ top: 0 })
   }, [])
 
-  /** 打开任务处理页（携带任务 ID，处理页按真实任务渲染；可同时指定所属工作项便于返回） */
-  const openTask = useCallback((taskId: string, wiId?: string) => {
+  /** 打开任务处理页（携带任务 ID，处理页按真实任务渲染；可同时指定所属工作项便于返回，
+   *  title 用于顶栏 banner 即时显示任务标题，详情加载后以真实数据为准） */
+  const openTask = useCallback((taskId: string, wiId?: string, title?: string) => {
     setActiveTaskId(taskId)
     if (wiId) setActiveWiId(wiId)
+    setActiveTaskTitle(title ?? '')
     setPage('node')
     window.scrollTo({ top: 0 })
   }, [])
@@ -192,10 +200,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const value = useMemo(() => ({
-    authed, role, page, dialog, taskCounter, orgUsers, currentUser, locateNode, checkProblems, canvasTarget, approvalTargetId, activeWiId, activeTaskId, expertEditorTarget,
-    navigate, openWorkItem, openTask, login, logout, openDialog, closeDialog, openApproval, bumpTask,
+    authed, role, page, dialog, taskCounter, orgUsers, currentUser, locateNode, checkProblems, canvasTarget, approvalTargetId, activeWiId, activeTaskId, activeTaskTitle, expertEditorTarget,
+    navigate, openWorkItem, openTask, setActiveTaskTitle, login, logout, openDialog, closeDialog, openApproval, bumpTask,
     updateUser, assignUserRoles, refreshOrgUsers, locateCanvasNode, setCheckProblems, openCanvas, openExpertEditor,
-  }), [authed, role, page, dialog, taskCounter, orgUsers, currentUser, locateNode, checkProblems, canvasTarget, approvalTargetId, activeWiId, activeTaskId, expertEditorTarget, navigate, openWorkItem, openTask, login, logout, openDialog, closeDialog, openApproval, bumpTask, updateUser, assignUserRoles, refreshOrgUsers, locateCanvasNode, setCheckProblems, openCanvas, openExpertEditor])
+  }), [authed, role, page, dialog, taskCounter, orgUsers, currentUser, locateNode, checkProblems, canvasTarget, approvalTargetId, activeWiId, activeTaskId, activeTaskTitle, expertEditorTarget, navigate, openWorkItem, openTask, login, logout, openDialog, closeDialog, openApproval, bumpTask, updateUser, assignUserRoles, refreshOrgUsers, locateCanvasNode, setCheckProblems, openCanvas, openExpertEditor])
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>
 }

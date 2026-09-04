@@ -16,6 +16,14 @@ export interface ViewerDoc {
 }
 
 type ThemeMode = 'light' | 'dark'
+type ArchiveEntry = { path: string; size: number }
+type ArchivePreview = { preview_type: 'axure' | 'archive'; entries: ArchiveEntry[] }
+
+function formatFileSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${Math.ceil(bytes / 1024)} KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
 
 function useThemeMode(): ThemeMode {
   const [mode, setMode] = useState<ThemeMode>(() => (document.documentElement.classList.contains('dark') ? 'dark' : 'light'))
@@ -37,6 +45,7 @@ export function DocumentViewerDrawer({ open, docs, initialDocId, onClose }: { op
   const [listOpen, setListOpen] = useState(true)
   const [blobUrl, setBlobUrl] = useState<string | null>(null)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const [archiveEntries, setArchiveEntries] = useState<ArchiveEntry[] | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const blobRef = useRef<string | null>(null)
@@ -75,19 +84,26 @@ export function DocumentViewerDrawer({ open, docs, initialDocId, onClose }: { op
   }, [open, initialDocId, docs])
 
   useEffect(() => {
-    if (!open || !current) { setBlobUrl(null); setPreviewUrl(null); setError(''); return }
+    if (!open || !current) { setBlobUrl(null); setPreviewUrl(null); setArchiveEntries(null); setError(''); return }
     let revoked = false
     const controller = new AbortController()
     setLoading(true)
     setError('')
     setPreviewUrl(null)
-    // zip（Axure 导出 HTML 包）：取短时 token 走同源 iframe 静态预览；其余走 FileViewer Blob
+    setArchiveEntries(null)
+    // ZIP 先读取安全目录清单：包含根 index.html 的 Axure 包走 iframe，其余显示文件浏览器。
     const previewTask = current.name.toLowerCase().endsWith('.zip')
       ? api.post<{ link: string }>(`/api/v1/documents/${current.id}/link`)
-          .then((d) => {
+          .then(async (d) => {
             const token = new URLSearchParams(d.link.split('?')[1] ?? '').get('token')
             if (!token) throw new Error('预览链接无效')
-            if (!revoked) setPreviewUrl(`/api/v1/documents/${current.id}/preview/index.html?token=${encodeURIComponent(token)}`)
+            const archive = await api.get<ArchivePreview>(`/api/v1/documents/${current.id}/archive?token=${encodeURIComponent(token)}`)
+            if (revoked) return
+            if (archive.preview_type === 'axure') {
+              setPreviewUrl(`/api/v1/documents/${current.id}/preview/index.html?token=${encodeURIComponent(token)}`)
+            } else {
+              setArchiveEntries(archive.entries)
+            }
           })
       : Promise.resolve()
     const blobTask = api.getBlob(`/api/v1/documents/${current.id}/download`, controller.signal)
@@ -198,6 +214,23 @@ export function DocumentViewerDrawer({ open, docs, initialDocId, onClose }: { op
                 className="h-full w-full border-0 bg-white"
                 sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
               />
+            ) : isZip && archiveEntries ? (
+              <div className="h-full overflow-auto bg-white p-5 dark:bg-slate-950">
+                <div className="mb-4">
+                  <h3 className="text-[14px] font-semibold text-slate-800 dark:text-slate-100">压缩包文件列表</h3>
+                  <p className="mt-1 text-[11.5px] text-slate-400">共 {archiveEntries.length} 个文件；可下载后解压查看内容</p>
+                </div>
+                <ul className="overflow-hidden rounded-lg border border-slate-200 text-[12px] dark:border-slate-700">
+                  {archiveEntries.map((entry) => (
+                    <li key={entry.path} className="flex items-center gap-3 border-b border-slate-100 px-3 py-2 last:border-b-0 dark:border-slate-800">
+                      <FileText className="h-3.5 w-3.5 flex-none text-blue-500" />
+                      <span className="min-w-0 flex-1 break-all text-slate-700 dark:text-slate-200">{entry.path}</span>
+                      <span className="flex-none text-[10.5px] text-slate-400">{formatFileSize(entry.size)}</span>
+                    </li>
+                  ))}
+                  {!archiveEntries.length && <li className="px-3 py-5 text-center text-slate-400">压缩包内没有可显示的文件</li>}
+                </ul>
+              </div>
             ) : blobUrl && current ? (
               <FileViewer
                 key={current.id}

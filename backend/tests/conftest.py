@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import os
 
-os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://flowhub:flowhub123@127.0.0.1:5432/flowhub_test")
+_TEST_DB_HOST = os.environ.get("FLOWHUB_TEST_DB_HOST", "192.168.21.4")
+os.environ.setdefault("DATABASE_URL", f"postgresql+psycopg://flowhub:flowhub123@{_TEST_DB_HOST}:5432/flowhub_test")
 os.environ.setdefault("FLOWHUB_SEED_DEMO", "1")
 os.environ.setdefault("SECRET_KEY", "test-secret-key-please-change")
 os.environ.setdefault("DEBUG", "false")
@@ -29,7 +30,7 @@ ADMIN_PASSWORD = "Admin@123456"
 
 def _reset_test_db() -> None:
     """重建测试库 schema（会话开始时调用一次）。"""
-    conn = psycopg.connect("postgresql://flowhub:flowhub123@127.0.0.1:5432/flowhub_test", autocommit=True)
+    conn = psycopg.connect(f"postgresql://flowhub:flowhub123@{_TEST_DB_HOST}:5432/flowhub_test", autocommit=True)
     try:
         with conn.cursor() as cur:
             cur.execute("DROP SCHEMA IF EXISTS public CASCADE")

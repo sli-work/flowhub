@@ -57,6 +57,19 @@ def test_parse_schema_output_plain_text_fallback():
     assert "verdict" not in values and "score" not in values and "tags" not in values
 
 
+def test_parse_schema_output_unwraps_markdown_fences_for_textarea():
+    """模型偶发把 Markdown 正文包进代码围栏时，采纳内容应仍可直接渲染。"""
+    from flowhub_api.services.expert_runtime import parse_schema_output
+
+    values, warnings = parse_schema_output(
+        [{"key": "analysis", "label": "分析", "type": "textarea", "required": True}],
+        '{"analysis":"```markdown\\n## 结论\\n- 可执行  \\n```"}',
+    )
+
+    assert values == {"analysis": "## 结论\n- 可执行  "}
+    assert warnings == []
+
+
 def test_parse_schema_output_unparsable_no_target():
     """连可回填的文本字段都没有时才放弃：返回空 + warnings。"""
     from flowhub_api.services.expert_runtime import parse_schema_output
@@ -68,6 +81,22 @@ def test_parse_schema_output_unparsable_no_target():
     )
     assert values == {}
     assert warnings
+
+
+def test_schema_output_instruction_distinguishes_markdown_from_single_line_text():
+    """Expert 应知道 textarea/file 是 Markdown 正文，而 input 不应携带 Markdown 包装。"""
+    from flowhub_api.services.expert_runtime import build_schema_output_instruction
+
+    instruction = build_schema_output_instruction([
+        {"key": "summary", "label": "摘要", "type": "input", "required": True},
+        {"key": "analysis", "label": "分析", "type": "textarea", "required": True},
+        {"key": "report", "label": "报告", "type": "upload", "required": True},
+    ])
+
+    assert "summary" in instruction and "单行纯文本" in instruction
+    assert "analysis" in instruction and "纯 Markdown 正文" in instruction
+    assert "report" in instruction and "纯 Markdown 正文" in instruction
+    assert "不要在字段值中重复字段名" in instruction
 
 
 # ---------- Fake 模型（替代不可达 Provider） ----------
@@ -82,11 +111,13 @@ class FakeChatOpenAI:
     payload = "{}"
     should_fail = False
     delay = 0.0
+    calls = 0
 
     def __init__(self, *args, **kwargs):
         pass
 
     async def ainvoke(self, messages):
+        FakeChatOpenAI.calls += 1
         if FakeChatOpenAI.delay:
             await asyncio.sleep(FakeChatOpenAI.delay)
         if FakeChatOpenAI.should_fail:
@@ -103,6 +134,7 @@ def fake_model(monkeypatch):
     yield
     FakeChatOpenAI.should_fail = False
     FakeChatOpenAI.delay = 0.0
+    FakeChatOpenAI.calls = 0
 
 
 def _publish_expert_with_deployment(client, headers, deployment_name):
@@ -391,6 +423,47 @@ def test_adopt_run_parsed_snapshot_and_idempotent(client, org_headers, fake_mode
     assert isinstance(snap2["values"]["report"], list) and snap2["values"]["report"][0]["id"] == ref1["id"]
 
 
+def test_adopt_replaces_stale_doc_on_rerun(client, org_headers, fake_model):
+    """覆盖式重跑后再采纳：新产出生成新文档，上一轮采纳生成的旧 AI 文档被删除（不堆积）；
+    且「节点表单附件」不出现在文档中心全量列表（仅在所属工作项文档里可见）。"""
+    headers = org_headers
+    model_id, dep_id = _publish_expert_with_deployment(client, headers, "fill-dep-replace")
+    tpl_id = _publish_flow_template(client, headers, dep_id)
+    pid = _make_project(client, headers, tpl_id, "v1", [])
+    wi_id = _create_wi(client, headers, pid, tpl_id, "AI重跑-文档替换")
+    task_id = _get_open_tasks(client, headers, wi_id)[0]["id"]
+
+    # 第一轮：采纳生成文档 v1
+    FakeChatOpenAI.payload = json.dumps({"conclusion": "第一轮结论", "verdict": "通过", "report": "# 第一轮报告"})
+    runs1 = _wait_run_succeeded(client, headers, task_id)
+    assert runs1 and runs1[0]["status"] == "succeeded"
+    r1 = client.post(f"/api/v1/tasks/{task_id}/adopt-run", headers=headers, json={"run_id": runs1[0]["id"]})
+    assert r1.status_code == 200, r1.text
+    ref1 = r1.json()["data"]["values"]["report"][0]
+
+    # 第二轮：覆盖式重跑后采纳 → 旧文档应被替换
+    FakeChatOpenAI.payload = json.dumps({"conclusion": "第二轮结论", "verdict": "通过", "report": "# 第二轮报告"})
+    r = client.post(f"/api/v1/tasks/{task_id}/ai-fill", headers=headers, json={})
+    assert r.status_code == 200, r.text
+    run_id = r.json()["data"]["run"]["id"]
+    runs2 = _wait_run_succeeded(client, headers, task_id)
+    assert next(x for x in runs2 if x["id"] == run_id)["status"] == "succeeded"
+    r2 = client.post(f"/api/v1/tasks/{task_id}/adopt-run", headers=headers, json={"run_id": run_id})
+    assert r2.status_code == 200, r2.text
+    ref2 = r2.json()["data"]["values"]["report"][0]
+    assert ref2["id"] != ref1["id"], "重跑后采纳应生成新文档"
+
+    # 工作项文档里：新文档在、旧文档已被删除（不堆积）
+    wi_docs = client.get(f"/api/v1/documents", headers=headers, params={"wi": wi_id, "page_size": 100}).json()["data"]["items"]
+    wi_ids = {d["id"] for d in wi_docs}
+    assert ref2["id"] in wi_ids
+    assert ref1["id"] not in wi_ids, "上一轮采纳的旧 AI 文档应被清理"
+
+    # 文档中心全量视图（不带 wi）不出现「节点表单附件」
+    center_docs = client.get("/api/v1/documents", headers=headers, params={"page_size": 100}).json()["data"]["items"]
+    assert all(d["kind"] != "节点表单附件" for d in center_docs), "文档中心不应展示节点表单附件"
+
+
 # ---------- Expert 自动：run 成功后免审批自动采纳并流转 ----------
 
 def _publish_auto_template(client, headers, deployment_id):
@@ -473,3 +546,149 @@ def test_expert_auto_model_failure_falls_back_to_human(client, org_headers, fake
     r2 = client.post(f"/api/v1/tasks/{auto_task['id']}/actions", headers=headers,
                      json={"action": "submit", "form_values": values, "acceptance_checks": {"a1": {"text": "结论完整", "checked": True}}})
     assert r2.status_code == 200, r2.text
+
+# ---------- 采纳 × AI 二次格式修正 ----------
+
+def test_adopt_run_normalize_formats_and_guards(client, org_headers, fake_model):
+    """normalize=true：采纳前用同一 Deployment 模型做格式修正——文本字段重排版、
+    结构化字段修正前后值不一致时保留原值；run.parsed 打 normalized 标记（幂等不重复调模型）。"""
+    headers = org_headers
+    model_id, dep_id = _publish_expert_with_deployment(client, headers, "fill-dep-norm")
+    tpl_id = _publish_flow_template(client, headers, dep_id)
+    pid = _make_project(client, headers, tpl_id, "v1", [])
+    FakeChatOpenAI.payload = json.dumps({
+        "conclusion": "原始结论", "verdict": "通过", "report": "# 原始报告\n正文",
+    })
+    wi_id = _create_wi(client, headers, pid, tpl_id, "AI规范化-E2E")
+    task_id = _get_open_tasks(client, headers, wi_id)[0]["id"]
+    runs = _wait_run_succeeded(client, headers, task_id)
+    assert runs and runs[0]["status"] == "succeeded"
+    run_id = runs[0]["id"]
+
+    # 修正轮模型返回重排版后的产出（内容同源，仅排版变化）
+    FakeChatOpenAI.payload = json.dumps({
+        "conclusion": "## 分析结论\n\n### 一、范围\n范围已明确（重排版）",
+        "verdict": "pass", "report": "# 分析报告\n\n| 项 | 值 |\n| --- | --- |\n| 结论 | 有条件可行 |",
+    })
+    r = client.post(f"/api/v1/tasks/{task_id}/adopt-run", headers=headers, json={"run_id": run_id, "normalize": True})
+    assert r.status_code == 200, r.text
+    data = r.json()["data"]
+    assert data["normalized"] is True, "格式修正应生效"
+    values = data["values"]
+    assert values["conclusion"].startswith("## 分析结论"), "文本字段应采用修正后的排版"
+    assert values["report"][0]["id"], "upload 字段仍应转文档引用"
+
+    # run.parsed 快照打标：详情可见 normalized + formattedAt
+    snap = client.get(f"/api/v1/tasks/{task_id}", headers=headers).json()["data"]["expertRuns"][0]["parsed"]
+    assert snap.get("normalized") is True and snap.get("formattedAt")
+    # 幂等：重复 normalize 采纳不再调模型（计数不增长）
+    calls_after_first = FakeChatOpenAI.calls
+    r2 = client.post(f"/api/v1/tasks/{task_id}/adopt-run", headers=headers, json={"run_id": run_id, "normalize": True})
+    assert r2.status_code == 200 and r2.json()["data"]["normalized"] is True
+    assert FakeChatOpenAI.calls == calls_after_first, "已打标的快照不应重复触发格式修正"
+
+
+def test_adopt_run_normalize_failure_falls_back(client, org_headers, fake_model):
+    """格式修正失败（模型异常）→ 自动降级原解析采纳：请求成功、normalized=false、内容为原产出。"""
+    headers = org_headers
+    model_id, dep_id = _publish_expert_with_deployment(client, headers, "fill-dep-normfb")
+    tpl_id = _publish_flow_template(client, headers, dep_id)
+    pid = _make_project(client, headers, tpl_id, "v1", [])
+    FakeChatOpenAI.payload = json.dumps({"conclusion": "降级前结论", "verdict": "通过", "report": "# 降级报告"})
+    wi_id = _create_wi(client, headers, pid, tpl_id, "AI规范降级-E2E")
+    task_id = _get_open_tasks(client, headers, wi_id)[0]["id"]
+    runs = _wait_run_succeeded(client, headers, task_id)
+    assert runs and runs[0]["status"] == "succeeded"
+
+    FakeChatOpenAI.should_fail = True
+    r = client.post(f"/api/v1/tasks/{task_id}/adopt-run", headers=headers, json={"run_id": runs[0]["id"], "normalize": True})
+    FakeChatOpenAI.should_fail = False
+    assert r.status_code == 200, r.text
+    data = r.json()["data"]
+    assert data["normalized"] is False, "修正失败应降级为原解析"
+    assert data["values"]["conclusion"] == "降级前结论", "降级后内容应为原始解析值"
+
+
+def test_task_detail_next_task_id_after_auto_advance(client, org_headers, fake_model):
+    """Expert 自动节点自动流转后，详情响应携带 nextTaskId 指向下一节点任务。"""
+    from test_workflow_flows import _get_open_tasks as _tasks_of
+
+    headers = org_headers
+    model_id, dep_id = _publish_expert_with_deployment(client, headers, "fill-dep-next")
+    # 复用 _publish_flow_template（n2 为人工+Expert 协助）：这里直接构造自动节点流程
+    tpl = client.post("/api/v1/templates", headers=headers, json={"name": f"AI自动跳转-{uuid.uuid4().hex[:6]}", "type": "requirement"}).json()["data"]["template"]
+    nodes = [
+        {"id": "n1", "label": "需求提交", "type": "start", "x": 24, "y": 24, "width": 118, "height": 56,
+         "cfg": {"typeLine": "START", "purpose": "", "handler": "系统", "fallback": "", "sla": "", "output": "",
+                 "schema": [{"key": "title", "label": "标题", "type": "input", "required": True}]}},
+        {"id": "n2", "label": "AI 自动处理", "type": "task", "x": 200, "y": 24, "width": 118, "height": 56,
+         "cfg": {"typeLine": "TASK", "purpose": "自动产出", "handler": "Expert 自动", "fallback": "", "sla": "24 小时", "output": "x",
+                 "schema": [
+                     {"key": "conclusion", "label": "分析结论", "type": "textarea", "required": True},
+                     {"key": "report", "label": "分析报告", "type": "upload", "required": True},
+                 ],
+                 "deliverable": {"instruction": "生成分析", "acceptance": [{"key": "a1", "text": "结论完整"}], "aiGuidance": "", "example": ""},
+                 "split": {"mode": "off"},
+                 "expert": {"expertDeploymentId": dep_id}}},
+        {"id": "n3", "label": "人工复核", "type": "task", "x": 376, "y": 24, "width": 118, "height": 56,
+         "cfg": {"typeLine": "TASK", "purpose": "复核", "handler": "人工 + Expert 可协助", "fallback": "", "sla": "", "output": "x",
+                 "schema": [{"key": "remark", "label": "复核意见", "type": "textarea", "required": True}],
+                 "deliverable": {}, "split": {"mode": "off"}, "expert": {}}},
+        {"id": "n4", "label": "完成", "type": "end", "x": 552, "y": 24, "width": 118, "height": 56,
+         "cfg": {"typeLine": "END", "purpose": "", "handler": "系统", "fallback": "", "sla": "", "output": "", "schema": []}},
+    ]
+    r = client.post(f"/api/v1/templates/{tpl['id']}/versions/save-and-publish", headers=headers,
+                    json={"nodes": nodes, "edges": [["n1", "n2"], ["n2", "n3"], ["n3", "n4"]], "fallbacks": []})
+    assert r.status_code == 200, r.text
+    pid = _make_project(client, headers, tpl["id"], "v1", [])
+    wi_id = _create_wi(client, headers, pid, tpl["id"], "AI自动跳转-E2E")
+
+    FakeChatOpenAI.payload = json.dumps({"conclusion": "自动结论", "report": "# 自动报告"})
+    auto_task = next(x for x in _tasks_of(client, headers, wi_id) if x["nodeId"] == "n2")
+    # 等 run 完成 + 自动采纳流转（复用现有轮询）
+    _wait_run_succeeded(client, headers, auto_task["id"])
+    deadline = time.time() + 8
+    while time.time() < deadline:
+        detail = client.get(f"/api/v1/tasks/{auto_task['id']}", headers=headers).json()["data"]
+        if detail["task"]["status"] == "completed":
+            break
+        time.sleep(0.05)
+    assert detail["task"]["status"] == "completed", "自动节点应已自动采纳流转"
+    assert detail["nextTaskId"], "完成后详情应携带 nextTaskId"
+    nt = client.get(f"/api/v1/tasks/{detail['nextTaskId']}", headers=headers).json()["data"]
+    assert nt["task"]["nodeId"] == "n3", "nextTaskId 应指向下一节点任务"
+    assert nt["task"]["status"] != "completed"
+
+def test_adopt_run_manual_values_override(client, org_headers, fake_model):
+    """人工编辑优先：adopt-run 带 values（用户在抽屉中修订）→ 按编辑值覆盖快照直接采纳，
+    跳过 AI 格式修正（模型不被调用）；快照打 manualEdited/editedKeys；upload 字段的人工改动被忽略。"""
+    headers = org_headers
+    model_id, dep_id = _publish_expert_with_deployment(client, headers, "fill-dep-manual")
+    tpl_id = _publish_flow_template(client, headers, dep_id)
+    pid = _make_project(client, headers, tpl_id, "v1", [])
+    FakeChatOpenAI.payload = json.dumps({"conclusion": "原始结论", "verdict": "通过", "report": "# 原始报告"})
+    wi_id = _create_wi(client, headers, pid, tpl_id, "AI编辑采纳-E2E")
+    task_id = _get_open_tasks(client, headers, wi_id)[0]["id"]
+    runs = _wait_run_succeeded(client, headers, task_id)
+    assert runs and runs[0]["status"] == "succeeded"
+    run_id = runs[0]["id"]
+
+    # 用户修订 conclusion + 篡改一个 upload 字段（应被忽略）
+    calls_before = FakeChatOpenAI.calls
+    r = client.post(f"/api/v1/tasks/{task_id}/adopt-run", headers=headers, json={
+        "run_id": run_id,
+        "values": {"conclusion": "人工修订后的结论", "report": "人工改正文"},
+    })
+    assert r.status_code == 200, r.text
+    data = r.json()["data"]
+    assert data["manualEdited"] is True, "人工编辑采纳应打标"
+    assert data["values"]["conclusion"] == "人工修订后的结论"
+    assert FakeChatOpenAI.calls == calls_before, "人工编辑采纳不应触发 AI 格式修正模型调用"
+    # upload 字段未接受人工值：仍按原正文走文档生成
+    assert data["values"]["report"][0]["id"], "upload 字段应按快照正文生成文档引用"
+    # 快照留痕：manualEdited + editedKeys（仅 conclusion）
+    snap = client.get(f"/api/v1/tasks/{task_id}", headers=headers).json()["data"]["expertRuns"][0]["parsed"]
+    assert snap.get("manualEdited") is True
+    assert snap.get("editedKeys") == ["conclusion"]
+    assert snap["values"]["conclusion"] == "人工修订后的结论"
+    assert snap["originalValues"]["conclusion"] == "原始结论"

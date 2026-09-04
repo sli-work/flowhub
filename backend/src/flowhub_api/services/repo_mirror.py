@@ -5,9 +5,12 @@
 保证 LLM 用几百~一两千 token 就能了解仓库结构，不注入全量代码。
 """
 import asyncio
+import json
 import os
 import logging
+import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
@@ -15,6 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from flowhub_api.models import Project, ProjectRepoBinding, Repo, RepoConnection
+from flowhub_api.core.config import get_settings
 from flowhub_api.services.crypto import decrypt_secret
 
 logger = logging.getLogger(__name__)
@@ -27,6 +31,7 @@ _MAX_TREE_ENTRIES = 600
 _MAX_README_CHARS = 1200
 _MAX_MANIFEST_CHARS = 600
 _MAX_REPOS = 6
+_GRAPHIFY_MAX_PROMPT_CHARS = 2400
 
 # 依赖清单：识别技术栈最便宜的来源
 _MANIFESTS = ("package.json", "pyproject.toml", "go.mod", "pom.xml", "build.gradle", "Cargo.toml", "requirements.txt")
@@ -55,6 +60,11 @@ def mirror_dir(repo_id: str) -> Path:
     return MIRROR_ROOT / f"{repo_id}.git"
 
 
+def graphify_dir(repo_id: str) -> Path:
+    """Separate generated AST artifacts from bare mirrors and checked-out code."""
+    return MIRROR_ROOT / "graphify" / repo_id
+
+
 async def ensure_mirror(repo: Repo, connection: RepoConnection) -> Path | None:
     """确保本地 bare 镜像存在且较新；失败返回 None（调用方降级为无代码上下文）。"""
     if not connection.token_ciphertext or not repo.web_url:
@@ -66,7 +76,10 @@ async def ensure_mirror(repo: Repo, connection: RepoConnection) -> Path | None:
             token = decrypt_secret(connection.token_ciphertext)
             url = _authed_clone_url(repo.web_url, token, connection.provider)
             if path.is_dir():
-                await asyncio.to_thread(_run_git, ["fetch", "--all", "--prune"], path, FETCH_TIMEOUT)
+                proc = await asyncio.to_thread(_run_git, ["fetch", "--all", "--prune"], path, FETCH_TIMEOUT)
+                if proc.returncode != 0:
+                    logger.warning("仓库镜像 fetch 失败 %s: %s", repo.full_name, proc.stderr[:200])
+                    return None
             else:
                 path.parent.mkdir(parents=True, exist_ok=True)
                 proc = await asyncio.to_thread(_run_git, ["clone", "--bare", url, str(path)], None, CLONE_TIMEOUT)
@@ -77,6 +90,74 @@ async def ensure_mirror(repo: Repo, connection: RepoConnection) -> Path | None:
         except Exception as exc:  # noqa: BLE001 — 镜像不可用时降级，不阻断流程
             logger.warning("仓库镜像维护失败 %s: %s", repo.full_name, exc)
             return None
+
+
+def _mirror_commit(mirror: Path) -> str:
+    proc = _run_git(["rev-parse", "HEAD"], mirror, 15)
+    return proc.stdout.strip() if proc.returncode == 0 else ""
+
+
+async def ensure_graphify_map(repo: Repo, mirror: Path) -> Path | None:
+    """Build a versioned Graphify AST graph from an isolated, detached worktree.
+
+    Graphify never receives the bare mirror and all generated output is staged
+    before replacing an older valid graph. This keeps code maps tenant-scoped
+    and lets callers fall back safely when the analyzer is unavailable.
+    """
+    settings = get_settings()
+    if not settings.graphify_enabled:
+        return None
+    lock = _locks.setdefault(repo.id, asyncio.Lock())
+    async with lock:
+        commit = await asyncio.to_thread(_mirror_commit, mirror)
+        if not commit:
+            return None
+        target = graphify_dir(repo.id)
+        try:
+            metadata = json.loads((target / "metadata.json").read_text(encoding="utf-8"))
+            if metadata.get("commit") == commit and graphify_map_text(repo.full_name, "", target, max_chars=1):
+                return target
+        except (OSError, json.JSONDecodeError):
+            pass
+
+        work_root = Path(tempfile.mkdtemp(prefix=f"flowhub-{repo.id}-", dir=MIRROR_ROOT))
+        checkout = work_root / "source"
+        output_root = Path(tempfile.mkdtemp(prefix=f"flowhub-graph-{repo.id}-", dir=MIRROR_ROOT))
+        branch = repo.default_branch or "HEAD"
+        try:
+            add = await asyncio.to_thread(
+                _run_git, ["--git-dir", str(mirror), "worktree", "add", "--detach", str(checkout), branch], None, FETCH_TIMEOUT,
+            )
+            if add.returncode != 0:
+                logger.warning("Graphify 工作树创建失败 %s: %s", repo.full_name, add.stderr[:200])
+                return None
+            command = [settings.graphify_command, "extract", str(checkout), "--code-only", "--out", str(output_root), "--max-workers", str(settings.graphify_max_workers)]
+            process = await asyncio.to_thread(
+                subprocess.run, command, capture_output=True, text=True, timeout=settings.graphify_timeout_seconds,
+                env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "LANG": "C.UTF-8"},
+            )
+            if process.returncode != 0:
+                logger.warning("Graphify 构图失败 %s: %s", repo.full_name, process.stderr[:300])
+                return None
+            (output_root / "metadata.json").write_text(json.dumps({"commit": commit}), encoding="utf-8")
+            if not graphify_map_text(repo.full_name, "", output_root, max_chars=1):
+                logger.warning("Graphify 产物无有效图谱 %s", repo.full_name)
+                return None
+            backup = target.with_name(f"{target.name}.previous")
+            shutil.rmtree(backup, ignore_errors=True)
+            if target.exists():
+                os.replace(target, backup)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(output_root, target)
+            shutil.rmtree(backup, ignore_errors=True)
+            return target
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            logger.warning("Graphify 构图异常 %s: %s", repo.full_name, exc)
+            return None
+        finally:
+            await asyncio.to_thread(_run_git, ["--git-dir", str(mirror), "worktree", "remove", "--force", str(checkout)], None, 30)
+            shutil.rmtree(work_root, ignore_errors=True)
+            shutil.rmtree(output_root, ignore_errors=True)
 
 
 def _ls_tree(path: Path, branch: str) -> list[str]:
@@ -136,6 +217,39 @@ def repo_map_text(repo: Repo, binding_role: str, mirror: Path) -> str:
     return "\n".join(lines)
 
 
+def graphify_map_text(repo_name: str, binding_role: str, graph_dir: Path, *, max_chars: int = _GRAPHIFY_MAX_PROMPT_CHARS) -> str:
+    """Convert Graphify's local AST graph into a bounded, prompt-safe code map."""
+    try:
+        graph = json.loads((graph_dir / "graphify-out" / "graph.json").read_text(encoding="utf-8"))
+        metadata = json.loads((graph_dir / "metadata.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ""
+    raw_nodes = graph.get("nodes") or []
+    if isinstance(raw_nodes, dict):
+        nodes = [{"id": node_id, **(data if isinstance(data, dict) else {})} for node_id, data in raw_nodes.items()]
+    else:
+        nodes = [node for node in raw_nodes if isinstance(node, dict)]
+    raw_edges = graph.get("edges") or []
+    edges = raw_edges.values() if isinstance(raw_edges, dict) else raw_edges
+    symbols: list[str] = []
+    for node in nodes[:24]:
+        label = str(node.get("label") or node.get("name") or node.get("id") or "").strip()
+        source = str(node.get("source_file") or node.get("file") or "").strip()
+        kind = str(node.get("type") or node.get("kind") or "符号").strip()
+        location = str(node.get("source_location") or node.get("line") or "").strip()
+        if label:
+            symbols.append(f"{label}（{kind}{f' · {source}' if source else ''}{f':{location}' if location else ''}）")
+    edge_count = sum(1 for edge in edges if isinstance(edge, dict))
+    lines = [
+        f"  - {repo_name}（{binding_role} · Graphify 代码地图 · 提交 {str(metadata.get('commit') or '未知')[:12]}）",
+        f"    图谱规模：符号 {len(nodes)} · 调用关系 {edge_count}",
+    ]
+    if symbols:
+        lines.append("    核心符号：" + "；".join(symbols))
+    result = "\n".join(lines)
+    return result[:max_chars]
+
+
 async def repo_map_section(session: AsyncSession, project_name: str, *, allow_clone: bool = True) -> str:
     """项目绑定仓库的"代码仓库"上下文段；无绑定/全部失败时返回空串。
 
@@ -165,6 +279,16 @@ async def repo_map_section(session: AsyncSession, project_name: str, *, allow_cl
             if mirror is None:
                 blocks.append(f"  - {repo.full_name}（{binding.role}）：镜像不可用")
                 continue
+        graph_dir = await ensure_graphify_map(repo, mirror)
+        if graph_dir is not None:
+            graph_map = graphify_map_text(
+                repo.full_name, binding.role, graph_dir,
+                max_chars=get_settings().graphify_max_prompt_chars,
+            )
+            if graph_map:
+                blocks.append(graph_map)
+                continue
+        # Graphify 首次构建失败或暂未安装时，不阻断任务上下文；保留基础地图作为降级。
         blocks.append(repo_map_text(repo, binding.role, mirror))
     if not blocks:
         return ""

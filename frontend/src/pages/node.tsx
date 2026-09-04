@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   ArrowLeft, ArrowRight, Bot, ClipboardList, FileText, Info, Layers, LoaderCircle, Users, Plus,
   Send, Sparkles, Undo2, UserPlus, PauseCircle, ShieldAlert, ChevronRight, Trash2,
@@ -14,15 +14,6 @@ import { DocumentViewerDrawer, type ViewerDoc } from '../components/document-vie
 import { cn } from '../lib/utils'
 import type { AcceptanceChecks, ExpertRunBrief, FormField, NodeDeliverable, TaskItem, WorkItem } from '../types'
 
-/* ---------- Expert Runtime 状态（后端无数据时兜底展示） ---------- */
-const CAPABILITY_DEFAULT: { name: string; mode: string }[] = [
-  { name: 'read_context', mode: 'direct' }, { name: 'read_documents', mode: 'direct' }, { name: 'read_history', mode: 'direct' },
-  { name: 'generate_content', mode: 'confirm' }, { name: 'write_form', mode: 'confirm' }, { name: 'append_form', mode: 'confirm' },
-  { name: 'upload_document', mode: 'confirm' }, { name: 'create_subtask', mode: 'confirm' },
-  { name: 'submit_task', mode: 'forbid' }, { name: 'return_task', mode: 'forbid' }, { name: 'transfer_task', mode: 'forbid' },
-  { name: 'pause_workflow', mode: 'forbid' }, { name: 'resume_workflow', mode: 'forbid' }, { name: 'close_work_item', mode: 'forbid' },
-]
-
 interface CanvasNodeLite {
   id: string
   label: string
@@ -36,6 +27,8 @@ interface CanvasNodeLite {
     split?: { mode?: 'off' | 'manual' | 'ai_assist' | 'ai_auto' }
   }
 }
+
+interface FallbackTarget { id: string; label: string }
 
 interface SubtaskBrief { id: string; title: string; node: string; status: string; assignee: string; due: string }
 interface SplitRow { title: string; note: string; assignee: string }
@@ -59,66 +52,38 @@ function ReadOnlyValue({ schema, k, v }: { schema?: FormField[]; k: string; v: u
   return <>{s}</>
 }
 
+function CollapsibleReadOnlyValue({ schema, k, v }: { schema?: FormField[]; k: string; v: unknown }) {
+  const text = typeof v === 'string' ? v : ''
+  if (text.length <= 240) return <ReadOnlyValue schema={schema} k={k} v={v} />
+  return (
+    <details className="min-w-0 rounded-md border border-slate-200 bg-slate-50/70 px-2.5 py-1.5 dark:border-slate-700 dark:bg-slate-800/40">
+      <summary className="cursor-pointer text-[11px] font-medium text-slate-500 dark:text-slate-400">展开查看内容（{text.length} 字）</summary>
+      <div className="mt-2 h-80 min-h-48 max-h-[70vh] resize-y overflow-auto pr-1" title="可拖动右下角调整内容高度">
+        <ReadOnlyValue schema={schema} k={k} v={v} />
+      </div>
+    </details>
+  )
+}
+
 function fieldLabel(schema: FormField[] | undefined, key: string): string {
   return schema?.find((field) => field.key === key)?.label ?? key
 }
 
-/* Run 产出展示（人机协同主阅读区）：AI 产出全文渲染优先——Markdown 直接读、JSON 美化展示；
-   下方紧凑摘要提示「采纳将回填哪些字段」（辅助信息，不替代全文、不做字段盒子/裁剪）。 */
-function RunOutputPreview({ run, schema }: { run: ExpertRunBrief; schema: FormField[] }) {
-  if (run.status === 'failed') {
-    return (
-      <div className="mt-1.5 max-h-72 overflow-y-auto rounded-md pr-1">
-        <p className="whitespace-pre-wrap break-words text-[12.5px] leading-relaxed text-red-500">{run.error || '（无错误信息）'}</p>
-      </div>
-    )
-  }
-  const parsed = run.parsed
-  const filled = parsed?.values
-    ? schema.filter((f) => {
-        const v = parsed.values[f.key]
-        return !(v === undefined || v === null || v === '' || (Array.isArray(v) && v.length === 0))
-      })
-    : []
-  const text = run.output || ''
-  const t = text.trim()
-  const isJson = (t.startsWith('{') && t.endsWith('}')) || (t.startsWith('[') && t.endsWith(']'))
-  const prettyJson = isJson ? (() => { try { return JSON.stringify(JSON.parse(t), null, 2) } catch { return null } })() : null
-  return (
-    <div className="mt-1.5 min-w-0">
-      {/* 主视图：产出全文（人先读懂 AI 做了什么）；max-w-full 防长表格/长串撑宽父容器 */}
-      {prettyJson ? (
-        <div className="max-h-96 max-w-full overflow-y-auto rounded-md border border-slate-100 bg-slate-50/60 p-2 dark:border-slate-800 dark:bg-slate-900/60">
-          <pre className="max-w-full whitespace-pre-wrap break-words text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">{prettyJson}</pre>
-        </div>
-      ) : text ? (
-        <div className="max-h-96 min-w-0 max-w-full overflow-y-auto rounded-md pr-1 [&_.aui-markdown_table]:max-w-full">
-          <MarkdownView text={text} className="min-w-0 max-w-full break-words text-[12.5px] leading-relaxed" />
-        </div>
-      ) : (
-        <p className="text-[12.5px] text-slate-400">（无文本输出）</p>
-      )}
-      {/* 解析警告（轻量提示） */}
-      {run.status === 'succeeded' && !!parsed?.warnings?.length && (
-        <div className="mt-1.5 space-y-0.5">
-          {parsed.warnings.map((w, i) => (
-            <p key={i} className="text-[11.5px] text-amber-600 dark:text-amber-300">⚠ {w}</p>
-          ))}
-        </div>
-      )}
-      {/* 采纳回填摘要：一条紧凑信息，点采纳前就知道会发生什么 */}
-      {run.status === 'succeeded' && filled.length > 0 && (
-        <div className="mt-1.5 rounded-md border border-violet-100 bg-violet-50/50 px-2.5 py-1.5 text-[11.5px] text-violet-700 dark:border-violet-500/20 dark:bg-violet-500/10 dark:text-violet-300">
-          采纳将回填 {filled.length} 个字段：{filled.map((f) => `「${f.label}」`).join('、')}
-          {filled.some((f) => f.type === 'upload' || f.type === 'file') && '（附件字段采纳时自动生成文档）'}
-        </div>
-      )}
-    </div>
-  )
+type DocumentRef = { id: string; name: string }
+
+function documentRefs(value: unknown): DocumentRef[] {
+  const items = Array.isArray(value) ? value : [value]
+  return items.flatMap((item) => {
+    if (!item || typeof item !== 'object') return []
+    const ref = item as { id?: unknown; name?: unknown }
+    return typeof ref.id === 'string' && typeof ref.name === 'string' ? [{ id: ref.id, name: ref.name }] : []
+  })
 }
 
+/* Run 产出在中栏「Expert 产出」卡内按字段预览（ReadOnlyValue），无抽屉 */
+
 export function NodeProcessPage() {
-  const { navigate, openDialog, openTask, openWorkItem, activeTaskId, currentUser } = useApp()
+  const { navigate, openDialog, openTask, openWorkItem, activeTaskId, currentUser, setActiveTaskTitle } = useApp()
   const [formValues, setFormValues] = useState<SchemaValues>({})
   /* 真实数据：当前任务 → 所属工作项 → 流程实例 → 模板画布 */
   const [task, setTask] = useState<TaskItem | null>(null)
@@ -131,13 +96,17 @@ export function NodeProcessPage() {
   /* 节点产出契约与拆分配置（来自画布 cfg） */
   const [curCfg, setCurCfg] = useState<{ purpose?: string; handler?: string; sla?: string; deliverable?: NodeDeliverable; splitMode?: string }>({})
   const [acceptance, setAcceptance] = useState<AcceptanceChecks>({})
+  const [fallbackTargets, setFallbackTargets] = useState<FallbackTarget[]>([])
+  const [returnOpen, setReturnOpen] = useState(false)
+  const [returnTarget, setReturnTarget] = useState('')
+  const [returnReason, setReturnReason] = useState('')
+  const [returnBusy, setReturnBusy] = useState(false)
   /* 子任务拆分 */
   const [subtasks, setSubtasks] = useState<SubtaskBrief[]>([])
   const [splitOpen, setSplitOpen] = useState(false)
   const [splitRows, setSplitRows] = useState<SplitRow[]>([{ title: '', note: '', assignee: '' }])
   const [suggestBusy, setSuggestBusy] = useState(false)
   const [splitBusy, setSplitBusy] = useState(false)
-  const [expertCaps] = useState(CAPABILITY_DEFAULT)
   const [flowSteps, setFlowSteps] = useState<{ name: string; status: string; assignee: string; time: string }[]>([])
   const [timeline, setTimeline] = useState<{ id: string; time: string; title: string; desc: string; by: string; kind: string }[]>([])
   const [expertRuns, setExpertRuns] = useState<ExpertRunBrief[]>([])
@@ -163,23 +132,53 @@ export function NodeProcessPage() {
   const [loading, setLoading] = useState(true)
   const [docs, setDocs] = useState<ViewerDoc[]>([])
   const [viewer, setViewer] = useState<{ open: boolean; initialId?: string }>({ open: false })
+  const openDocumentPreview = (document: DocumentRef) => {
+    setDocs((previous) => previous.some((item) => item.id === document.id)
+      ? previous
+      : [...previous, { ...document, kind: '节点表单附件' }])
+    setViewer({ open: true, initialId: document.id })
+  }
 
-  /* Expert Run 后台执行：run 进行中或自动节点处理中 → 轮询任务详情（3s），完成后自动刷新状态 */
+  /* Expert Run 后台执行：run 进行中或自动节点处理中 → 轮询任务详情（3s）。
+     最新 Run 刚成功后刷新预览；仅「Expert 自动」节点会自动采纳并流转，其他节点由用户主动采纳。
+     全自动节点完成瞬间（pending_confirmation → completed）：toast 通知并直达下一任务（详情响应 nextTaskId，兜底回工作项） */
   const expertProcessing = expertRuns[0]?.status === 'running' || task?.status === 'pending_confirmation'
+  const prevStatusRef = useRef<string | null>(null)
+  const autoFilledRunRef = useRef<string | null>(null)
+  const adoptRunRef = useRef<(runId: string) => Promise<void>>(async () => {})
   useEffect(() => {
     if (!activeTaskId || !expertProcessing) return
+    prevStatusRef.current = task?.status ?? null
     const timer = setInterval(() => {
       api.get<{
-        task: TaskItem; expertRuns?: ExpertRunBrief[]
+        task: TaskItem; expertRuns?: ExpertRunBrief[]; nextTaskId?: string
       }>(`/api/v1/tasks/${activeTaskId}`)
         .then((td) => {
           setTask((prev) => (prev && prev.id === td.task.id ? td.task : prev))
-          if (td.expertRuns?.length) setExpertRuns(td.expertRuns)
+          const runs = td.expertRuns
+          if (runs?.length) setExpertRuns(runs)
+          // Expert 自动节点的 Run 成功后自动采纳；人工协助节点保留产出，等待用户点击「采纳」。
+          const top = runs?.[0]
+          if (curCfg.handler === 'Expert 自动' && top && top.status === 'succeeded' && autoFilledRunRef.current !== top.id) {
+            autoFilledRunRef.current = top.id
+            void adoptRunRef.current(top.id)
+          }
+          const wasPending = prevStatusRef.current === 'pending_confirmation'
+          prevStatusRef.current = td.task.status
+          if (wasPending && td.task.status === 'completed') {
+            if (td.nextTaskId) {
+              toast.success('Expert 已自动完成本节点并流转，正在打开下一任务…')
+              openTask(td.nextTaskId, td.task.wiId)
+            } else if (td.task.wiId) {
+              toast.success('Expert 已自动完成本节点并流转')
+              openWorkItem(td.task.wiId)
+            }
+          }
         })
         .catch(() => {})
     }, 3000)
     return () => clearInterval(timer)
-  }, [activeTaskId, expertProcessing])
+  }, [activeTaskId, expertProcessing, task?.status, curCfg.handler, openTask, openWorkItem])
 
   /* 挂载：任务详情(+Expert Run 摘要 + 继承上下文) → 工作项详情 → 模板画布。
      注意：本 effect 会重置全部任务级状态，禁止把 task/wiId 等派生数据放进依赖（否则 reset→加载→再 reset 死循环），
@@ -190,7 +189,7 @@ export function NodeProcessPage() {
     setTask(null); setFormValues({}); setAiFilledKeys([]); setExpertRuns([])
     setUpstream([]); setSubtasks([]); setTimeline([]); setFlowSteps([]); setDocs([])
     setCandidates([]); setStartValues({}); setWi(null); setInstance(null)
-    setCurCfg({}); setCurSchema([]); setCurNodeType(''); setAcceptance({})
+    setCurCfg({}); setCurSchema([]); setCurNodeType(''); setAcceptance({}); setFallbackTargets([])
     setExpandedUp(new Set()); setSubmitBusy(false)
     setLoading(true)
     let curNodeId = ''
@@ -203,13 +202,17 @@ export function NodeProcessPage() {
       subtasks?: SubtaskBrief[]
       expertRuns?: ExpertRunBrief[]
       nodeCfg?: { purpose?: string; handler?: string; sla?: string; schema?: FormField[]; deliverable?: NodeDeliverable; split?: { mode?: string } }
+      fallbackTargets?: FallbackTarget[]
     }>(`/api/v1/tasks/${activeTaskId}`)
       .then((td) => {
         setTask(td.task)
+        // 顶栏 banner 标题兜底：从通知/工作项进入时 openTask 未携带 title
+        if (td.task.title) setActiveTaskTitle(td.task.title)
         curNodeId = td.task.nodeId ?? ''
         if (td.upstream?.length) setUpstream(td.upstream)
         else setUpstream([])
         if (td.expertRuns?.length) setExpertRuns(td.expertRuns)
+        setFallbackTargets(td.fallbackTargets ?? [])
         setSubtasks(td.subtasks ?? [])
         // 引擎视角的节点配置（最新 published 画布）：任务书/表单/拆分与流转校验同源
         if (td.nodeCfg) {
@@ -278,7 +281,7 @@ export function NodeProcessPage() {
     api.get<{ users: { name: string; dept?: string }[] }>(`/api/v1/tasks/${activeTaskId}/candidates`)
       .then((d) => setCandidates(d.users))
       .catch(() => {})
-  }, [activeTaskId, navigate])
+  }, [activeTaskId, navigate, setActiveTaskTitle])
 
   /* 文档列表：按工作项 ID 查询（文档挂在工作项下，不能拿任务 ID 去查）。
      独立 effect + 只依赖 wiId：任务详情加载出 wiId 后拉一次，避免随任务详情 effect 整体重置循环。 */
@@ -290,6 +293,30 @@ export function NodeProcessPage() {
   }, [task?.wiId])
 
   const [submitBusy, setSubmitBusy] = useState(false)
+  // 起始节点的 title 由创建接口强制补入；画布 schema 未显式保存 title 时，回显/退回编辑也必须使用同一字段。
+  const startSchema: FormField[] = curSchema.some((field) => field.key === 'title')
+    ? curSchema
+    : [{ key: 'title', label: '标题', type: 'input', required: true }, ...curSchema]
+  const openReturn = () => {
+    if (!fallbackTargets.length) { toast.error('当前节点未配置可用的回退目标'); return }
+    setReturnTarget(fallbackTargets[0].id)
+    setReturnReason('')
+    setReturnOpen(true)
+  }
+  const returnTask = async () => {
+    if (!activeTaskId || !returnTarget || returnBusy) return
+    setReturnBusy(true)
+    try {
+      const result = await api.post<{ task: TaskItem }>(`/api/v1/tasks/${activeTaskId}/actions`, {
+        action: 'return', to_node_id: returnTarget, reason: returnReason,
+      })
+      setTask(result.task)
+      setReturnOpen(false)
+      toast.success(`已退回至「${fallbackTargets.find((item) => item.id === returnTarget)?.label ?? returnTarget}」`)
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : '退回失败')
+    } finally { setReturnBusy(false) }
+  }
   const submitTask = async () => {
     if (submitBusy) return
     if (!activeTaskId) { toast.error('暂无真实任务可提交（请先新建工作项）'); return }
@@ -340,11 +367,20 @@ export function NodeProcessPage() {
 
   const applyExpertValues = (values: Record<string, unknown>, warnings: string[], message: string) => {
     setFormValues((prev) => ({ ...prev, ...values }))
+    const generatedDocuments = Object.values(values).flatMap(documentRefs)
+    if (generatedDocuments.length) {
+      setDocs((previous) => [
+        ...previous,
+        ...generatedDocuments.filter((document) => !previous.some((item) => item.id === document.id))
+          .map((document) => ({ ...document, kind: 'Expert 生成文档' })),
+      ])
+    }
     setAiFilledKeys(Object.keys(values))
     if (warnings.length) toast.warning(`部分字段未生成：${warnings.join('；')}`)
     else toast.success(message)
   }
 
+  /* 采纳 Expert 产出：直接回填 Run 的原始结构化结果，避免二次模型改写内容或 Markdown 格式。 */
   const adoptRun = async (runId: string) => {
     if (!activeTaskId) return
     setAdoptBusy(runId)
@@ -355,6 +391,8 @@ export function NodeProcessPage() {
       toast.error(e instanceof ApiError ? e.message : '采纳失败')
     } finally { setAdoptBusy(null) }
   }
+  /* 轮询 effect 定义在 adoptRun 之前：经 ref 持有最新填充函数（Run 成功瞬间自动回填） */
+  adoptRunRef.current = adoptRun
 
   /* Expert Run 重新执行：展开上下文输入面板的 Run id（同时只开一个）+ 输入草稿 */
   const [rerunFor, setRerunFor] = useState<string | null>(null)
@@ -418,6 +456,7 @@ export function NodeProcessPage() {
     try {
       const d = await api.post<{ children: { id: string }[] }>(`/api/v1/tasks/${activeTaskId}/split`, {
         children: rows.map((r) => ({ title: r.title.trim(), note: r.note, assignee: r.assignee.trim() })),
+        form_values: formValues,
       })
       toast.success(`已拆分为 ${d.children.length} 个子任务，均在下一节点独立流转`)
       setSplitOpen(false)
@@ -472,13 +511,13 @@ export function NodeProcessPage() {
               reason: submitBusy ? '正在提交（节点绑定了 Expert 时需等待生成完成）' : undefined,
               onClick: submitTask,
             },
-        { label: '退回', icon: <Undo2 className="h-4 w-4" />, tone: 'danger' as const, onClick: () => openDialog('return') },
+        { label: '退回', icon: <Undo2 className="h-4 w-4" />, tone: 'danger' as const, disabled: !fallbackTargets.length, reason: fallbackTargets.length ? undefined : '当前节点未配置回退路径', onClick: openReturn },
         { label: '转办', icon: <ArrowRight className="h-4 w-4" />, onClick: () => openDialog('transfer') },
         { label: '暂停流程', icon: <PauseCircle className="h-4 w-4" />, disabled: true, reason: '仅项目管理员可暂停', onClick: () => {} },
       ]
 
   return (
-    <div className="page-container">
+    <div className="page-container max-w-[1600px]">
       <button className="mb-4 flex items-center gap-1.5 text-[13px] font-medium text-slate-500 transition-colors hover:text-blue-600" onClick={() => (wi ? openWorkItem(wi.id) : navigate('tasks'))}>
         <ArrowLeft className="h-4 w-4" />{wi ? '返回工作项' : '返回任务'}
       </button>
@@ -520,7 +559,6 @@ export function NodeProcessPage() {
             <b className="text-slate-800 dark:text-slate-100">
               {candidates.length ? candidates.map((c) => c.name).join('、') : '未绑定（需手动指定）'}
             </b>
-            {candidates.length > 0 && <span className="ml-1 text-slate-400">（后端绑定解析）</span>}
           </span>
           <span className="text-slate-400">可绑定多个用户或角色；角色解析为所在在职用户（PRD §4.5）</span>
         </div>
@@ -594,7 +632,7 @@ export function NodeProcessPage() {
           {(canSplit || subtasks.length > 0 || task?.parentTaskId) && curNodeType !== 'start' && (
             /* 子任务拆分区 */
             <SectionCard
-              title="子任务"
+              title={subtasks.length > 0 ? `已拆分 · ${subtasks.length} 个子任务（${subtasks.filter((item) => item.status === 'completed').length}/${subtasks.length} 已完成）` : '子任务'}
               extra={
                 canSplit ? (
                   <button
@@ -607,6 +645,9 @@ export function NodeProcessPage() {
               bodyClassName="p-4">
               {subtasks.length > 0 ? (
                 <div className="space-y-1.5">
+                  <div className="rounded-lg bg-violet-50 px-3 py-2 text-[11.5px] text-violet-700 dark:bg-violet-500/10 dark:text-violet-300">
+                    父任务已拆分，不再需要人工处理；子任务完成 {subtasks.filter((item) => item.status === 'completed').length}/{subtasks.length}。
+                  </div>
                   {subtasks.map((s) => (
                     <div key={s.id} className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-[12px] dark:border-slate-700">
                       <button className="min-w-0 flex-1 truncate text-left font-medium text-blue-600 hover:underline" onClick={() => openTask(s.id, task?.wiId)}>
@@ -633,23 +674,15 @@ export function NodeProcessPage() {
           )}
 
           {curNodeType === 'start' ? (
-            /* 起始节点：表单已在发起时提交，只读回显，不重复要求填写 */
-            <SectionCard title={`${task?.node ?? '起始节点'} 表单`} extra={<Badge tone="suc">发起时已提交</Badge>}>
+            /* 回退到起始节点时允许按创建时的同一份 schema 修改后重提。 */
+            <SectionCard title={`${task?.node ?? '起始节点'} 表单`} extra={<Badge tone={task?.status === 'returned' ? 'warn' : 'suc'}>{task?.status === 'returned' ? '退回后待修改' : '发起时已提交'}</Badge>}>
               <div className="rounded-lg border border-emerald-200 bg-emerald-50/60 p-3.5 text-[12px] leading-relaxed text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300">
-                起始表单已在<b>新建工作项</b>时提交，无需重复填写；确认无误后可直接「提交」流转到下一节点。
+                {task?.status === 'returned'
+                  ? '该需求已退回至起始节点。请修改后重新提交，字段与新建工作项时保持一致。'
+                  : <>起始表单已在<b>新建工作项</b>时提交，无需重复填写；确认无误后可直接「提交」流转到下一节点。</>}
               </div>
-              <div className="mt-3 space-y-2">
-                {Object.entries(startValues).filter(([, v]) => v).map(([k, v]) => (
-                  <div key={k} className="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
-                    <div className="text-[12px] font-medium text-slate-600 dark:text-slate-300">{k}</div>
-                    <div className="mt-1 break-all text-[12.5px] leading-relaxed text-slate-500 dark:text-slate-400"><ReadOnlyValue schema={curSchema} k={k} v={v} /></div>
-                  </div>
-                ))}
-                {Object.keys(startValues).length === 0 && (
-                  <div className="rounded-lg border border-dashed border-slate-200 p-3.5 text-center text-[12px] text-slate-400 dark:border-slate-700">
-                    无起始表单数据
-                  </div>
-                )}
+              <div className="mt-3">
+                <SchemaForm fields={startSchema} values={startValues} onChange={setStartValues} workItemId={task?.wiId} project={task?.project} onPreviewDocument={openDocumentPreview} />
               </div>
             </SectionCard>
           ) : (
@@ -663,7 +696,7 @@ export function NodeProcessPage() {
                 {canExpert && latestRun?.status === 'succeeded' && (
                   <button className="inline-flex items-center gap-1 rounded-lg bg-violet-600 px-2.5 py-1 text-[11.5px] font-medium text-white transition-colors hover:bg-violet-700 disabled:opacity-50"
                     disabled={adoptBusy === latestRun.id} onClick={() => void adoptRun(latestRun.id)}>
-                    <Bot className="h-3.5 w-3.5" />{adoptBusy === latestRun.id ? '采纳中…' : '采纳 Expert 结果'}
+                    <Bot className="h-3.5 w-3.5" />{adoptBusy === latestRun.id ? '采纳中…' : '采纳'}
                   </button>
                 )}
                 {canExpert && (!latestRun || latestRun.status === 'failed') && (
@@ -688,7 +721,7 @@ export function NodeProcessPage() {
                   <Bot className="h-3.5 w-3.5 flex-none" />Expert 已填充 {aiFilledKeys.length} 个字段（含生成的文档），请逐项审核修改后提交。
                 </div>
               )}
-              <SchemaForm fields={curSchema} values={formValues} onChange={setFormValues} workItemId={task?.wiId} project={task?.project} />
+              <SchemaForm fields={curSchema} values={formValues} onChange={setFormValues} workItemId={task?.wiId} project={task?.project} onPreviewDocument={openDocumentPreview} />
               {curSchema.length === 0 && (
                 <div className="rounded-lg border border-dashed border-slate-200 p-3.5 text-center text-[12px] text-slate-400 dark:border-slate-700">
                   该节点未配置表单字段
@@ -724,11 +757,11 @@ export function NodeProcessPage() {
                           <Badge tone="gry">已执行</Badge>
                         </button>
                         {open && (
-                          <div className="space-y-1 border-t border-slate-100 px-3 py-2.5 dark:border-slate-800">
+                          <div className="space-y-1.5 border-t border-slate-100 px-3 py-2.5 dark:border-slate-800">
                             {Object.entries(seg.values ?? {}).filter(([, v]) => v !== undefined && v !== null && v !== '').map(([k, v]) => (
-                              <div key={k} className="flex gap-2 text-[12px] leading-relaxed">
-                                <span className="w-24 flex-none text-slate-400">{fieldLabel(seg.schema, k)}</span>
-                                <span className="min-w-0 break-all text-slate-600 dark:text-slate-300"><ReadOnlyValue schema={seg.schema} k={k} v={v} /></span>
+                              <div key={k} className="min-w-0 rounded-md bg-slate-50/70 px-2.5 py-2 dark:bg-slate-800/40">
+                                <div className="mb-1 text-[11.5px] font-medium text-slate-400">{fieldLabel(seg.schema, k)}</div>
+                                <div className="min-w-0 max-w-full break-words text-[12px] leading-relaxed text-slate-600 dark:text-slate-300"><CollapsibleReadOnlyValue schema={seg.schema} k={k} v={v} /></div>
                               </div>
                             ))}
                             {/* 追加记录：原处理人补充的信息，独立留痕 */}
@@ -737,11 +770,11 @@ export function NodeProcessPage() {
                                 <div className="flex items-center gap-1.5 text-[11px] font-semibold text-blue-600 dark:text-blue-300">
                                   <Plus className="h-3 w-3" />补充 · {ap.appender} · {ap.time}
                                 </div>
-                                <div className="mt-1 space-y-0.5">
+                                <div className="mt-1.5 space-y-1">
                                   {Object.entries(ap.values ?? {}).filter(([, v]) => v !== undefined && v !== null && v !== '').map(([k, v]) => (
-                                    <div key={k} className="flex gap-2 text-[11.5px] leading-relaxed">
-                                      <span className="w-24 flex-none text-slate-400">{fieldLabel(seg.schema, k)}</span>
-                                      <span className="min-w-0 break-all text-slate-600 dark:text-slate-300"><ReadOnlyValue schema={seg.schema} k={k} v={v} /></span>
+                                    <div key={k} className="min-w-0 rounded-md bg-white/60 px-2 py-1.5 dark:bg-slate-900/30">
+                                      <div className="mb-1 text-[11px] font-medium text-slate-400">{fieldLabel(seg.schema, k)}</div>
+                                      <div className="min-w-0 max-w-full break-words text-[11.5px] leading-relaxed text-slate-600 dark:text-slate-300"><CollapsibleReadOnlyValue schema={seg.schema} k={k} v={v} /></div>
                                     </div>
                                   ))}
                                 </div>
@@ -769,46 +802,52 @@ export function NodeProcessPage() {
             </SectionCard>
           )}
 
-          {/* Expert Run 结果 */}
-          <SectionCard title="Expert Run 结果" extra={<button className="text-xs font-medium text-blue-600 hover:underline" onClick={() => openDialog('expertApproval')}>审批队列</button>}>
+          {/* Expert 产出卡：产出/字段预览/重执行/采纳直接在中栏完成（无抽屉） */}
+          <SectionCard
+            title="Expert 产出"
+            extra={
+              <div className="flex items-center gap-2">
+                {latestRun && <Badge tone={latestRun.status === 'succeeded' ? 'suc' : latestRun.status === 'failed' ? 'err' : latestRun.status === 'interrupted' ? 'orgx' : 'info'}>{latestRun.status}</Badge>}
+                <button className="text-xs font-medium text-blue-600 hover:underline" onClick={() => openDialog('expertApproval')}>审批队列</button>
+              </div>
+            }>
             <div className="space-y-3">
-              {expertRuns.length === 0 && (
+              {!latestRun && (
                 <div className="rounded-lg border border-dashed border-slate-200 p-3.5 text-center text-[12px] text-slate-400 dark:border-slate-700">
-                  暂无 Expert Run 产出（为节点绑定 Expert Deployment 后，到达节点将创建可追溯 Run 并可 AI 填充表单）
+                  尚未执行 Expert（任务到达将自动生成产出，也可点上方「Expert 协助填充」发起）
                 </div>
               )}
-              {expertRuns.map((s) => (
-                <div key={s.id} className={cn('min-w-0 overflow-hidden rounded-lg border p-3.5', s.status === 'failed' ? 'border-red-100 bg-red-50/50 dark:border-red-500/20 dark:bg-red-500/5' : 'border-violet-100 bg-violet-50/50 dark:border-violet-500/20 dark:bg-violet-500/5')}>
-                  <div className="flex items-center justify-between gap-2">
+              {latestRun && (
+                <div className="min-w-0 rounded-lg border border-violet-100 bg-violet-50/40 p-3.5 dark:border-violet-500/20 dark:bg-violet-500/5">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
                     <span className="flex items-center gap-1.5 text-[12.5px] font-semibold text-violet-700 dark:text-violet-300">
-                      <Bot className="h-4 w-4" />{s.id}
+                      <Bot className="h-4 w-4" />{latestRun.id}
                     </span>
                     <span className="flex flex-none items-center gap-2">
-                      <Badge tone={s.status === 'succeeded' ? 'suc' : s.status === 'failed' ? 'err' : s.status === 'interrupted' ? 'orgx' : 'info'}>{s.status}</Badge>
-                      {canExpert && s.status === 'succeeded' && (
-                        <button className="rounded-md border border-violet-300 px-2 py-0.5 text-[11px] font-medium text-violet-600 transition-colors hover:bg-violet-100 disabled:opacity-50 dark:border-violet-500/40 dark:text-violet-300 dark:hover:bg-violet-500/10"
-                          disabled={adoptBusy === s.id} onClick={() => void adoptRun(s.id)}>
-                          {adoptBusy === s.id ? '采纳中…' : '采纳'}
+                      {canExpert && latestRun.status === 'succeeded' && (
+                        <button className="rounded-md bg-violet-600 px-2.5 py-1 text-[11px] font-medium text-white transition-colors hover:bg-violet-700 disabled:opacity-50"
+                          disabled={adoptBusy === latestRun.id} onClick={() => void adoptRun(latestRun.id)}>
+                          {adoptBusy === latestRun.id ? '采纳中…' : '采纳'}
                         </button>
                       )}
-                      {/* 重新执行：失败态为主按钮（最高频场景），其余为次按钮；running 中禁用 */}
-                      {canExpertRerun && s.status !== 'running' && (
+                      {canExpertRerun && latestRun.status !== 'running' && (
                         <button className={cn('inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium transition-colors disabled:opacity-50',
-                          s.status === 'failed'
+                          latestRun.status === 'failed'
                             ? 'bg-violet-600 text-white hover:bg-violet-700'
                             : 'border border-violet-300 text-violet-600 hover:bg-violet-100 dark:border-violet-500/40 dark:text-violet-300 dark:hover:bg-violet-500/10')}
-                          disabled={rerunBusy || expertRuns.some((r) => r.status === 'running')}
-                          onClick={() => openRerun(s.id)}>
+                          disabled={rerunBusy || expertRuns.some((r) => r.status === 'running') || adoptBusy !== null}
+                          onClick={() => openRerun(latestRun.id)}>
                           <Undo2 className="h-3 w-3" />重新执行
                         </button>
                       )}
-                      {canExpert && s.status === 'running' && (
-                        <span className="text-[11px] text-violet-400">生成中…</span>
+                      {latestRun.status === 'running' && <span className="text-[11px] text-violet-400">生成中…（完成后自动填充表单）</span>}
+                      {latestRun.status === 'interrupted' && (
+                        <button className="rounded-md border border-amber-300 px-2 py-0.5 text-[11px] font-medium text-amber-600 dark:border-amber-500/40 dark:text-amber-300" onClick={() => openDialog('expertApproval')}>去审批</button>
                       )}
                     </span>
                   </div>
-                  {/* 重新执行上下文面板：在 Run 卡片内展开（旧输出保持可见，可边看边写纠偏要求；提交后覆盖该 Run） */}
-                  {rerunFor === s.id && (
+                  {/* 重新执行上下文面板：在产出卡内展开（提交后覆盖该 Run，完成自动回填表单） */}
+                  {rerunFor === latestRun.id && (
                     <div className="mt-2.5 rounded-lg border border-violet-200 bg-white p-2.5 dark:border-violet-500/30 dark:bg-slate-900">
                       <div className="mb-1.5 text-[12px] font-semibold text-slate-700 dark:text-slate-200">补充执行上下文 <span className="font-normal text-slate-400">可选 · 留空则按任务书原样重新生成</span></div>
                       <textarea
@@ -836,28 +875,76 @@ export function NodeProcessPage() {
                       </div>
                     </div>
                   )}
-                  {/* 输出展示：有解析快照 → 字段预览（人审核友好）；否则原文渲染；原始输出折叠 */}
-                  <RunOutputPreview run={s} schema={curSchema} />
+                  {/* 字段产出预览：按 schema 渲染（采纳后进表单继续编辑）；无 schema 时展示原始全文 */}
+                  {latestRun.status === 'failed' ? (
+                    <p className="mt-2 whitespace-pre-wrap break-words text-[12.5px] leading-relaxed text-red-500">{latestRun.error || '（无错误信息）'}</p>
+                  ) : curSchema.length > 0 && latestRun.parsed?.values ? (
+                    <div className="mt-2.5 space-y-1.5">
+                      {curSchema.map((f) => {
+                        const v = latestRun.parsed?.values?.[f.key]
+                        const empty = v === undefined || v === null || v === '' || (Array.isArray(v) && v.length === 0)
+                        return (
+                          <div key={f.key} className="min-w-0 rounded-md bg-white/70 px-2.5 py-2 dark:bg-slate-900/50">
+                            <div className="mb-1 text-[11.5px] font-medium text-slate-400">{f.label}</div>
+                            <div className="min-w-0 max-w-full break-words text-[12px] leading-relaxed text-slate-600 dark:text-slate-300">
+                              {empty ? <span className="text-slate-300 dark:text-slate-600">未生成</span>
+                                : (f.type === 'upload' || f.type === 'file')
+                                  ? documentRefs(v).length > 0
+                                    ? <span className="flex flex-wrap gap-1.5">{documentRefs(v).map((document) => <button key={document.id} type="button" onClick={() => openDocumentPreview(document)} className="rounded bg-violet-100 px-1.5 py-0.5 text-violet-700 hover:bg-violet-200 hover:underline dark:bg-violet-500/20 dark:text-violet-300">{document.name}</button>)}</span>
+                                    : <span className="text-violet-600 dark:text-violet-300">（采纳后生成文档）</span>
+                                  : <CollapsibleReadOnlyValue schema={curSchema} k={f.key} v={v} />}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  ) : latestRun.output ? (
+                    <details className="mt-2 min-w-0 max-w-full rounded-md border border-slate-200 bg-white/60 px-2.5 py-2 dark:border-slate-700 dark:bg-slate-900/40">
+                      <summary className="cursor-pointer text-[11px] font-medium text-slate-500 dark:text-slate-400">展开查看 Expert 原始输出</summary>
+                      <div className="mt-2 h-80 min-h-48 max-h-[70vh] resize-y overflow-auto rounded-md pr-1 [&_.aui-markdown_table]:max-w-full" title="可拖动右下角调整内容高度">
+                        <MarkdownView text={latestRun.output} className="min-w-0 max-w-full break-words text-[12.5px] leading-relaxed" />
+                      </div>
+                    </details>
+                  ) : null}
+                  {!!latestRun.parsed?.warnings?.length && (
+                    <div className="mt-1.5 space-y-0.5">
+                      {latestRun.parsed.warnings.map((w, i) => <p key={i} className="text-[11.5px] text-amber-600 dark:text-amber-300">⚠ {w}</p>)}
+                    </div>
+                  )}
                   <div className="mt-1.5 text-[11px] text-slate-400">
-                    {s.startedAt}
-                    {!!s.context?.length && (
-                      <span className="ml-1.5 inline-flex items-center rounded-full bg-violet-100 px-1.5 py-px text-[10.5px] font-semibold text-violet-700 dark:bg-violet-500/20 dark:text-violet-300" title={s.context}>
-                        上下文 {s.context.length} 字
+                    {latestRun.startedAt}
+                    {!!latestRun.context?.length && (
+                      <span className="ml-1.5 inline-flex items-center rounded-full bg-violet-100 px-1.5 py-px text-[10.5px] font-semibold text-violet-700 dark:bg-violet-500/20 dark:text-violet-300" title={latestRun.context}>
+                        上下文 {latestRun.context.length} 字
                       </span>
                     )}
-                    · 采纳后产出解析为表单值，人工审核后提交
+                    · 采纳后保留 Expert 的原始字段内容并直接写入表单，可继续编辑后提交
                   </div>
                 </div>
-              ))}
+              )}
+              {/* 历史 Run：折叠展示 */}
+              {expertRuns.length > 1 && (
+                <details className="rounded-lg border border-slate-200 px-3 py-2 dark:border-slate-700">
+                  <summary className="cursor-pointer text-[11.5px] font-medium text-slate-400">历史执行（{expertRuns.length - 1} 条）</summary>
+                  <div className="mt-2 space-y-1.5">
+                    {expertRuns.slice(1).map((s) => (
+                      <div key={s.id} className="flex items-center gap-2 text-[11.5px] text-slate-400">
+                        <Badge tone={s.status === 'succeeded' ? 'suc' : s.status === 'failed' ? 'err' : 'info'}>{s.status}</Badge>
+                        <span className="font-mono">{s.id}</span>
+                        <span>{s.startedAt}</span>
+                        {!!s.context?.length && <span>· 上下文 {s.context.length} 字</span>}
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              )}
             </div>
             <div className="mt-4 border-t border-slate-100 pt-3 dark:border-slate-800">
               <div className="mb-2 text-[12px] font-semibold text-slate-500 dark:text-slate-400">本节点 Expert Runtime 策略</div>
               <div className="flex flex-wrap gap-1.5">
-                {expertCaps.slice(0, 8).map((c) => (
-                  <span key={c.name} className={cn('cap-tag', c.mode === 'direct' ? 'cap-direct' : c.mode === 'confirm' ? 'cap-confirm' : 'cap-forbid')}>
-                    {c.name} · {c.mode === 'direct' ? 'direct' : c.mode === 'confirm' ? '需确认' : '禁止'}
-                  </span>
-                ))}
+                <span className="cap-tag cap-direct">read_* · direct</span>
+                <span className="cap-tag cap-confirm">generate_content · 需确认</span>
+                <span className="cap-tag cap-confirm">write_form · 需确认</span>
                 <span className="cap-tag cap-forbid">submit_task · 禁止</span>
               </div>
               <p className="mt-2 text-[11px] leading-relaxed text-slate-400">节点配置只能限制 Expert Deployment，不能扩大授权用户权限。</p>
@@ -925,6 +1012,28 @@ export function NodeProcessPage() {
       </div>
 
       <DocumentViewerDrawer open={viewer.open} docs={docs} initialDocId={viewer.initialId} onClose={() => setViewer({ open: false })} />
+
+      {returnOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => { if (!returnBusy) setReturnOpen(false) }}>
+          <div className="w-full max-w-lg rounded-xl border border-slate-200 bg-white p-5 shadow-l dark:border-slate-700 dark:bg-slate-900" onClick={(event) => event.stopPropagation()}>
+            <div className="mb-1 flex items-center justify-between">
+              <b className="flex items-center gap-1.5 text-sm text-slate-800 dark:text-slate-100"><Undo2 className="h-4 w-4 text-red-500" />退回节点</b>
+              <button className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200" disabled={returnBusy} onClick={() => setReturnOpen(false)}>✕</button>
+            </div>
+            <p className="mb-4 text-[11.5px] leading-relaxed text-slate-400">仅展示当前工作项绑定版本的画布中，节点「{task?.node}」已配置的回退路径。</p>
+            <label className="mb-1.5 block text-[12px] font-medium text-slate-600 dark:text-slate-300">回退目标</label>
+            <select className="h-9 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm outline-none focus:border-red-400 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200" value={returnTarget} onChange={(event) => setReturnTarget(event.target.value)}>
+              {fallbackTargets.map((target) => <option key={target.id} value={target.id}>{target.label}</option>)}
+            </select>
+            <label className="mb-1.5 mt-4 block text-[12px] font-medium text-slate-600 dark:text-slate-300">退回原因（可选）</label>
+            <textarea className="min-h-[88px] w-full rounded-lg border border-slate-300 bg-white p-2.5 text-[12.5px] outline-none focus:border-red-400 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200" value={returnReason} onChange={(event) => setReturnReason(event.target.value)} placeholder="说明需修改的内容" />
+            <div className="mt-4 flex justify-end gap-2">
+              <button className="rounded-lg border border-slate-300 px-3.5 py-1.5 text-[12px] font-medium text-slate-600 dark:border-slate-600 dark:text-slate-300" disabled={returnBusy} onClick={() => setReturnOpen(false)}>取消</button>
+              <button className="rounded-lg bg-red-600 px-3.5 py-1.5 text-[12px] font-medium text-white disabled:opacity-50" disabled={returnBusy || !returnTarget} onClick={() => void returnTask()}>{returnBusy ? '退回中…' : '确认退回'}</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 子任务拆分对话框：人工填写或 AI 建议预填，确认后创建并独立流转 */}
       {splitOpen && (
@@ -1001,7 +1110,7 @@ export function NodeProcessPage() {
             <p className="mb-3 text-[11.5px] leading-relaxed text-slate-400">
               按该节点表单字段补充（必填校验与提交一致）；原提交保持不变，追加内容独立留痕，并通知当前节点处理人。
             </p>
-            <SchemaForm fields={appendFor.schema} values={appendValues} onChange={setAppendValues} workItemId={task?.wiId} project={task?.project} />
+            <SchemaForm fields={appendFor.schema} values={appendValues} onChange={setAppendValues} workItemId={task?.wiId} project={task?.project} onPreviewDocument={openDocumentPreview} />
             {appendFor.schema.length === 0 && (
               <div className="rounded-lg border border-dashed border-slate-200 p-3 text-center text-[11.5px] text-slate-400 dark:border-slate-700">
                 该节点未配置补充字段（可在画布节点表单中添加）

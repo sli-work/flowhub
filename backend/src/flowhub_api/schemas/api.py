@@ -1,4 +1,6 @@
 """Pydantic 请求/响应模型（对齐前端字段名）。"""
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -26,6 +28,10 @@ class RegisterReq(BaseModel):
 class ChangePwdReq(BaseModel):
     old_password: str
     new_password: str = Field(min_length=8, max_length=64)
+
+
+class ThemePreferenceReq(BaseModel):
+    theme: Literal["dark", "light"]
 
 
 # ---------- 组织 / 用户 ----------
@@ -108,8 +114,12 @@ class TaskActionReq(BaseModel):
 
 
 class TaskAdoptRunReq(BaseModel):
-    """采纳指定 Expert Run 的产出回填节点表单。"""
+    """采纳指定 Expert Run 的产出回填节点表单。
+    normalize=true 时先做 AI 二次格式修正（失败自动降级原解析）；
+    values 非空时为用户在抽屉中人工修改后的产出，直接覆盖 parsed 快照（跳过 AI 格式修正）。"""
     run_id: str = Field(min_length=1)
+    normalize: bool = False
+    values: dict | None = None
 
 
 class TaskAiFillReq(BaseModel):
@@ -126,6 +136,8 @@ class TaskSplitChild(BaseModel):
 
 class TaskSplitReq(BaseModel):
     children: list[TaskSplitChild] = Field(min_length=1, max_length=10)
+    # 拆分时父任务尚未走 submit 动作，前端须显式带回当前编辑中的表单内容。
+    form_values: dict | None = None
 
 
 # ---------- Expert Runtime ----------
@@ -226,6 +238,9 @@ class ExpertChatSessionRenameReq(BaseModel):
 class ExpertChatMessageReq(BaseModel):
     content: str = Field(min_length=1)
     write_intent: bool = False
+    # 文件是显式副作用：默认只在会话中回答，只有用户在界面勾选后才落库为可下载文档。
+    create_file: bool = False
+    quality_mode: Literal["fast", "balanced", "accurate"] = "balanced"
 
 
 # ---------- 代码仓库（连接 / 绑定） ----------

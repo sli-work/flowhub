@@ -72,7 +72,7 @@ function TaskRow({ t }: { t: TaskItem }) {
         </div>
       </div>
       <button
-        onClick={(e) => { e.stopPropagation(); openTask(t.id, t.wiId) }}
+        onClick={(e) => { e.stopPropagation(); openTask(t.id, t.wiId, t.title) }}
         disabled={t.frozen}
         className={cn(
           'flex-none rounded-lg px-3 py-1.5 text-[12px] font-medium shadow-sm transition-colors',

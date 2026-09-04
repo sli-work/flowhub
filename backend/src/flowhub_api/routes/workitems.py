@@ -14,6 +14,7 @@ from flowhub_api.models import DocItem, NotificationItem, TagItem, TaskItem, Use
 from flowhub_api.schemas.api import CreateWorkItemReq
 from flowhub_api.seed.init import gen_id
 from flowhub_api.services.audit import AuditService
+from flowhub_api.services.task_lineage import historical_split_parent_ids_for_tasks
 from flowhub_api.services.workflow import WorkflowService
 
 router = APIRouter(prefix="/api/v1/work-items", tags=["work-items"])
@@ -79,15 +80,31 @@ async def get_work_item(
     tasks = (await session.execute(
         select(TaskItem).where(TaskItem.wi_id == wi_id).order_by(TaskItem.id)
     )).scalars().all()
+    # 兼容 parent_task_id 尚未落库的历史拆分记录：审计里保存了父任务和 child IDs，
+    # 在流程图响应中即时恢复关系；不按任务创建顺序猜测，避免误连普通串行任务。
+    historical_parents = await historical_split_parent_ids_for_tasks(
+        session, {task.id for task in tasks if not task.parent_task_id},
+    )
+    parent_by_task = {task.id: task.parent_task_id or historical_parents.get(task.id) for task in tasks}
     inst = wi.instance
+    # 老实例的游标可能仍停在已完成的拆分父节点。只在游标恰好指向该父节点时，
+    # 以子任务的实际下一节点作为展示位置；并行子线在这里共享同一拆分起点。
+    display_current_node = inst.current_node if inst is not None else ""
+    if inst is not None:
+        for child in tasks:
+            parent_id = parent_by_task.get(child.id)
+            parent = next((item for item in tasks if item.id == parent_id), None)
+            if parent is not None and parent.node_id == inst.current_node:
+                display_current_node = child.node_id
+                break
     return ok({
         "item": _brief(wi),
         "startValues": wi.start_values or {},
         "instance": None if inst is None else {
             "id": inst.id, "templateId": inst.template_id, "version": inst.version,
-            "currentNode": inst.current_node, "state": inst.state,
+            "currentNode": display_current_node, "state": inst.state,
         },
-        "tasks": [{"id": t.id, "node": t.node, "nodeId": t.node_id, "status": t.status, "assignee": t.assignee, "due": t.due, "expertPending": t.expert_pending, "title": t.title, "parentTaskId": t.parent_task_id, "lineageRootId": t.lineage_root_id} for t in tasks],
+        "tasks": [{"id": t.id, "node": t.node, "nodeId": t.node_id, "status": t.status, "assignee": t.assignee, "due": t.due, "expertPending": t.expert_pending, "title": t.title, "parentTaskId": parent_by_task.get(t.id), "lineageRootId": t.lineage_root_id} for t in tasks],
     })
 
 

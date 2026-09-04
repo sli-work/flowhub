@@ -11,7 +11,7 @@ from flowhub_api.core.config import get_settings
 from flowhub_api.core.response import BizCode, BizError, ok
 from flowhub_api.db.session import get_db
 from flowhub_api.models import NotificationItem, User
-from flowhub_api.schemas.api import ChangePwdReq, LoginReq, RegisterReq, SsoVerifyReq
+from flowhub_api.schemas.api import ChangePwdReq, LoginReq, RegisterReq, SsoVerifyReq, ThemePreferenceReq
 from flowhub_api.seed.init import gen_id
 from flowhub_api.services.audit import AuditService
 from flowhub_api.services.auth import AuthService
@@ -25,6 +25,7 @@ def _user_brief(user: User) -> dict:
         "dept": user.dept, "status": user.status,
         "roles": [r.id for r in user.roles],
         "skills": user.skills,
+        "theme": user.theme or "dark",
         # 首次登录强制改密标记（前端据此决定是否弹改密框）
         "mustChangePassword": bool(user.must_change_password),
     }
@@ -168,3 +169,18 @@ async def change_password(
 @router.get("/me")
 async def me(user: Annotated[User, Depends(get_current_user)]):
     return ok({"user": _user_brief(user)})
+
+
+@router.patch("/me/preferences")
+async def update_preferences(
+    body: ThemePreferenceReq,
+    user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_db)],
+):
+    user.theme = body.theme
+    await AuditService(session).record(
+        actor=user.name, action="auth:theme_preference", target=user.account,
+        result="success", after={"theme": body.theme},
+    )
+    await session.commit()
+    return ok({"user": _user_brief(user)}, "主题偏好已保存")

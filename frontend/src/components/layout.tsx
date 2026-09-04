@@ -1,14 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
+import { useTheme } from 'next-themes'
 import {
   LayoutGrid, Bell, BarChart3, FolderKanban, Workflow, GitBranch,
   FileText, Bot, Building2, ShieldCheck, ScrollText, LogOut, Search, ListChecks,
   Moon, Sun, Webhook, Sparkles, Boxes, Cable, Database, BrainCircuit, Activity, CircleCheck, Download,
 } from 'lucide-react'
 import { useApp, toast, ROLE_NAV } from '../store/app-store'
-import { api } from '../lib/api'
+import { api, setStoredUser } from '../lib/api'
 import { onNotification, subscribeToNotifications } from '../lib/notification-stream'
 import { Avatar } from './common'
 import { cn } from '../lib/utils'
+import { saveUserTheme, type ColorTheme } from './user-theme-sync'
 import type { PageId } from '../types'
 
 const NAV: { grp: string; items: { id: PageId; label: string; icon: React.ReactNode; badge?: number; dot?: boolean }[] }[] = [
@@ -17,8 +19,8 @@ const NAV: { grp: string; items: { id: PageId; label: string; icon: React.ReactN
     items: [
       { id: 'os-overview', label: 'OS 总览', icon: <Sparkles className="h-[17px] w-[17px]" /> },
       { id: 'aichat', label: 'AiChat', icon: <Bot className="h-[17px] w-[17px]" /> },
-      { id: 'tasks', label: '我的任务', icon: <LayoutGrid className="h-[17px] w-[17px]" />, badge: 6 },
-      { id: 'notif', label: '通知中心', icon: <Bell className="h-[17px] w-[17px]" />, dot: true },
+      { id: 'tasks', label: '我的任务', icon: <LayoutGrid className="h-[17px] w-[17px]" /> },
+      { id: 'notif', label: '通知中心', icon: <Bell className="h-[17px] w-[17px]" /> },
       { id: 'dashboard', label: '领导看板', icon: <BarChart3 className="h-[17px] w-[17px]" /> },
     ],
   },
@@ -54,7 +56,7 @@ const NAV: { grp: string; items: { id: PageId; label: string; icon: React.ReactN
     grp: '运行治理',
     items: [
       { id: 'runtime-center', label: '运行中心', icon: <Activity className="h-[17px] w-[17px]" /> },
-      { id: 'approvals', label: '审批队列', icon: <ShieldCheck className="h-[17px] w-[17px]" />, badge: 2 },
+      { id: 'approvals', label: '审批队列', icon: <ShieldCheck className="h-[17px] w-[17px]" /> },
     ],
   },
   {
@@ -83,9 +85,48 @@ function RoleBadge({ role }: { role: string }) {
 }
 
 export function Sidebar() {
-  const { page, navigate, role, logout, currentUser } = useApp()
+  const { page, navigate, role, logout, currentUser, taskCounter } = useApp()
   const visible = new Set(ROLE_NAV[role])
   const user = currentUser ?? { name: '未登录', account: '-', avatarGrad: undefined as string | undefined }
+  const [menuCounts, setMenuCounts] = useState({ tasks: 0, notifications: 0, approvals: 0 })
+
+  useEffect(() => {
+    if (!currentUser) {
+      setMenuCounts({ tasks: 0, notifications: 0, approvals: 0 })
+      return
+    }
+    let alive = true
+    const refresh = () => {
+      Promise.all([
+        api.get<{ stats: { todo: number } }>('/api/v1/tasks?page=1&page_size=1&status_group=todo'),
+        api.get<{ stats: { unread: number } }>('/api/v1/notifications?page=1&page_size=1'),
+        api.get<{ items: { status: string }[] }>('/api/v1/expert-approvals?status=pending'),
+      ]).then(([tasks, notifications, approvals]) => {
+        if (!alive) return
+        setMenuCounts({
+          tasks: tasks.stats.todo,
+          notifications: notifications.stats.unread,
+          approvals: approvals.items.filter((item) => item.status === 'pending').length,
+        })
+      }).catch(() => {
+        // 保留上次成功值，避免短暂网络波动把导航计数错误清零。
+      })
+    }
+    refresh()
+    const timer = window.setInterval(refresh, 30_000)
+    const unsubscribe = onNotification(refresh)
+    window.addEventListener('focus', refresh)
+    return () => {
+      alive = false
+      window.clearInterval(timer)
+      unsubscribe()
+      window.removeEventListener('focus', refresh)
+    }
+  }, [currentUser?.id, taskCounter])
+
+  const countFor = (id: PageId) => id === 'tasks' ? menuCounts.tasks
+    : id === 'notif' ? menuCounts.notifications
+      : id === 'approvals' ? menuCounts.approvals : 0
 
   return (
     <aside className="fixed inset-y-0 left-0 z-40 flex w-[60px] flex-col bg-sidebar text-sidebar-foreground md:w-[224px]">
@@ -120,11 +161,9 @@ export function Sidebar() {
                 >
                   <span className={cn(page === i.id ? 'text-blue-400' : 'text-slate-400')}>{i.icon}</span>
                   <span className="hidden flex-1 md:block">{i.label}</span>
-                  {i.badge ? (
-                    <span className="rounded-full bg-blue-600 px-1.5 py-0.5 text-[10.5px] font-semibold text-white">{i.badge}</span>
-                  ) : i.dot ? (
-                    <span className="h-2 w-2 rounded-full bg-amber-400" />
-                  ) : null}
+                  {countFor(i.id) > 0 && (
+                    <span className="rounded-full bg-blue-600 px-1.5 py-0.5 text-[10.5px] font-semibold text-white">{countFor(i.id) > 99 ? '99+' : countFor(i.id)}</span>
+                  )}
                 </button>
               ))}
             </div>
@@ -146,9 +185,10 @@ export function Sidebar() {
 }
 
 export function Topbar() {
-  const { page, logout, navigate, openDialog, openTask, openWorkItem, currentUser, orgUsers } = useApp()
-  const [dark, setDark] = useState(false)
+  const { page, logout, navigate, openDialog, openTask, openWorkItem, currentUser, orgUsers, activeTaskTitle } = useApp()
+  const { resolvedTheme, setTheme } = useTheme()
   const [notifOpen, setNotifOpen] = useState(false)
+  const [themeOpen, setThemeOpen] = useState(false)
   const [userOpen, setUserOpen] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchResults, setSearchResults] = useState<{ type: string; title: string; desc: string; to: string }[]>([])
@@ -186,7 +226,7 @@ export function Topbar() {
     canvas: ['流程画布 · 需求流程 v3', '流程管理 / 流程画布'],
     workitem: ['工作项详情', '流程管理 / 工作项详情'],
     workitems: ['工作项', '流程管理 / 工作项'],
-    node: ['节点处理 · 测试', '流程管理 / 节点处理'],
+    node: ['节点处理', '流程管理 / 节点处理'],
     docs: ['文档中心', '知识库 / 文档中心'],
 
     'os-overview': ['Expert OS 总览', '工作台 / Expert OS 总览'],
@@ -206,11 +246,17 @@ export function Topbar() {
     matrix: ['权限矩阵', '系统管理 / 权限矩阵'],
     audit: ['审计中心', '系统管理 / 审计中心'],
   }
-  const [title, crumb] = titles[page]
+  const [staticTitle, crumb] = titles[page]
+  // 节点处理页顶栏显示真实任务标题（openTask 时携带，处理页数据就绪后由详情兜底）
+  const title = page === 'node' && activeTaskTitle ? `${staticTitle} · ${activeTaskTitle}` : staticTitle
 
-  const toggleTheme = () => {
-    setDark(!dark)
-    document.documentElement.classList.toggle('dark', !dark)
+  const chooseTheme = (theme: ColorTheme) => {
+    saveUserTheme(currentUser, theme)
+    setTheme(theme)
+    setThemeOpen(false)
+    api.patch<{ user: typeof currentUser }>('/api/v1/auth/me/preferences', { theme })
+      .then(({ user }) => { if (user) setStoredUser(user) })
+      .catch(() => toast.error('主题已在当前设备切换，但保存到账号失败'))
   }
 
   /* 当前用户完整资料：login brief 优先，orgUsers 补充头像渐变（后端 /org/users 权威） */
@@ -315,9 +361,29 @@ export function Topbar() {
             ))}
           </div>
         )}
-        <button className="flex h-9 w-9 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800" onClick={toggleTheme} title="切换深浅主题">
-          {dark ? <Sun className="h-[17px] w-[17px]" /> : <Moon className="h-[17px] w-[17px]" />}
-        </button>
+        <div className="relative">
+          <button className="flex h-9 w-9 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800" onClick={() => setThemeOpen((open) => !open)} title="主题配置" aria-label="主题配置" aria-expanded={themeOpen}>
+            {resolvedTheme === 'dark' ? <Moon className="h-[17px] w-[17px]" /> : <Sun className="h-[17px] w-[17px]" />}
+          </button>
+          {themeOpen && (
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setThemeOpen(false)} />
+              <div className="absolute right-0 top-11 z-50 w-52 overflow-hidden rounded-xl border border-slate-200 bg-white p-2 shadow-l dark:border-slate-700 dark:bg-slate-900">
+                <p className="px-2 py-1.5 text-[11px] font-medium text-slate-400">主题配置</p>
+                {([
+                  ['dark', '暗色主题', Moon],
+                  ['light', '亮色主题', Sun],
+                ] as const).map(([theme, label, Icon]) => (
+                  <button key={theme} onClick={() => chooseTheme(theme)} className={cn('flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[12.5px] transition-colors', resolvedTheme === theme ? 'bg-blue-50 text-blue-700 dark:bg-blue-500/15 dark:text-blue-300' : 'text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800')}>
+                    <Icon className="h-4 w-4" />
+                    <span className="flex-1">{label}</span>
+                    {resolvedTheme === theme && <span className="text-[10.5px]">当前</span>}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
         <button className="flex h-9 w-9 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800" onClick={logout} title="退出登录">
           <LogOut className="h-[17px] w-[17px]" />
         </button>

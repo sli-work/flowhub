@@ -24,6 +24,7 @@ class User(Base):
     wecom: Mapped[str | None] = mapped_column(String(64), nullable=True)
     load: Mapped[int] = mapped_column(default=0)
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=False)
+    theme: Mapped[str] = mapped_column(String(8), default="dark")
 
     roles: Mapped[list["Role"]] = relationship(
         secondary="user_roles", back_populates="members", lazy="selectin"

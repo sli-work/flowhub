@@ -10,7 +10,7 @@ import type { FileMessagePartProps, TextMessagePartProps } from "@assistant-ui/r
 import { MarkdownTextPrimitive } from "@assistant-ui/react-markdown";
 import remarkGfm from "remark-gfm";
 import {
-  ArrowDown, Bot, Check, ChevronRight, Copy, Cpu, Eraser, FolderGit2, LoaderCircle,
+  ArrowDown, Bot, Check, ChevronRight, Copy, Cpu, Eraser, FileText, FolderGit2, LoaderCircle,
   Pencil, Plus, RotateCcw, Search, Send, Square, Trash2, Wrench,
 } from "lucide-react";
 import { api, getToken } from "../lib/api";
@@ -45,7 +45,7 @@ interface OutputFile {
   downloadUrl: string;
 }
 interface TraceItem {
-  kind?: "skill" | "mcp" | "tool" | "approval" | "model";
+  kind?: "skill" | "mcp" | "tool" | "approval" | "model" | "quality";
   tool: string;
   status: string;
   summary: string | Record<string, unknown>;
@@ -63,6 +63,11 @@ interface PersistedMessage {
 }
 
 const WELCOME_SUGGESTIONS = ["查询我的待办任务", "项目进度概览", "最近的问题单有哪些？"];
+
+function traceActivityLabel(item: TraceItem) {
+  if (item.kind === "quality") return "正在进行回答质量校验与修订";
+  return `正在执行：${item.tool}…`;
+}
 
 export function AiChatPage() {
   const { state } = useExpertOs();
@@ -82,6 +87,8 @@ export function AiChatPage() {
   const [messagesVersion, setMessagesVersion] = useState(0);
   const [lastCompacted, setLastCompacted] = useState(false);
   const [stopped, setStopped] = useState(false);
+  const [createFile, setCreateFile] = useState(false);
+  const [qualityMode, setQualityMode] = useState<"fast" | "balanced" | "accurate">("balanced");
   const [executingTrace, setExecutingTrace] = useState<TraceItem[]>([]);
   /** 右侧产出文件栏宽度（可向左拖动加宽，200~560px） */
   const [filesPanelWidth, setFilesPanelWidth] = useState(260);
@@ -168,6 +175,8 @@ export function AiChatPage() {
               body: JSON.stringify({
                 content,
                 write_intent: /提交|创建|写入|删除|发布/.test(content),
+                create_file: createFile,
+                quality_mode: qualityMode,
               }),
               signal: abort.signal,
             },
@@ -633,7 +642,7 @@ export function AiChatPage() {
   const subtitle = activeSession?.expertVersionId && !activeSession.deploymentId
     ? `${expertName} · 版本测试会话（发布前对话测试）`
     : (expertName ||
-      (providerModelId ? "FlowHub 默认能力 + 已选模型" : "FlowHub 默认能力：任务、工作项、流程状态查询"));
+      (providerModelId ? "FlowHub 默认能力 + 已选模型 · 质量校验最多 3 版" : "FlowHub 默认能力：任务、工作项、流程状态查询"));
 
   return (
     <DocPreviewContext.Provider value={{ openPreview }}>
@@ -785,7 +794,7 @@ export function AiChatPage() {
                     <LoaderCircle className="h-3.5 w-3.5 animate-spin text-blue-500" />
                     <span>
                       {executingTrace.length
-                        ? `正在执行：${executingTrace[executingTrace.length - 1].tool}…`
+                        ? traceActivityLabel(executingTrace[executingTrace.length - 1])
                         : "正在思考…"}
                     </span>
                   </div>
@@ -814,7 +823,7 @@ export function AiChatPage() {
                           ? "消息将创建真实 Expert LangGraph Run，并使用所选模型。"
                           : "消息将创建真实 Expert LangGraph Run。"
                         : providerModelId
-                          ? "默认能力会携带只读业务上下文交给所选模型推理。"
+                          ? "默认能力会携带只读业务上下文交给所选模型推理，并最多经过 3 版质量校验与修订。"
                           : "可查询项目、任务、问题和流程状态；也可在右上角选择模型进行推理。"}
                     </p>
                     {sessionId && (
@@ -877,15 +886,32 @@ export function AiChatPage() {
                         <Square className="h-3 w-3 fill-current" />
                         停止
                       </button>
-                    ) : (
+                    ) : (<div className="flex items-center gap-2">
+                      <select
+                        value={qualityMode}
+                        onChange={(event) => setQualityMode(event.target.value as "fast" | "balanced" | "accurate")}
+                        title="快速：单次回答；平衡：证据核验并最多修订一次；准确：证据核验并最多修订两次"
+                        className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-[11px] text-slate-600 outline-none hover:border-blue-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300"
+                      >
+                        <option value="fast">快速</option>
+                        <option value="balanced">平衡</option>
+                        <option value="accurate">准确</option>
+                      </select>
+                      <button
+                        type="button"
+                        onClick={() => setCreateFile((value) => !value)}
+                        title="关闭时仅在会话中回答；开启后将本轮回答保存为可下载文件"
+                        className={cn('flex h-8 items-center gap-1 rounded-lg border px-2 text-[11px] font-medium transition-colors', createFile ? 'border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-500/15 dark:text-blue-300' : 'border-slate-200 text-slate-500 hover:border-blue-300 dark:border-slate-700 dark:text-slate-400')}
+                      >
+                        <FileText className="h-3.5 w-3.5" />生成文件
+                      </button>
                       <ComposerPrimitive.Send
                         disabled={!sessionId}
                         className="flex h-8 items-center gap-1.5 rounded-lg bg-blue-600 px-3.5 text-xs font-medium text-white transition-colors hover:bg-blue-700 disabled:opacity-40"
                       >
-                        <Send className="h-3.5 w-3.5" />
-                        发送
+                        <Send className="h-3.5 w-3.5" />发送
                       </ComposerPrimitive.Send>
-                    )}
+                    </div>)}
                   </div>
                 </ComposerPrimitive.Root>
               </div>
@@ -1110,7 +1136,7 @@ function AssistantMessage() {
   );
 }
 
-/** 最近一次运行的工具/Skill 过程：默认折叠一行，可展开明细；附「重新生成」 */
+/** 最近一次运行的工具/质量校验过程：默认折叠一行，可展开明细；附「重新生成」 */
 function TracePanel({ trace, onRegenerate }: { trace: TraceItem[]; onRegenerate: () => void }) {
   const [open, setOpen] = useState(false);
   const running = trace.some((item) => item.status === "running");
@@ -1126,8 +1152,8 @@ function TracePanel({ trace, onRegenerate }: { trace: TraceItem[]; onRegenerate:
             onClick={() => setOpen((v) => !v)}
           >
             {running
-              ? <><LoaderCircle className="h-3 w-3 animate-spin text-amber-500" />正在执行工具/Skill…</>
-              : <>已执行 {trace.length} 次工具/Skill</>}
+              ? <><LoaderCircle className="h-3 w-3 animate-spin text-amber-500" />正在执行工具或质量校验…</>
+              : <>已完成 {trace.length} 个执行步骤</>}
             <ChevronRight className={cn("h-3 w-3 transition-transform", open && "rotate-90")} />
           </button>
           <button
@@ -1145,7 +1171,7 @@ function TracePanel({ trace, onRegenerate }: { trace: TraceItem[]; onRegenerate:
                 <span
                   className={cn(
                     "mt-1.5 h-1.5 w-1.5 flex-none rounded-full",
-                    item.status === "failed" ? "bg-red-400" : item.status === "running" ? "bg-amber-400" : "bg-emerald-400",
+                    item.status === "failed" ? "bg-red-400" : item.status === "running" || item.status === "needs_revision" ? "bg-amber-400" : "bg-emerald-400",
                   )}
                 />
                 <span className="font-medium text-slate-600 dark:text-slate-300">{item.tool}</span>

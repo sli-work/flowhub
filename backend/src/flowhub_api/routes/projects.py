@@ -10,7 +10,7 @@ from flowhub_api.authz.authorizer import build_authorizer, get_current_user
 from flowhub_api.core.response import BizError, BizCode, ok
 from flowhub_api.db.session import get_db
 from flowhub_api.models import (
-    GlobalTemplate, NodeAssignment, Project, ProjectRepoBinding, ProjectTemplateBinding,
+    GlobalTemplate, NodeAssignment, Project, ProjectRepoBinding, ProjectTemplateBinding, TemplateCanvas,
     Repo, RepoConnection, TaskItem, User, WorkItem,
 )
 from flowhub_api.schemas.api import ProjectUpsertReq
@@ -139,14 +139,23 @@ async def _upsert_bindings(session: AsyncSession, project: Project, bindings: li
         tpl = await session.get(GlobalTemplate, b.template_id)
         if tpl is None:
             raise BizError(BizCode.VALIDATION, f"模板不存在：{b.template_id}")
+        if b.version not in (tpl.versions or []):
+            raise BizError(BizCode.VALIDATION, f"模板「{tpl.name}」不存在版本 {b.version}")
+        # 绑定配置必须跟随所选版本的画布节点；模板级 nodes 是可变的最新快照，只给无画布的旧数据兜底。
+        canvas = await session.get(TemplateCanvas, f"{tpl.id}:{b.version}")
+        nodes = canvas.nodes if canvas is not None and canvas.nodes else tpl.nodes
+        node_map = {node.get("id", ""): node for node in nodes}
         binding = ProjectTemplateBinding(
             id=gen_id("b"), project_id=project.id, template_id=b.template_id,
             name=tpl.name, type=tpl.type, version=b.version or tpl.versions[-1],
             status=b.status if b.status in ("active", "disabled") else "active",
         )
         for a in b.assignments:
+            node = node_map.get(a.node_id)
+            if node is None:
+                raise BizError(BizCode.VALIDATION, f"版本 {b.version} 不包含节点「{a.node_label or a.node_id}」")
             binding.assignments.append(NodeAssignment(
-                id=gen_id("na"), node_id=a.node_id, node_label=a.node_label,
+                id=gen_id("na"), node_id=a.node_id, node_label=node.get("label", a.node_label),
                 users=a.users, roles=a.roles,
             ))
         project.template_bindings.append(binding)

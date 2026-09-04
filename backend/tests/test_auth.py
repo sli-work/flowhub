@@ -22,6 +22,7 @@ class TestLogin:
         assert body["data"]["token"]
         assert body["data"]["user"]["account"] == "zhang.wei"
         assert "roles" in body["data"]["user"]
+        assert body["data"]["user"]["theme"] == "dark"
 
     def test_login_wrong_password(self, client: TestClient):
         r = client.post("/api/v1/auth/login", json={"account": "zhang.wei", "password": "wrong-pass-1"})
@@ -71,6 +72,20 @@ class TestLogin:
         assert r.json()["data"]["user"]["account"] == account
         # 账号名登录同样可用（回归）
         assert client.post("/api/v1/auth/login", json={"account": account, "password": "NewPass@123"}).status_code == 200
+
+
+class TestThemePreference:
+    def test_user_can_persist_own_theme_preference(self, client: TestClient, leader_headers: dict):
+        updated = client.patch("/api/v1/auth/me/preferences", headers=leader_headers, json={"theme": "light"})
+        assert updated.status_code == 200, updated.text
+        assert updated.json()["data"]["user"]["theme"] == "light"
+
+        current = client.get("/api/v1/auth/me", headers=leader_headers)
+        assert current.json()["data"]["user"]["theme"] == "light"
+
+    def test_theme_preference_rejects_unknown_theme(self, client: TestClient, leader_headers: dict):
+        response = client.patch("/api/v1/auth/me/preferences", headers=leader_headers, json={"theme": "system"})
+        assert response.status_code == 422
 
 
 class TestEnterpriseSso:

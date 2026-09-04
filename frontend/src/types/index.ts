@@ -19,6 +19,7 @@ export interface User {
   skills: string[]
   avatarGrad?: string // g1-g6
   status: 'active' | 'disabled' | 'locked' | 'invited'
+  theme?: 'dark' | 'light'
   dingTalk?: string
   wecom?: string
   load?: number
@@ -481,6 +482,17 @@ export interface ExpertRunBrief {
   startedAt: string
   /** 用户重新执行时补充的执行上下文（空串=按任务书原样生成） */
   context?: string
-  /** 解析快照：后端按节点 schema 预解析的 {values, warnings}，供字段预览渲染 */
-  parsed?: { values: Record<string, unknown>; warnings: string[] } | null
+  /** 解析快照：后端按节点 schema 预解析的 {values, warnings}，供字段预览渲染。
+      normalized=true 表示采纳时做过 AI 格式修正（originalValues 为修正前值，供 diff 展示）；
+      manualEdited=true 表示用户在抽屉中编辑后按编辑值采纳（editedKeys 为人工调整的字段） */
+  parsed?: {
+    values: Record<string, unknown>
+    warnings: string[]
+    originalValues?: Record<string, unknown>
+    normalized?: boolean
+    formattedAt?: string
+    manualEdited?: boolean
+    editedKeys?: string[]
+    editedAt?: string
+  } | null
 }

@@ -230,11 +230,11 @@ class TestTaskActions:
                         json={"action": "transfer", "to_user_id": "ghost"})
         assert r.status_code == 404
 
-    def test_return(self, client: TestClient, leader_headers: dict, _fresh_task: str):
+    def test_return_rejects_target_not_configured_on_canvas(self, client: TestClient, leader_headers: dict, _fresh_task: str):
         r = client.post(f"/api/v1/tasks/{_fresh_task}/actions", headers=leader_headers,
                         json={"action": "return", "to_node_id": "n1"})
-        assert r.status_code == 200
-        assert r.json()["data"]["task"]["node"] == "n1"
+        assert r.status_code == 400
+        assert "模板未配置" in r.json()["message"]
 
     def test_return_without_node(self, client: TestClient, leader_headers: dict, _fresh_task: str):
         r = client.post(f"/api/v1/tasks/{_fresh_task}/actions", headers=leader_headers,

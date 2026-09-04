@@ -61,6 +61,10 @@ async def list_documents(
         stmt = stmt.where(DocItem.scan == scan)
     if wi:
         stmt = stmt.where(DocItem.wi == wi)
+    else:
+        # 文档中心（不带 wi 的全量视图）不展示「节点表单附件」：它们是节点表单的
+        # 采纳产物，只在对应工作项/节点文档里可见，避免 Expert 每次产出都涌入文档中心
+        stmt = stmt.where(DocItem.kind != "节点表单附件")
     total = len((await session.execute(stmt)).scalars().all())
     # 固定排序保证分页稳定（观察项 E 修复：原实现无 order_by，分页结果顺序不稳定）
     rows = (await session.execute(
@@ -211,6 +215,40 @@ async def download_document(
     return StreamingResponse(BytesIO(data), media_type=media_type, headers=headers)
 
 
+@router.get("/{doc_id}/archive")
+async def list_archive_entries(
+    doc_id: str,
+    token: str = "",
+    session: AsyncSession = Depends(get_db),
+):
+    """Return a safe, read-only listing for a normal ZIP package.
+
+    Axure packages continue to use the HTML preview route; packages without an
+    entry page can still be inspected in the document viewer and downloaded.
+    """
+    if not valid_document_content_token(token, doc_id):
+        raise BizError(BizCode.UNAUTH, "文档链接无效或已过期", http_status=401)
+    doc = await session.get(DocItem, doc_id)
+    if doc is None or doc.deleted:
+        raise BizError(BizCode.NOT_FOUND, "文档不存在")
+    if doc.scan == "含毒":
+        raise BizError(BizCode.FORBIDDEN, "文档含毒，已禁止访问")
+    if not doc.name.lower().endswith(".zip"):
+        raise BizError(BizCode.VALIDATION, "仅支持 ZIP 压缩包浏览")
+
+    entries = _list_zip_entries_checked(await _load_document_bytes(doc))
+    paths = {str(entry["path"]) for entry in entries}
+    lower_paths = {path.lower() for path in paths}
+    has_root_index = "index.html" in lower_paths
+    if not has_root_index and paths:
+        root = next(iter(paths)).split("/", 1)[0]
+        has_root_index = (
+            f"{root}/index.html".lower() in lower_paths
+            and all(path.startswith(f"{root}/") for path in paths)
+        )
+    return ok({"preview_type": "axure" if has_root_index else "archive", "entries": entries})
+
+
 @router.get("/{doc_id}/preview/{entry_path:path}")
 async def preview_document_entry(
     doc_id: str,
@@ -283,6 +321,35 @@ def _zip_entry_name(info: zipfile.ZipInfo) -> str:
         except UnicodeDecodeError:
             continue
     return info.filename
+
+
+def _list_zip_entries_checked(data: bytes) -> list[dict[str, int | str]]:
+    """Read ZIP metadata with the same bomb and traversal limits as preview."""
+    max_total = 200 * 1024 * 1024
+    max_entries = 2000
+    try:
+        with zipfile.ZipFile(BytesIO(data)) as zf:
+            entries: list[dict[str, int | str]] = []
+            total = 0
+            entry_count = 0
+            for info in zf.infolist():
+                name = _zip_entry_name(info).replace("\\", "/")
+                parts = Path(name).parts
+                if "__MACOSX" in parts or parts[-1:] == (".DS_Store",):
+                    continue
+                entry_count += 1
+                if entry_count > max_entries:
+                    raise BizError(BizCode.VALIDATION, "压缩包条目过多，拒绝浏览")
+                if not name or name.startswith("/") or any(part in {"", ".", ".."} for part in parts):
+                    raise BizError(BizCode.VALIDATION, "压缩包包含非法路径，拒绝浏览")
+                total += info.file_size
+                if total > max_total:
+                    raise BizError(BizCode.VALIDATION, "解压后体积超限（上限 200MB），疑似压缩炸弹")
+                if not info.is_dir():
+                    entries.append({"path": name, "size": info.file_size})
+            return sorted(entries, key=lambda entry: str(entry["path"]).lower())
+    except zipfile.BadZipFile as exc:
+        raise BizError(BizCode.VALIDATION, "压缩包损坏或格式不支持") from exc
 
 
 def _extract_zip_checked(data: bytes, cache_dir: Path) -> None:

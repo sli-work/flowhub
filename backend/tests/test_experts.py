@@ -1,6 +1,33 @@
 """Expert Runtime API contract tests."""
 import io
 
+from flowhub_api.services.expert_runtime import (
+    MAX_QUALITY_ATTEMPTS, evidence_review_prompt, quality_policy, should_refine_answer,
+)
+
+
+def test_quality_policy_trades_revision_latency_for_accuracy():
+    assert quality_policy("fast") == {"review": False, "max_attempts": 1}
+    assert quality_policy("balanced") == {"review": True, "max_attempts": 2}
+    assert quality_policy("accurate") == {"review": True, "max_attempts": 3}
+    assert quality_policy("unknown") == quality_policy("balanced")
+
+
+def test_evidence_review_requires_source_backed_claims_not_style_feedback():
+    prompt = evidence_review_prompt("需求状态是什么？", "需求 REQ-1 状态：进行中", "REQ-1 已完成")
+    assert "证据" in prompt
+    assert "无证据" in prompt
+    assert "格式" not in prompt
+
+
+def test_quality_loop_allows_initial_answer_and_two_revisions_only():
+    """质量门限应保证有足够的修正机会，同时绝不形成无界循环。"""
+    assert MAX_QUALITY_ATTEMPTS == 3
+    assert should_refine_answer(1, ["缺少结论"])
+    assert should_refine_answer(2, ["格式不清晰"])
+    assert not should_refine_answer(3, ["仍可改进"])
+    assert not should_refine_answer(1, [])
+
 def test_expert_lifecycle_with_interrupted_test_run(client, org_headers):
     headers = org_headers
     response = client.post("/api/v1/providers", headers=headers, json={

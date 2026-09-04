@@ -24,6 +24,35 @@ from flowhub_api.services.repo_mirror import repo_map_section, schedule_mirror_b
 
 logger = logging.getLogger("flowhub_api")
 
+# 首版 + 两次基于质量问题的完整修订。这个上限在质量和等待时间之间折中，且保证图不会无界回环。
+MAX_QUALITY_ATTEMPTS = 3
+QUALITY_POLICIES = {
+    "fast": {"review": False, "max_attempts": 1},
+    "balanced": {"review": True, "max_attempts": 2},
+    "accurate": {"review": True, "max_attempts": 3},
+}
+
+
+def quality_policy(mode: str | None) -> dict[str, bool | int]:
+    """质量档位：快模式单次生成，平衡模式最多修订一次，准确模式最多修订两次。"""
+    return dict(QUALITY_POLICIES.get(mode or "balanced", QUALITY_POLICIES["balanced"]))
+
+
+def evidence_review_prompt(question: str, evidence: str, answer: str) -> str:
+    """让 Judge 只判定事实是否有来源支撑，避免“文风建议”触发无效循环。"""
+    return (
+        "你是事实核验器。只能使用下方证据核验回答；不要凭常识补全。"
+        "逐项检查回答中的事实主张：没有证据、与证据矛盾、或把不确定性说成确定事实时，列入 issues。"
+        "不要评价措辞或篇幅。仅输出 JSON："
+        '{"pass":true|false,"issues":["无证据或矛盾的具体主张"]}，最多三项。\n\n'
+        f"用户问题：{question}\n\n证据：\n{evidence[:12000]}\n\n回答：\n{answer[:12000]}"
+    )
+
+
+def should_refine_answer(attempt: int, validation_issues: list[str], max_attempts: int = MAX_QUALITY_ATTEMPTS) -> bool:
+    """Return whether an answer should enter another bounded revision pass."""
+    return bool(validation_issues) and attempt < max_attempts
+
 
 def now_iso() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
@@ -42,6 +71,8 @@ class GraphState(TypedDict, total=False):
     history: str
     flowhub_context: str
     tool_trace: list
+    attempt: int
+    validation_issues: list[str]
 
 
 def checkpoint_dsn() -> str:
@@ -134,7 +165,7 @@ async def flowhub_read_snapshot(session: AsyncSession, user: User, prompt: str, 
     return {"context": context, "trace": trace, "pre_answer": answer}
 
 
-def build_graph(provider: LlmProvider, model: LlmProviderModel, system_prompt: str, flowhub_snapshot=None, emitter=None):
+def build_graph(provider: LlmProvider, model: LlmProviderModel, system_prompt: str, flowhub_snapshot=None, emitter=None, quality_mode: str = "accurate"):
     """构建 LangGraph 运行图。
 
     flowhub_snapshot：async (prompt) -> {context, trace, pre_answer}，FlowHub 基础能力钩子。
@@ -142,6 +173,8 @@ def build_graph(provider: LlmProvider, model: LlmProviderModel, system_prompt: s
     emitter：async (event: "token"|"trace", payload: dict) -> None，可选；传入时节点内边执行边推送
     （token 逐段、trace 实时），事件仍由调用方照常落 ExpertRunEvent，emitter 只负责"发出去"。
     """
+    policy = quality_policy(quality_mode)
+
     async def _emit(event: str, payload: dict) -> None:
         if emitter is None:
             return
@@ -170,15 +203,20 @@ def build_graph(provider: LlmProvider, model: LlmProviderModel, system_prompt: s
         decision = interrupt({"tool": "flowhub.native.write", "risk": "write_commit", "scope": state["prompt"]})
         return {"approved": bool(decision)}
     async def model_node(state: GraphState) -> dict:
-        llm = ChatOpenAI(model=model.model, base_url=provider.base_url, api_key=decrypt_secret(provider.api_key), temperature=0, timeout=15, max_retries=0)
+        # timeout 只约束"两次读到字节之间"的间隔而非总时长；子任务任务书+schema 的长生成实测 60-90s，
+        # 15s 会在网关停顿时误杀 → 表现为"模型服务暂不可用"。放宽到 120s 并允许 2 次重试。
+        llm = ChatOpenAI(model=model.model, base_url=provider.base_url, api_key=decrypt_secret(provider.api_key), temperature=0, timeout=120, max_retries=2)
         history = (state.get("history") or "").strip()
         deliverable_rule = "产出约定：仅当本次回答是用户明确要求的完整交付物（文档/方案/用例等）时，在回答最后另起一行写「【交付文件】文档标题」声明交付（系统会据此生成可下载文档）；普通问答不要声明。"
-        messages = [("system", f"{system_prompt}\n\n{deliverable_rule}")]
+        messages = [("system", f"{system_prompt}\n\n{deliverable_rule}\n事实约束：涉及 FlowHub 数据、任务状态、代码或项目结论时，只能依据提供的上下文；上下文没有依据时必须明确说明不确定，不得编造。")]
         if history:
             messages.append(("system", f"以下是会话历史（含已压缩的早期轮次）：\n{history}"))
         flowhub_context = (state.get("flowhub_context") or "").strip()
         if flowhub_context:
             messages.append(("system", "以下是 FlowHub 实时上下文（按操作者权限只读获取，可直接引用其中的任务/工作项/项目信息）：\n" + flowhub_context))
+        issues = state.get("validation_issues") or []
+        if issues:
+            messages.append(("system", "上一版产出未通过质量校验。请基于原回答完整修正以下问题，不要解释修正过程：\n- " + "\n- ".join(issues)))
         messages.append(("human", state["prompt"]))
         if emitter is not None:
             chunks: list[str] = []
@@ -197,20 +235,45 @@ def build_graph(provider: LlmProvider, model: LlmProviderModel, system_prompt: s
         else:
             response = await llm.ainvoke(messages)
             output = str(response.content)
-        return {"output": output}
+        return {"output": output, "attempt": int(state.get("attempt", 0)) + 1}
+
+    async def validate_node(state: GraphState) -> dict:
+        """LLM-as-judge quality gate; bounded by route_after_validation to avoid loops."""
+        if not policy["review"]:
+            return {"validation_issues": []}
+        output = (state.get("output") or "").strip()
+        if not output:
+            return {"validation_issues": ["回答为空，请输出可直接使用的完整结果。"]}
+        llm = ChatOpenAI(model=model.model, base_url=provider.base_url, api_key=decrypt_secret(provider.api_key), temperature=0, timeout=120, max_retries=1)
+        review = await llm.ainvoke([("human", evidence_review_prompt(state["prompt"], state.get("flowhub_context", ""), output))])
+        try:
+            review_text = str(review.content).strip()
+            if review_text.startswith("```"):
+                review_text = review_text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+            payload = json.loads(review_text)
+            issues = [str(item) for item in (payload.get("issues") or []) if str(item).strip()][:3]
+            return {"validation_issues": [] if payload.get("pass") and not issues else (issues or ["请核对回答是否完整准确地满足用户要求。"]) }
+        except (json.JSONDecodeError, AttributeError):
+            # 校验器不可用时不阻断原回答；运行事件仍保留主模型结果。
+            return {"validation_issues": []}
 
     def route_after_context(state: GraphState) -> str:
         return "approval" if state.get("write_intent") else "model"
+
+    def route_after_validation(state: GraphState) -> str:
+        return "model" if should_refine_answer(int(state.get("attempt", 0)), state.get("validation_issues") or [], int(policy["max_attempts"])) else END
 
     graph = StateGraph(GraphState)
     graph.add_node("context", context_node)
     graph.add_node("approval", approval_node)
     graph.add_node("model", model_node)
+    graph.add_node("validate", validate_node)
     graph.add_edge(START, "context")
     graph.add_conditional_edges("context", route_after_context, {"approval": "approval", "model": "model"})
     # 受治理写入：审批通过后继续调用模型生成产出（此前 approval → END 导致 write_intent 运行永远没有模型输出）
     graph.add_edge("approval", "model")
-    graph.add_edge("model", END)
+    graph.add_edge("model", "validate")
+    graph.add_conditional_edges("validate", route_after_validation, {"model": "model", END: END})
     return graph
 
 
@@ -262,9 +325,11 @@ async def execute_run(session: AsyncSession, run: ExpertRun, version: ExpertVers
         await add_event(session, run.id, 3, "model", "succeeded", "LangGraph 模型节点完成", {"output": run.output[:1000]})
         await _snapshot_parsed_for_task(session, run)
     except Exception as exc:  # noqa: BLE001
+        logger.exception("Expert Run %s 模型调用失败", run.id)
+        reason = f"{type(exc).__name__}: {str(exc)[:200]}"
         run.status = "failed"
-        run.error = "模型服务暂不可用，请检查 Provider 连接或稍后重试"
-        await add_event(session, run.id, 3, "model", "failed", "模型调用失败", {"error": run.error})
+        run.error = f"模型服务暂不可用，请检查 Provider 连接或稍后重试（{reason}）"
+        await add_event(session, run.id, 3, "model", "failed", "模型调用失败", {"error": reason})
         if emitter is not None:
             await emitter("trace", {"kind": "model", "tool": "模型调用", "status": "failed", "summary": run.error})
     finally:
@@ -320,9 +385,10 @@ async def resume_approved_run(session: AsyncSession, approval: ExpertApproval, u
             result = await graph.ainvoke(Command(resume=True), {"configurable": {"thread_id": run.trace_id}})
     except Exception as exc:  # noqa: BLE001
         # 审批后的模型生成可能因 Provider 不可达失败：标记运行失败，任务由人工兜底
-        run.status, run.error = "failed", "模型服务暂不可用，请检查 Provider 连接或稍后重试"
+        logger.exception("Expert Run %s 审批后模型调用失败", run.id)
+        run.status, run.error = "failed", f"模型服务暂不可用，请检查 Provider 连接或稍后重试（{type(exc).__name__}: {str(exc)[:200]}）"
         run.finished_at = now_iso()
-        await add_event(session, run.id, 5, "model", "failed", "审批后模型调用失败", {"error": type(exc).__name__})
+        await add_event(session, run.id, 5, "model", "failed", "审批后模型调用失败", {"error": f"{type(exc).__name__}: {str(exc)[:200]}"})
         return run
     # 审批后继续模型节点：有真实产出则记录（替代此前的固定文案），供节点表单回填
     output = str(result.get("output", "") or "") if isinstance(result, dict) else ""
@@ -437,11 +503,21 @@ async def schedule_deployment_run(session: AsyncSession, deployment_id: str, pro
                 if bg_version is None or bg_user is None:
                     raise ValueError("Expert Version 或用户不存在")
                 await execute_run(bg, bg_run, bg_version, bg_user)
+                # 无论协助还是自动节点，Run 已落到终态后都不能继续显示为 Expert 待处理。
+                # 自动节点随后仍可由 on_finished 使用 status 决定采纳或人工兜底。
+                if bg_run.task_id:
+                    bg_task = await bg.get(TaskItem, bg_run.task_id)
+                    if bg_task is not None:
+                        bg_task.expert_pending = False
                 if on_finished is not None:
                     await on_finished(bg, bg_run)
             except Exception as exc:  # noqa: BLE001
                 bg_run.status, bg_run.error = "failed", str(exc) or "后台执行失败"
                 bg_run.finished_at = now_iso()
+                if bg_run.task_id:
+                    bg_task = await bg.get(TaskItem, bg_run.task_id)
+                    if bg_task is not None:
+                        bg_task.expert_pending = False
                 if on_finished is not None:
                     try:
                         await on_finished(bg, bg_run)
@@ -458,13 +534,42 @@ async def schedule_deployment_run(session: AsyncSession, deployment_id: str, pro
 _BG_TASKS: set[asyncio.Task] = set()  # 持强引用防后台任务被 GC
 
 
+async def recover_interrupted_runs(session: AsyncSession) -> int:
+    """将进程重启前遗留的内存后台 Run 收敛为失败，避免任务页永久轮询。
+
+    Expert 节点执行器目前在 API 进程内以 asyncio task 运行；进程退出时无法恢复
+    原协程，因此不能把旧记录继续显示为 running。自动节点同时恢复到人工可处理状态。
+    """
+    stale_runs = (await session.execute(
+        select(ExpertRun).where(ExpertRun.status == "running")
+    )).scalars().all()
+    for run in stale_runs:
+        run.status = "failed"
+        run.error = "服务重启导致本次 Expert 执行中断，请重新生成"
+        run.finished_at = now_iso()
+        if run.task_id:
+            task = await session.get(TaskItem, run.task_id)
+            if task is not None:
+                task.expert_pending = False
+                if task.status == "pending_confirmation":
+                    task.status = "assigned"
+    if stale_runs:
+        await session.commit()
+        logger.warning("已回收 %d 条因服务重启中断的 Expert Run", len(stale_runs))
+    return len(stale_runs)
+
+
 # ---------- 节点表单 AI 填充：schema 输出契约 / 解析矫正 / 文档生成 ----------
 
 def build_schema_output_instruction(schema: list[dict]) -> str:
     """把节点 FormField[] 转成模型可执行的严格 JSON 输出契约。"""
     if not schema:
         return ""
-    lines = ["## 输出契约（严格遵守）", "基于以上任务书完成节点产出，只输出一个 JSON 对象，不要输出任何其他文字。字段如下："]
+    lines = [
+        "## 输出契约（严格遵守）",
+        "基于以上任务书完成节点产出，只输出一个 JSON 对象，不要输出任何其他文字。",
+        "不要在字段值中重复字段名、不要使用 JSON/Markdown 代码围栏；每个字段只放该字段本身的内容。字段如下：",
+    ]
     for f in schema:
         key, ftype = f.get("key", ""), f.get("type", "input")
         required = "必填" if f.get("required") else "选填"
@@ -475,14 +580,18 @@ def build_schema_output_instruction(schema: list[dict]) -> str:
         elif ftype == "multiselect":
             opts = "；".join(f"{o.get('label')}={o.get('value')}" for o in (f.get("options") or []))
             lines.append(f"- {key}（{f.get('label')}，{required}，多选，输出 value 数组，只能取：{opts}）")
-        elif ftype in ("upload", "file"):
-            lines.append(f"- {key}（{f.get('label')}，{required}，文件产出）：输出该文档的完整 Markdown 正文")
+        elif ftype in ("textarea", "upload", "file"):
+            kind = "文件产出" if ftype in ("upload", "file") else "多行文本"
+            lines.append(
+                f"- {key}（{f.get('label')}，{required}，{kind}）：输出纯 Markdown 正文；"
+                "可使用标题、列表、表格和段落，但不要加代码围栏、字段名前缀或重复的总标题。"
+            )
         elif ftype == "number":
             lines.append(f"- {key}（{f.get('label')}，{required}，数字）：{desc}")
         elif ftype == "date":
             lines.append(f"- {key}（{f.get('label')}，{required}，日期 YYYY-MM-DD）：{desc}")
         else:
-            lines.append(f"- {key}（{f.get('label')}，{required}，文本）：{desc}")
+            lines.append(f"- {key}（{f.get('label')}，{required}，单行纯文本）：{desc}")
     return "\n".join(lines)
 
 
@@ -512,6 +621,16 @@ def _candidate_blocks(raw: str) -> list[str]:
 
 
 _TEXT_KEYS = ("content", "text", "markdown", "body", "value")
+
+
+def _normalize_markdown(text: str) -> str:
+    """清理模型偶发包裹在字段值外层的 Markdown 代码围栏，保留正文语义。"""
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    fenced = re.fullmatch(r"```(?:markdown|md|text)?\s*\n?(.*?)\n?```", normalized, re.S | re.I)
+    if fenced:
+        normalized = fenced.group(1).strip("\n")
+    # 不逐行 rstrip：行尾两个空格是 Markdown 的硬换行语法，必须原样保留。
+    return normalized
 
 
 def _coerce_text(raw_value, depth: int = 0) -> str:
@@ -626,10 +745,72 @@ def parse_schema_output(schema: list[dict], raw: str) -> tuple[dict, list[str]]:
                 warnings.append(f"「{f.get('label', key)}」不是有效数字，已留空")
         else:
             text = _coerce_text(raw_value)
+            if ftype in ("textarea", "upload", "file"):
+                text = _normalize_markdown(text)
             if text:
                 values[key] = text
             elif f.get("required"):
                 warnings.append(f"「{f.get('label', key)}」生成为空")
+    return values, warnings
+
+
+def build_normalize_prompt(schema: list[dict], raw: str) -> str:
+    """AI 二次格式修正 prompt：把 Run 原始产出按节点表单契约重新归位与排版。
+
+    硬约束「只调格式、不改内容」——修正器禁止增删改事实与语义；最终内容不变性
+    由调用方的非文本字段程序校验兜底（见 normalize_run_output）。"""
+    instruction = build_schema_output_instruction(schema)
+    return (
+        "## 任务：格式规范化\n"
+        "你是格式规范化器。下面是一次任务产出与该节点的输出契约。请把产出重新整理为严格符合契约的 JSON：\n"
+        "- 仅做格式调整：Markdown 结构（标题层级/列表/表格/断行）、去掉无关的代码围栏与寒暄杂讯、"
+        "键名映射、值类型矫正、把内容按字段归位。\n"
+        "- 禁止增删改任何事实与语义：不新增观点/数据/结论，不删减要点，不改写措辞。\n"
+        "- 原 JSON 已含某字段时直接采用其内容做排版整理；缺字段时从产出正文中搬运对应内容，不得撰写新内容。\n"
+        "- textarea、upload、file 字段的值必须是可直接渲染的纯 Markdown 正文；不要加 JSON/Markdown 代码围栏、字段名前缀或重复总标题。\n"
+        "- input 字段保持单行纯文本，不加入 Markdown 标记。\n"
+        "- 输出仍须严格遵守输出契约（只输出一个 JSON 对象）。\n\n"
+        f"{instruction}\n\n## 原始产出\n{raw}"
+    )
+
+
+async def normalize_run_output(session: AsyncSession, run: ExpertRun, schema: list[dict]) -> tuple[dict, list[str]]:
+    """AI 二次格式修正：把 Run 原始产出按节点 schema 契约做格式规范后重新解析。
+
+    返回 (values, warnings)。模型调用或解析失败时抛异常，由调用方降级为原 parsed 快照采纳。
+    结构化字段（select/radio/multiselect/number/date）修正前后值不一致时放弃该字段修正、保留原值
+    （内容不变性程序兜底）；文本字段以修正结果为准（仅排版差异）。"""
+    from flowhub_api.models import LlmProvider, LlmProviderModel
+
+    if run.deployment_id is None:
+        raise ValueError("Run 未关联 Deployment，无法定位格式修正模型")
+    deployment = await session.get(ExpertDeployment, run.deployment_id)
+    if deployment is None:
+        raise ValueError("Run 关联的 Deployment 不存在")
+    version = await session.get(ExpertVersion, deployment.expert_version_id)
+    if version is None:
+        raise ValueError("Deployment 固定的 Expert Version 不存在")
+    model = await session.get(LlmProviderModel, version.provider_model_id)
+    provider = await session.get(LlmProvider, model.provider_id) if model else None
+    if not model or not provider or provider.status != "healthy" or not provider.credential_configured:
+        raise ValueError("格式修正模型不可用，请检查 Provider 配置")
+    llm = ChatOpenAI(model=model.model, base_url=provider.base_url, api_key=decrypt_secret(provider.api_key), temperature=0, timeout=120, max_retries=2)
+    response = await llm.ainvoke([("human", build_normalize_prompt(schema, run.output or ""))])
+    values, warnings = parse_schema_output(schema, str(response.content))
+    if not values:
+        raise ValueError(warnings[0] if warnings else "格式修正未解析出有效字段值")
+    # 内容不变性校验：非自由文本字段（选项/数值/日期）修正前后必须一致，否则保留原值
+    original = (run.parsed or {}).get("values") or {}
+    changed_guarded = 0
+    for f in schema:
+        key, ftype = f.get("key", ""), f.get("type", "input")
+        if ftype not in ("select", "radio", "multiselect", "number", "date"):
+            continue
+        if key in values and key in original and values[key] != original[key]:
+            values[key] = original[key]
+            changed_guarded += 1
+    if changed_guarded:
+        warnings.append(f"{changed_guarded} 个结构化字段修正前后值不一致，已保留原值")
     return values, warnings
 
 
@@ -704,25 +885,17 @@ def extract_deliverable(output: str) -> tuple[str, str] | None:
     return title, body
 
 
-_DELIVERABLE_INTENT = re.compile(r"(生成|整理|输出|编写|写|产出|提供|做|出).{0,24}(文档|方案|规范|用例|计划|报告|说明|清单|指南|手册)")
+async def save_chat_output_document(session: AsyncSession, *, project_name: str | None, output: str, user: User, create_file: bool = False) -> dict | None:
+    """在用户授权后，根据模型的交付声明调用文档工具并保存为项目文档。
 
-def has_deliverable_intent(prompt: str) -> bool:
-    """用户消息是否带有"产出文档类交付物"的明确意图。"""
-    return bool(_DELIVERABLE_INTENT.search(prompt or ""))
-
-async def save_chat_output_document(session: AsyncSession, *, project_name: str | None, output: str, user: User, prompt: str = "") -> dict | None:
-    """会话绑定项目 + 用户有明确交付意图 + 回答足够长（≥400字）时，把 Markdown 产出归档为项目文档。
-
-    模型若按约定声明了【交付文件】标题则采用之；否则用意图关键词匹配出的文档名兜底。"""
-    if not project_name or len((output or "").strip()) < 400:
+    模型必须输出「【交付文件】标题」才能触发 create_document_from_text；不再根据关键词、
+    回答长度或用户是否勾选来猜测内容，避免普通会话产生意外附件。"""
+    if not create_file or not project_name or not (output or "").strip():
         return None
     declared = extract_deliverable(output)
-    if declared:
-        title, body = declared
-    elif has_deliverable_intent(prompt):
-        title, body = f"AI产出-{datetime.now(UTC).strftime('%m%d-%H%M%S')}", output.strip()
-    else:
+    if not declared:
         return None
+    title, body = declared
     ref = await create_document_from_text(
         session, wi_id="", project=project_name,
         name=f"{title}.md", content=body, uploader=user,
@@ -863,13 +1036,15 @@ def _extract_keywords(text: str) -> list[str]:
     return out[:10]
 
 
-async def run_native_flowhub_chat(session: AsyncSession, prompt: str, user: User, provider_model_id: str | None = None, history: str = "", on_token: Callable[[str], Awaitable[None]] | None = None, on_trace: Callable[[dict], Awaitable[None]] | None = None, project_name: str | None = None) -> tuple[str, list[dict]]:
+async def run_native_flowhub_chat(session: AsyncSession, prompt: str, user: User, provider_model_id: str | None = None, history: str = "", on_token: Callable[[str], Awaitable[None]] | None = None, on_trace: Callable[[dict], Awaitable[None]] | None = None, project_name: str | None = None, quality_mode: str = "balanced") -> tuple[str, list[dict]]:
     """Default LangGraph path for a chat without an Expert Deployment.
 
     It exposes safe, read-only FlowHub capabilities. Business writes remain a
     dedicated Expert/Deployment operation so they can be versioned and approved.
     on_trace：可选 async (item) -> None，工具/模型 trace 产生时实时推送（而非结束后一次性返回）。
     """
+
+    policy = quality_policy(quality_mode)
 
     async def _emit_trace(item: dict) -> None:
         if on_trace is None:
@@ -883,62 +1058,102 @@ async def run_native_flowhub_chat(session: AsyncSession, prompt: str, user: User
         prompt: str
         answer: str
         tool_trace: list[dict]
+        flowhub_context: str
+        pre_answer: str
+        attempt: int
+        validation_issues: list[str]
+        can_refine: bool
 
-    async def native_tools(state: NativeState) -> dict:
-        # FlowHub 基础能力（只读快照）与 Expert 运行图共用同一实现；project_name 追加仓库地图上下文
-        snap = await flowhub_read_snapshot(session, user, state["prompt"], project_name)
-        trace: list[dict] = [{"kind": "tool", **item} for item in snap["trace"]]
-        for item in trace:
-            await _emit_trace(item)
-        context = snap["context"]
+    async def native_tools(state: dict) -> dict:
+        # 首轮读一次快照；修订轮复用相同上下文，避免反复查询且确保评审针对同一份事实。
+        trace = list(state.get("tool_trace") or [])
+        context = state.get("flowhub_context", "")
+        answer = state.get("pre_answer", "")
         text = state["prompt"]
-        if any(word in text for word in ("创建", "提交", "删除", "发布", "写入")):
-            write_item = {"kind": "tool", "tool": "flowhub.write.request", "status": "approval_required", "summary": "默认对话不直接执行写入"}
-            trace.append(write_item)
-            await _emit_trace(write_item)
-            answer = "默认 FlowHub 对话仅提供只读能力。请选择已发布 Expert Deployment 执行受治理写入操作，系统会在 LangGraph 审批节点中断等待确认。"
-        else:
+        if not context:
+            # FlowHub 基础能力（只读快照）与 Expert 运行图共用同一实现；project_name 追加仓库地图上下文
+            snap = await flowhub_read_snapshot(session, user, text, project_name)
+            trace = [{"kind": "tool", **item} for item in snap["trace"]]
+            for item in trace:
+                await _emit_trace(item)
+            context = snap["context"]
             answer = snap["pre_answer"]
+            if any(word in text for word in ("创建", "提交", "删除", "发布", "写入")):
+                write_item = {"kind": "tool", "tool": "flowhub.write.request", "status": "approval_required", "summary": "默认对话不直接执行写入"}
+                trace.append(write_item)
+                await _emit_trace(write_item)
+                answer = "默认 FlowHub 对话仅提供只读能力。请选择已发布 Expert Deployment 执行受治理写入操作，系统会在 LangGraph 审批节点中断等待确认。"
+                return {"answer": answer, "tool_trace": trace, "flowhub_context": context, "pre_answer": answer, "can_refine": False}
         if provider_model_id:
             model = await session.get(LlmProviderModel, provider_model_id)
             provider = await session.get(LlmProvider, model.provider_id) if model else None
             if not model or not provider or provider.status != "healthy" or not provider.credential_configured:
-                return {"answer": "所选 Provider / 模型不可用，请检查 Provider 凭据和健康状态。", "tool_trace": trace}
+                return {"answer": "所选 Provider / 模型不可用，请检查 Provider 凭据和健康状态。", "tool_trace": trace, "flowhub_context": context, "pre_answer": answer, "can_refine": False}
             try:
-                llm = ChatOpenAI(model=model.model, base_url=provider.base_url, api_key=decrypt_secret(provider.api_key), temperature=0, timeout=15, max_retries=0)
+                llm = ChatOpenAI(model=model.model, base_url=provider.base_url, api_key=decrypt_secret(provider.api_key), temperature=0, timeout=120, max_retries=2)
                 # 把"目录 + 关键词命中详情 + 已得 answer"都喂给 LLM，让它能基于真实数据回答
                 history_text = (history or "").strip()
                 human_parts = []
                 if history_text:
                     human_parts.append(f"会话历史（早期轮次可能已压缩）：\n{history_text}")
                 human_parts.append(f"{context}\n\n已查询结果：\n{answer}\n\n用户问题：{text}")
-                messages = [("system", "你是 FlowHub 默认助手。仅基于提供的 FlowHub 只读上下文回答；不可声称已执行创建、提交、删除或发布。需要写操作时，提示用户选择已发布 Expert。回答简洁，给出任务/工作项 ID 便于用户定位。 只有当用户明确要求生成文档/方案/用例等完整交付物时，才在回答最后另起一行写「【交付文件】文档标题」声明交付（系统会据此生成可下载文档）；普通问答不要声明。"), ("human", "\n\n".join(human_parts))]
-                if on_token:
-                    chunks: list[str] = []
-                    stream = llm.astream(messages)
-                    try:
-                        async for chunk in stream:
-                            token = str(chunk.content or "")
-                            if token:
-                                chunks.append(token)
-                                await on_token(token)
-                    finally:
-                        close_stream = getattr(stream, "aclose", None)
-                        if close_stream is not None:
-                            await close_stream()
-                    answer = "".join(chunks)
-                else:
-                    response = await llm.ainvoke(messages)
-                    answer = str(response.content)
+                messages = [("system", "你是 FlowHub 默认助手。仅基于提供的 FlowHub 只读上下文回答；不可声称已执行创建、提交、删除或发布。涉及状态、人员、日期、代码或项目事实时必须能在上下文中找到依据；没有依据时明确说明不确定，不得编造。需要写操作时，提示用户选择已发布 Expert。回答简洁，给出任务/工作项 ID 便于用户定位。只有当用户明确要求生成文档/方案/用例等完整交付物时，才在回答最后另起一行写「【交付文件】文档标题」声明交付；普通问答不要声明。"), ("human", "\n\n".join(human_parts))]
+                issues = state.get("validation_issues") or []
+                if issues:
+                    messages.insert(1, ("system", "上一版回答未通过质量校验。请完整修正以下问题；只输出修订后的答案，不要解释修订过程：\n- " + "\n- ".join(issues)))
+                # 质量门可能要求修订；先保留完整候选，确认最终版后才推送 token，避免前端把多个版本拼接。
+                response = await llm.ainvoke(messages)
+                answer = str(response.content)
             except Exception as exc:
-                fail_item = {"kind": "model", "tool": "默认 Provider 模型", "status": "failed", "summary": "模型服务暂不可用；已回退到 FlowHub 本地查询结果"}
+                logger.exception("native chat 模型调用失败（回退本地查询结果）")
+                fail_item = {"kind": "model", "tool": "默认 Provider 模型", "status": "failed",
+                             "summary": f"模型服务暂不可用（{type(exc).__name__}: {str(exc)[:200]}）；已回退到 FlowHub 本地查询结果"}
                 trace.append(fail_item)
                 await _emit_trace(fail_item)
-        return {"answer": answer, "tool_trace": trace}
+                return {"answer": answer, "tool_trace": trace, "flowhub_context": context, "pre_answer": answer, "can_refine": False}
+        return {"answer": answer, "tool_trace": trace, "flowhub_context": context, "pre_answer": state.get("pre_answer", answer), "attempt": int(state.get("attempt", 0)) + 1, "can_refine": bool(provider_model_id)}
+
+    async def validate_native_answer(state: dict) -> dict:
+        if not policy["review"]:
+            return {"validation_issues": [], "tool_trace": state.get("tool_trace") or []}
+        trace = list(state.get("tool_trace") or [])
+        if not state.get("can_refine") or not provider_model_id:
+            return {"validation_issues": [], "tool_trace": trace}
+        model = await session.get(LlmProviderModel, provider_model_id)
+        provider = await session.get(LlmProvider, model.provider_id) if model else None
+        if not model or not provider or provider.status != "healthy" or not provider.credential_configured:
+            return {"validation_issues": [], "tool_trace": trace}
+        running = {"kind": "quality", "tool": "flowhub.answer.quality_check", "status": "running", "summary": f"正在校验第 {state.get('attempt', 1)} 版回答"}
+        await _emit_trace(running)
+        try:
+            llm = ChatOpenAI(model=model.model, base_url=provider.base_url, api_key=decrypt_secret(provider.api_key), temperature=0, timeout=120, max_retries=1)
+            review = await llm.ainvoke([("human", evidence_review_prompt(state["prompt"], state.get("flowhub_context", ""), state.get("answer", "")))])
+            review_text = str(review.content).strip()
+            if review_text.startswith("```"):
+                review_text = review_text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+            payload = json.loads(review_text)
+            issues = [str(item) for item in (payload.get("issues") or []) if str(item).strip()][:3]
+            issues = [] if payload.get("pass") and not issues else (issues or ["请核对回答是否完整准确地满足用户要求。"])
+        except Exception:  # 校验故障不阻断可用答案
+            logger.debug("native chat quality check skipped", exc_info=True)
+            issues = []
+        status = "succeeded" if not issues else "needs_revision"
+        summary = "质量校验通过" if not issues else f"发现 {len(issues)} 项可修订问题，将生成下一版"
+        quality_item = {"kind": "quality", "tool": "flowhub.answer.quality_check", "status": status, "summary": summary}
+        trace.append(quality_item)
+        await _emit_trace(quality_item)
+        return {"validation_issues": issues, "tool_trace": trace}
+
+    def route_after_native_validation(state: dict) -> str:
+        return "native_tools" if should_refine_answer(int(state.get("attempt", 0)), state.get("validation_issues") or [], int(policy["max_attempts"])) else END
 
     graph = StateGraph(NativeState)
     graph.add_node("native_tools", native_tools)
+    graph.add_node("validate", validate_native_answer)
     graph.add_edge(START, "native_tools")
-    graph.add_edge("native_tools", END)
-    result = await graph.compile().ainvoke({"prompt": prompt, "answer": ""})
+    graph.add_edge("native_tools", "validate")
+    graph.add_conditional_edges("validate", route_after_native_validation, {"native_tools": "native_tools", END: END})
+    result = await graph.compile().ainvoke({"prompt": prompt, "answer": "", "tool_trace": [], "attempt": 0, "validation_issues": []})
+    if on_token and result.get("answer"):
+        await on_token(result["answer"])
     return result["answer"], result.get("tool_trace", [])

@@ -44,6 +44,13 @@ class Settings(BaseSettings):
     # Provider API Key 加密（Fernet key 派生；留空回退 secret_key）
     agent_key_encrypt_secret: str = ""
 
+    # Graphify：绑定仓库的本地 AST 代码图谱（仅分析镜像工作树，不访问外网）
+    graphify_enabled: bool = True
+    graphify_command: str = "graphify"
+    graphify_timeout_seconds: int = 120
+    graphify_max_workers: int = 2
+    graphify_max_prompt_chars: int = 2400
+
     # ---------- 通知渠道（docs/06）：钉钉 / 企微机器人 webhook + 邮件 SMTP ----------
     # 留空 = 该渠道未启用（通知中心渠道健康检查会显示"未配置"）
     dingtalk_webhook: str = ""      # 钉钉群机器人 webhook 地址

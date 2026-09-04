@@ -83,7 +83,7 @@ export function WorkItemPage() {
   const pendingTask = taskList.find((t) => !['completed', 'cancelled'].includes(t.status))
   /* 去处理：打开当前待处理任务（携带真实任务 ID），无待处理则回任务列表 */
   const goHandle = () => {
-    if (pendingTask) openTask(pendingTask.id, activeWiId ?? undefined)
+    if (pendingTask) openTask(pendingTask.id, activeWiId ?? undefined, pendingTask.title)
     else { navigate('tasks'); toast('当前工作项没有待处理任务') }
   }
 

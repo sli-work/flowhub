@@ -529,6 +529,7 @@ dependencies = [
     { name = "cryptography" },
     { name = "email-validator" },
     { name = "fastapi" },
+    { name = "graphifyy" },
     { name = "greenlet" },
     { name = "httpx" },
     { name = "langchain-openai" },
@@ -559,6 +560,7 @@ requires-dist = [
     { name = "cryptography", specifier = ">=42,<51" },
     { name = "email-validator", specifier = ">=2.1,<3.0" },
     { name = "fastapi", specifier = ">=0.115,<1.0" },
+    { name = "graphifyy", specifier = ">=0.9.53,<0.10" },
     { name = "greenlet", specifier = ">=3.0,<4.0" },
     { name = "httpx", specifier = ">=0.27,<1.0" },
     { name = "langchain-openai", specifier = ">=0.3,<1.0" },
@@ -580,6 +582,46 @@ requires-dist = [
 dev = [
     { name = "pytest", specifier = ">=8.0,<9.0" },
     { name = "pytest-asyncio", specifier = ">=0.23,<1.0" },
+]
+
+[[package]]
+name = "graphifyy"
+version = "0.9.53"
+source = { registry = "http://192.168.239.230:8887/repository/mc-group-pypi/simple/" }
+dependencies = [
+    { name = "networkx" },
+    { name = "numpy" },
+    { name = "rapidfuzz" },
+    { name = "tree-sitter" },
+    { name = "tree-sitter-bash" },
+    { name = "tree-sitter-c" },
+    { name = "tree-sitter-c-sharp" },
+    { name = "tree-sitter-cpp" },
+    { name = "tree-sitter-elixir" },
+    { name = "tree-sitter-fortran" },
+    { name = "tree-sitter-go" },
+    { name = "tree-sitter-groovy" },
+    { name = "tree-sitter-java" },
+    { name = "tree-sitter-javascript" },
+    { name = "tree-sitter-json" },
+    { name = "tree-sitter-julia" },
+    { name = "tree-sitter-kotlin" },
+    { name = "tree-sitter-lua" },
+    { name = "tree-sitter-objc" },
+    { name = "tree-sitter-php" },
+    { name = "tree-sitter-powershell" },
+    { name = "tree-sitter-python" },
+    { name = "tree-sitter-ruby" },
+    { name = "tree-sitter-rust" },
+    { name = "tree-sitter-scala" },
+    { name = "tree-sitter-swift" },
+    { name = "tree-sitter-typescript" },
+    { name = "tree-sitter-verilog" },
+    { name = "tree-sitter-zig" },
+]
+sdist = { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/graphifyy/0.9.53/graphifyy-0.9.53.tar.gz", hash = "sha256:c951490a2c8856fe46ade3c165780de501a3fe8de1c9414e971c378e8f4d2164" }
+wheels = [
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/graphifyy/0.9.53/graphifyy-0.9.53-py3-none-any.whl", hash = "sha256:900348aa7c41ef31c0581a8c2e0ca9f0b6a81f1e5bc6ef2184cce697e5342e3f" },
 ]
 
 [[package]]
@@ -1111,6 +1153,88 @@ wheels = [
 ]
 
 [[package]]
+name = "networkx"
+version = "3.6.1"
+source = { registry = "http://192.168.239.230:8887/repository/mc-group-pypi/simple/" }
+sdist = { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/networkx/3.6.1/networkx-3.6.1.tar.gz", hash = "sha256:26b7c357accc0c8cde558ad486283728b65b6a95d85ee1cd66bafab4c8168509" }
+wheels = [
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/networkx/3.6.1/networkx-3.6.1-py3-none-any.whl", hash = "sha256:d47fbf302e7d9cbbb9e2555a0d267983d2aa476bac30e90dfbe5669bd57f3762" },
+]
+
+[[package]]
+name = "numpy"
+version = "2.5.2"
+source = { registry = "http://192.168.239.230:8887/repository/mc-group-pypi/simple/" }
+sdist = { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2.tar.gz", hash = "sha256:d482d171c406ae88c5b19cad3b6a1c4c5209f886ab74bc44c2c865c23f52d860" }
+wheels = [
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:14e373cfc6387177e8409dac3c7159be8eb05cd77096cd7c950268b86f62831c" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:4bbd96c833ecc8cc069ce518078fc8c60cb9cbfb0fea5b7a803ad65035596d03" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp312-cp312-macosx_14_0_arm64.whl", hash = "sha256:6e8172ddfcf5cf74b811d372b570b83c60bd2de87a6fbfbebdadb4a9bd9c6cbb" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp312-cp312-macosx_14_0_x86_64.whl", hash = "sha256:65f188481f1669e26f62b701e8205d19e460fa4a9b52a1414ba382330e4a3414" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp312-cp312-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:8ee9c4eeb8454b3660a8b53493563c3e121c2fc94fbd72b848ef814ed7b676a9" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:3cdec01fa790a186d430433fdd4d4ffb70eed6f0eeb4bf05c8dbe2dce0a9bcb8" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:7999d4ddb0c4025018373fd787510d46e04c769467af22869707b3c1cfd459ab" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:c1f017dc0875c9209d219f97feceb7d54c2661bb243deb4114478e1295808af7" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp312-cp312-win32.whl", hash = "sha256:d6a48072864e3324e194a8fbb3c657bcc5b5c869dbc64c9537b1d5c862572c0a" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp312-cp312-win_amd64.whl", hash = "sha256:28ac63476ec7651484215ee7fa15a1f78b57c14621f01e392afe17b9a1390ce4" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp312-cp312-win_arm64.whl", hash = "sha256:27650bb0e7140fa3d37b9923b4803645e0b125d190f326eecfd3f4dad8e8ade1" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp313-cp313-macosx_10_13_x86_64.whl", hash = "sha256:8e4cb9a754c8a0c62eaa88273a5fba3391f4a610d1dee893c0755da31c083f15" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:52c808f96484f5571a5cc863775ce50247c17dfb3b0361f8ed6b4b0456f80080" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp313-cp313-macosx_14_0_arm64.whl", hash = "sha256:29d81e97f668489cba8ebfd796b9bdd453525d35dd9e162e2daec94bf3fc7740" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp313-cp313-macosx_14_0_x86_64.whl", hash = "sha256:afb3f0632d6b2e3ba04dbce8d1e48d321b369138b73830b5ca371a0e8d479d56" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp313-cp313-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:0aadf13b60048d501e05fa699efaf7734e2494f3498a4c2a5521d822640324f3" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:29b86ff8a6cc556b47ec6b64b194815cc80e6bf5eedcc6cddfd65318cb0b4eee" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp313-cp313-musllinux_1_2_aarch64.whl", hash = "sha256:6950c4b7dd562453090548ba7f5da7e59f57f85663f15d5dcc60e249192f7e59" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:b9727f472d2f3888053b8a75ab0cb94745a9de224bb5846dbadc0092101bc71d" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp313-cp313-win32.whl", hash = "sha256:4f9744f9fbdcea0bc552e8f19e1f141f811a3f9bc2be2cc6e86d982cab23e3f4" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp313-cp313-win_amd64.whl", hash = "sha256:85aaccb24182c25df891ad0ec333585967e115269d5f1b17f2c9ae005bc96657" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp313-cp313-win_arm64.whl", hash = "sha256:bd68ece1553d2023c09a4226d9e41c586ad2d20594d1a456186c33513d2cb3f2" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp314-cp314-macosx_10_15_x86_64.whl", hash = "sha256:d787cf769c3baeb5f6235e778edb52c08dfa923789b5958f28e6450f96107cb1" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:24b9dc2e3d84aa58523798805194e23e736f3f6ce2d1a5b92583ae734e6dbda8" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp314-cp314-macosx_14_0_arm64.whl", hash = "sha256:9e9413326d726c2545bfa65d2c0876871e8d8386e77f992c1d426e180bbd4323" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp314-cp314-macosx_14_0_x86_64.whl", hash = "sha256:60e902ac295855348a5ca2ea4c89108989a9f5fddfad3dfc0a8f36b10358567e" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp314-cp314-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:50e500dc868e9313530ce12ba470fe50ff3afe3d62993ed6eff652dacd555b65" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:318b9a4c845dbea06708a29c84ee429cc3065048db34cdb799047643492050ee" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp314-cp314-musllinux_1_2_aarch64.whl", hash = "sha256:34c319e2963be042673fb46570501b2f06c41924e17e3563d58646b4380dfb68" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp314-cp314-musllinux_1_2_x86_64.whl", hash = "sha256:f06571a052127dc1b4e8b83029b4d1b20daa2b64a31cdd181fc6bc774e9000eb" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp314-cp314-win32.whl", hash = "sha256:2cc779226e476d1e1f08c74068c419e60f41a9e0e069c92f6671d31d5c985e98" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp314-cp314-win_amd64.whl", hash = "sha256:7587f53dfbd5edc0f7b87c6217b4c6d2d1f2ef9c3da70bc1315e7db5f8d7ec9d" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp314-cp314-win_arm64.whl", hash = "sha256:3e4c367352d3747784248a227fbec218e193b56f7e6692e3b64fc805478ecfdf" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp314-cp314t-macosx_11_0_arm64.whl", hash = "sha256:b879fb674276e331513fb136b78dbc6bd3c848309e0d841cfd63be3896c4cfc1" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp314-cp314t-macosx_14_0_arm64.whl", hash = "sha256:fd0d703772bba096843785bd38371e31bb4a0c1151497ad5739d182114a73f7f" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp314-cp314t-macosx_14_0_x86_64.whl", hash = "sha256:3a2f061cebd9e3d23bdcfaaded5e2293a4c6a5b60fa42df85d410a725ce621bf" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp314-cp314t-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:6df895598c0edcb41030126c89e0f353b07d93238116143b7405e937359736c4" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp314-cp314t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:1ab3d4a901f844ea836c3e80bf463c6a27d7f3c14e8e292fcf28d348b25b9bce" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp314-cp314t-musllinux_1_2_aarch64.whl", hash = "sha256:cebc2d6dbb605a7703d59751dea4bd6b0ab127a5a4338a6f432df1936fef8b26" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:eaca7ff36f0f52e2111ec71f169d8fd3e889e7ddc0d2592e0d703fd8d3ce8fac" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp314-cp314t-win32.whl", hash = "sha256:ddf47472af2e4280d79bac82304f5e80150211f1b9e614b760061d5fdfbb6eba" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp314-cp314t-win_amd64.whl", hash = "sha256:44ef9675d908e65f9953063837c3277730f3f4437615a4cdab67b366cabaf884" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp314-cp314t-win_arm64.whl", hash = "sha256:eaa088384c46f519dacb93b7ec483a6d6b19a4a2085ae4f25ab9b1c43d387d1e" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp315-cp315-macosx_10_15_x86_64.whl", hash = "sha256:078f9b027b478c9379b9677babbf0f8b8f1ecfada27636d7b9a93990c638739f" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp315-cp315-macosx_11_0_arm64.whl", hash = "sha256:50a68f4bacd8a2b33d8da3d2269d0d78500f86ea582e4786dc10f5ef2c2c6842" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp315-cp315-macosx_14_0_arm64.whl", hash = "sha256:e79aba74ffaf5f78a050d777c184cddf8fdffabab38acf5f3ef1fecbc17895d6" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp315-cp315-macosx_14_0_x86_64.whl", hash = "sha256:9a0731745a72a184490a582fb4af2533512bd071ace67785b5fdffc0ae58dce8" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp315-cp315-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:4ec954036759bcee3aa484f8603bd9c14f3e776293b85578b8734c2d72777c69" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp315-cp315-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:dc649493697006bc90614a5f0bbc8cb3cb1866715c474e473694968d7e6b99ab" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp315-cp315-musllinux_1_2_aarch64.whl", hash = "sha256:cf7de32f486e4ac9e2d93b810f9e9ac72a728dd46a32a0bb403222f27f653514" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp315-cp315-musllinux_1_2_x86_64.whl", hash = "sha256:2ffa7bacab3e2ee1b19ed31766bb60bb380b68c23f051e199c5cc598afd68710" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp315-cp315-win32.whl", hash = "sha256:6b588cc8f902d6bff201c19fd00c43ab8545671e3554d014e12e14139e5e8617" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp315-cp315-win_amd64.whl", hash = "sha256:07d4e89f3a9ab0a9ba24264ccdb642b3dd951b2281e8883a5481a4aa79cc31a7" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp315-cp315-win_arm64.whl", hash = "sha256:a610dc7e3c52edd39c2bc2375ff9c3fd59cb3ad00e4472d36f83bc1457145788" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp315-cp315t-macosx_10_15_x86_64.whl", hash = "sha256:40f4d451aed46a8046a1aae41c4e55fb3612273df9c502480135e1501576a34b" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp315-cp315t-macosx_11_0_arm64.whl", hash = "sha256:c081cbe16ba1ab53078e5ff29013621e33c509eedab055775d956427712c236e" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp315-cp315t-macosx_14_0_arm64.whl", hash = "sha256:0090ccdd57ec2703e9b49d0bf554767370581c1dd0a6b2bb2b2d9def317d042a" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp315-cp315t-macosx_14_0_x86_64.whl", hash = "sha256:6a9bb119fb8dd21ba30b3f0e555b7e2b081bd9883af21ec9c1c633d161cda3a8" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp315-cp315t-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:a839318485284a6fb31be4f8f2c91c8f2cb22f4543c4a8903f12b0671ffe07cc" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp315-cp315t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:ba0a474801b8dc67b66bf465548abc90e82b44d2611b5770f33008dcabffe8ec" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp315-cp315t-musllinux_1_2_aarch64.whl", hash = "sha256:0a4035ae1129ff8777f08bfbd44f1e5d8e9c049ce0c2dd78fc0d92c13e7251c0" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp315-cp315t-musllinux_1_2_x86_64.whl", hash = "sha256:77843ca236b777e67f8d6b3660ea116e499612703a0ecd7093f316201eb9d8e2" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp315-cp315t-win32.whl", hash = "sha256:7354826bc6f8f69402e9b7fe28d15fcd34feebd74f856f111585c5b0c9fb0251" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp315-cp315t-win_amd64.whl", hash = "sha256:e5651f3f87add730ee6608d915009e19c911fba0cb000c7e3ea994b7d768eb12" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/numpy/2.5.2/numpy-2.5.2-cp315-cp315t-win_arm64.whl", hash = "sha256:5f8e00be2ec6f45f4e8a41a527f68d44a7d96fee92a650e4d8b1326f77f61e6e" },
+]
+
+[[package]]
 name = "openai"
 version = "2.54.0"
 source = { registry = "http://192.168.239.230:8887/repository/mc-group-pypi/simple/" }
@@ -1614,6 +1738,96 @@ wheels = [
 ]
 
 [[package]]
+name = "rapidfuzz"
+version = "3.14.6"
+source = { registry = "http://192.168.239.230:8887/repository/mc-group-pypi/simple/" }
+sdist = { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6.tar.gz", hash = "sha256:e13a8160d017b499ec7a2fa9d0ce1ae2e7377080815785819f966fb235d4eb60" }
+wheels = [
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:b46cecf27025e7a934332ade033e6a394da8a493f19fa1d835e3b2968a4ff7da" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:1901414b135afb1a7f4b1ef940b95523b49cc5642aecf02af740f37567e98137" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp312-cp312-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:96a548979cd939b2c69358a0f5088a408524fbf7454f04bf90939fa971e64310" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp312-cp312-manylinux_2_26_ppc64le.manylinux_2_28_ppc64le.whl", hash = "sha256:b22ef7e5e2341efc6216b666491022027b984e5aef93446064742f43f3c1d926" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp312-cp312-manylinux_2_26_s390x.manylinux_2_28_s390x.whl", hash = "sha256:f0d2d95c787d812b9106cfbcb94ad37a49f59df9287e00a75eb61afc246e8759" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:0debb5f43662ea84d2f0228a0c7407ff647f9c3d13f3b692efff0cde46eebce0" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp312-cp312-manylinux_2_39_riscv64.whl", hash = "sha256:1d253e1fe44648242a0029b42ba23adf238ed2a7eb3d8ed0a03731a23f074ae0" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:e06c6050c9bf6cd72305e3e6a293918b2b92cf2a067007585a53898624902e3c" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp312-cp312-musllinux_1_2_ppc64le.whl", hash = "sha256:d85a6e9180e53cde95c95dfeb05a2ac94ead4d9d803a8fd186d2719a678b8483" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp312-cp312-musllinux_1_2_riscv64.whl", hash = "sha256:35db2670f69fa3a4eb4741055581477ff92f2cf39e7e06f43ebcb97c2192fe7c" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp312-cp312-musllinux_1_2_s390x.whl", hash = "sha256:f9d93e5424d1e4c103b57906b8beba270e680afda3ffdff7ea3bc6173b37083c" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:f9b0a501f37fb852c54469375baa25874246b3bbc8b6e21fb4cd186a32335868" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp312-cp312-win32.whl", hash = "sha256:9e974251a9833791bc557b46f975676a56c2d58946f795cd2964b095496dfdcc" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp312-cp312-win_amd64.whl", hash = "sha256:cfca36e4612208875e08611a779164b6cb8900ab8bbd3d82d4cfdfae9efbfac9" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp312-cp312-win_arm64.whl", hash = "sha256:96bbd5a1c67d135334d02fae74f1d933fdda204ea03d544a59dab6b1cbfbf565" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp313-cp313-macosx_10_13_x86_64.whl", hash = "sha256:55dc9a55924b4ecfcf4a60a701bcfae7d9daf0129c41dc16139270d75be0996c" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:bba0e9fad4dbea80227cde9cef3aaa984a934a84aec5f7505532e19838b14769" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp313-cp313-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:0b34b7ee4f4f760690d6477163aabbec05705b5dd764cb6c3a6ba95aa1fffc42" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp313-cp313-manylinux_2_26_ppc64le.manylinux_2_28_ppc64le.whl", hash = "sha256:abe92a70134c8b40790bb5c78b2a0a790686c26e83b6e99a456127ca141fe06a" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp313-cp313-manylinux_2_26_s390x.manylinux_2_28_s390x.whl", hash = "sha256:659b41570fcc6e02631ac361c47cc8db9ad26d740e4be2177df1b63005a49174" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:6bb896f89a387219c671ebc33c4a636b222010cc3c5c83884a7fc8707bf0bbf9" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp313-cp313-manylinux_2_39_riscv64.whl", hash = "sha256:11d76bb2b2cd038df708ae18f521fb3a50af477cc5a0dffce812da43a2f1beb3" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp313-cp313-musllinux_1_2_aarch64.whl", hash = "sha256:28e9ce91bd41a8203185887ef9b1541a891aa61c5c1cb2e46f1689cd4288d372" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp313-cp313-musllinux_1_2_ppc64le.whl", hash = "sha256:864658e5a10d249a2277374e800f944fe990346d70eea6f3a51b712b6dd01984" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp313-cp313-musllinux_1_2_riscv64.whl", hash = "sha256:3c2444f5cd757ded2c3ba8b1734253b801b9b2ba9ecb3ee40cd505cebbfa7341" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp313-cp313-musllinux_1_2_s390x.whl", hash = "sha256:2cc9b5dde0ac89f7856f997ef917cac8e18e9dea473e9b3090a84bd600de6a91" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:faebff9b9a287fb673f9a66465a7e03043601c9bfe5e71c3f91b3f2e7b8a37f6" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp313-cp313-win32.whl", hash = "sha256:4406b2517b85febcf9419f8fbcdfbd534872ea32608050f9562224933ca49a4c" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp313-cp313-win_amd64.whl", hash = "sha256:c69fb0e064d10c79908dcda76d7ca8ecdf8393a39acbb74dbad3f709f2c60e95" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp313-cp313-win_arm64.whl", hash = "sha256:a0c8bef04f6b1d9fdbb319576350af53151a64692d477db7d4844c220bc8e212" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp314-cp314-macosx_10_15_x86_64.whl", hash = "sha256:0f8d6718e7edacdb16455c0472e7552fd518decb91e91250c58784fd6163f54f" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:8fa7d45388dec34a86038f2a38380f4922b74b5dd8991247f629a531178db10f" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp314-cp314-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:760ee152af5e8b4d241a469f933ba2d7215248618ae19770fec7d80d9e149db6" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp314-cp314-manylinux_2_26_ppc64le.manylinux_2_28_ppc64le.whl", hash = "sha256:dbe3378db3ae0453accf6196e2ed943f43d416cfacdcb8883db105bc14a0130f" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp314-cp314-manylinux_2_26_s390x.manylinux_2_28_s390x.whl", hash = "sha256:9ddb0ddf3ee616fdc066add4ef05639c5cf59b58d83779b6023488e5435f6191" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:08bc63b88048376114d1e66cf8fa6926495d03bb873eb87854fa74cf6848a70b" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp314-cp314-manylinux_2_39_riscv64.whl", hash = "sha256:50cd6718bcda7ec5293635a9d0b3fb5906251013d3b99ca403ba9dfa8965f661" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp314-cp314-musllinux_1_2_aarch64.whl", hash = "sha256:63b0e84faec3c5706cae8ae51246ff103407d54efa32a615a548b7b67392ebcf" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp314-cp314-musllinux_1_2_ppc64le.whl", hash = "sha256:9080a730fdcf3cb8a07464c90f9cf40c1b4ffc73a8375b56a8898aba619dda30" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp314-cp314-musllinux_1_2_riscv64.whl", hash = "sha256:178557c7a50c8c8d65369ede7f3d845bf23590a951c9a368caf166b105d58cf3" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp314-cp314-musllinux_1_2_s390x.whl", hash = "sha256:44f1cddbc2010700e2d88063d0ab64183efe2578d9b52770ce1cd283dda230c5" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp314-cp314-musllinux_1_2_x86_64.whl", hash = "sha256:17081a0e904c12bb4ed49619a2bbb6528f6af00fe850e7ace22487bfd2aea455" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp314-cp314-win32.whl", hash = "sha256:9e00c8c9500aacbc0c52b66369f54533ecbdcb92e5aa87e160fc8e293000a696" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp314-cp314-win_amd64.whl", hash = "sha256:41ee893c4d7d0fb1844f6cad966540a833784b3bad2c239a0d80195d9231cef4" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp314-cp314-win_arm64.whl", hash = "sha256:10576c39fe6a49fad0bf1069371a77300ce166a3f36d2900d2d0bae08f297104" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp314-cp314t-macosx_10_15_x86_64.whl", hash = "sha256:1b0a9546a7328d3cfc2f1385501db7c4c374fb566dc1a3b22ad56092846c0134" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp314-cp314t-macosx_11_0_arm64.whl", hash = "sha256:9989280902b9c4ecf7de95fbb906e94df0d8c047290ed315c7aa1760cec9b3de" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp314-cp314t-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:fc166efa4ca2fc9cc52e43784a54cbea95fc0e03e533f8266ef66b1c04c7cb76" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp314-cp314t-manylinux_2_26_ppc64le.manylinux_2_28_ppc64le.whl", hash = "sha256:32352a3ed1aad9c097d31fd4f2eece3030169e2de3dedde7a2fadc2652b768ad" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp314-cp314t-manylinux_2_26_s390x.manylinux_2_28_s390x.whl", hash = "sha256:ecb45d616002751b58914d5b7c2e66acd39e12242be12717a1258148a1b36526" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp314-cp314t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:6f9ad513e3a3e045b60b421d5cd3887ae0a33b38fc6c6db3ea5e27c0a2e0412c" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp314-cp314t-manylinux_2_39_riscv64.whl", hash = "sha256:f35723caef8cc31b6f34209708fb172fc88bab0077c12e9b36bbb829baaf1b16" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp314-cp314t-musllinux_1_2_aarch64.whl", hash = "sha256:408b2e8e8c1ac71b57f0923cf964d6932539725e07b69e70ec66f22c4a403891" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp314-cp314t-musllinux_1_2_ppc64le.whl", hash = "sha256:5667c56fdc902fa1e12449b5c042e8b1c7e9b30040db20c396fbdb3d0a750866" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp314-cp314t-musllinux_1_2_riscv64.whl", hash = "sha256:76a122fc573df603deb5fb827df31bb5efbd0826b50bb7aeca8535a6e8c70cf9" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp314-cp314t-musllinux_1_2_s390x.whl", hash = "sha256:e221366e24709b9d41d5f9cc99053b04cfc575d429e956a82cfbc4c4e9e8860a" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:36710ff214b7a8049d26a9c81d99948026593cacb47663742c4119072b651ecd" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp314-cp314t-win32.whl", hash = "sha256:66ece6f5e2586c742fc3e0b8487e06783d27c6c24adcdcfdd7f306afbd8b5737" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp314-cp314t-win_amd64.whl", hash = "sha256:cab4a932cec02d09471e2c9f1434049ef5bfe1f6e646ff10939c222dc610ad60" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp314-cp314t-win_arm64.whl", hash = "sha256:b056ce19eaea2ea70c6a6fb387a605ca2af8979de5b9d507597e8012820ddb14" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp315-cp315-macosx_10_15_x86_64.whl", hash = "sha256:bc3d74d18543ddfbc8babe1faadb19927a7999fd0d01181cce9e721c14c36ab6" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp315-cp315-macosx_11_0_arm64.whl", hash = "sha256:aaa83b633d877a05d549d2073629134998d1b3b9dbc114873d3ff4277984979f" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp315-cp315-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:cbe6a62f71fcbca72acbf5a30e53380600369f257f951d664d81d30c0c598595" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp315-cp315-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:b82c21c30568e096ef2a9dda7d45c379e6141694e0472dac73bc4372ce13ccee" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp315-cp315-manylinux_2_39_riscv64.whl", hash = "sha256:fc950bb77105a2717d03d9f9c9e21e9ace7df2b8e864dd91edef7e32fa143be2" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp315-cp315-musllinux_1_2_aarch64.whl", hash = "sha256:c53a269bdbd71ffbc856d3db9e609478251001ee272507578fa838bc2bd421fe" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp315-cp315-musllinux_1_2_riscv64.whl", hash = "sha256:bf4fb0f19c9dfce7a908c3e309753602ce3edb83bb74e9ff997e278765bf89df" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp315-cp315-musllinux_1_2_x86_64.whl", hash = "sha256:189ce2bf14938bfa003fbbe7e6da7584ed6ebbc4c560686255dbc20e2829f470" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp315-cp315-win32.whl", hash = "sha256:7ca0f498bf771a87557e6d8b573aa6cf3daded58ae2eaeb6973618ce3e1615ad" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp315-cp315-win_amd64.whl", hash = "sha256:d4c5adb921b67dd79ffc0a14f92b9f8df3d012e66aab340b154ed87014229d93" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp315-cp315-win_arm64.whl", hash = "sha256:c9d135fb93709d707577da8a7a8ffc7283525a5b6d0ce55aa3724be5639ed65b" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp315-cp315t-macosx_10_15_x86_64.whl", hash = "sha256:dd89abd1c4b3776c3471a817216830bd275441c8344bbda5d51a3bffe1e0fbdf" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp315-cp315t-macosx_11_0_arm64.whl", hash = "sha256:eab2d4680d7f438dbb1d484b187d59a943edea9c83f792c764a0c148a417a60a" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp315-cp315t-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:8683fefdd3484d64a191b3efbc8cbe9162c3eac891fd62d0a1b70e117ffcd434" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp315-cp315t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:2bc7af3a699371a941aac86dc8a79ac92adeb3c2add2aab02230e76068a0029e" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp315-cp315t-manylinux_2_39_riscv64.whl", hash = "sha256:40c2753e2d4dc96b25f8a25adc23ab0bb6cfd8bc8125a1753ac4b037d6ff6511" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp315-cp315t-musllinux_1_2_aarch64.whl", hash = "sha256:36a37ddc729c33618d89fa221d3333b9b956dc38cf15d31301e6169d962399a3" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp315-cp315t-musllinux_1_2_riscv64.whl", hash = "sha256:635f242f4bdf05d1477fa409815bd73e5f78896773ace84997bc472ffeef685f" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp315-cp315t-musllinux_1_2_x86_64.whl", hash = "sha256:40d0cd9c82083aeb30bae8dee265ae571e6748d0d7b222ddd777f33d95a3b712" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp315-cp315t-win32.whl", hash = "sha256:15da2b258908eb38853c1a6a58a1d09d9aad9c721e03a68c8ba691cd31dff739" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp315-cp315t-win_amd64.whl", hash = "sha256:3d502769263318690d4f6638b08483979d1b88cdc7c6f087482eea935fde4031" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp315-cp315t-win_arm64.whl", hash = "sha256:07c7aa0b1e4b9999a54f9e73317d6743ff85442c8ef7b7fbbe6b190fd37d9e75" },
+]
+
+[[package]]
 name = "redis"
 version = "5.3.1"
 source = { registry = "http://192.168.239.230:8887/repository/mc-group-pypi/simple/" }
@@ -2014,6 +2228,421 @@ dependencies = [
 sdist = { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tqdm/4.70.0/tqdm-4.70.0.tar.gz", hash = "sha256:55b0b0dbd97462d06ebee91e4dac24ed4d4702be82b24f07e6c1d27e08cea220" }
 wheels = [
     { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tqdm/4.70.0/tqdm-4.70.0-py3-none-any.whl", hash = "sha256:7f585706bfddbdebf89daac705b2dfcc16890130727d3197ca62c732b4310953" },
+]
+
+[[package]]
+name = "tree-sitter"
+version = "0.25.2"
+source = { registry = "http://192.168.239.230:8887/repository/mc-group-pypi/simple/" }
+sdist = { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter/0.25.2/tree-sitter-0.25.2.tar.gz", hash = "sha256:fe43c158555da46723b28b52e058ad444195afd1db3ca7720c59a254544e9c20" }
+wheels = [
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter/0.25.2/tree_sitter-0.25.2-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:ddabfff809ffc983fc9963455ba1cecc90295803e06e140a4c83e94c1fa3d960" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter/0.25.2/tree_sitter-0.25.2-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:c0c0ab5f94938a23fe81928a21cc0fac44143133ccc4eb7eeb1b92f84748331c" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter/0.25.2/tree_sitter-0.25.2-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:dd12d80d91d4114ca097626eb82714618dcdfacd6a5e0955216c6485c350ef99" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter/0.25.2/tree_sitter-0.25.2-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:b43a9e4c89d4d0839de27cd4d6902d33396de700e9ff4c5ab7631f277a85ead9" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter/0.25.2/tree_sitter-0.25.2-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:fbb1706407c0e451c4f8cc016fec27d72d4b211fdd3173320b1ada7a6c74c3ac" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter/0.25.2/tree_sitter-0.25.2-cp312-cp312-win_amd64.whl", hash = "sha256:6d0302550bbe4620a5dc7649517c4409d74ef18558276ce758419cf09e578897" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter/0.25.2/tree_sitter-0.25.2-cp312-cp312-win_arm64.whl", hash = "sha256:0c8b6682cac77e37cfe5cf7ec388844957f48b7bd8d6321d0ca2d852994e10d5" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter/0.25.2/tree_sitter-0.25.2-cp313-cp313-macosx_10_13_x86_64.whl", hash = "sha256:0628671f0de69bb279558ef6b640bcfc97864fe0026d840f872728a86cd6b6cd" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter/0.25.2/tree_sitter-0.25.2-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:f5ddcd3e291a749b62521f71fc953f66f5fd9743973fd6dd962b092773569601" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter/0.25.2/tree_sitter-0.25.2-cp313-cp313-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:bd88fbb0f6c3a0f28f0a68d72df88e9755cf5215bae146f5a1bdc8362b772053" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter/0.25.2/tree_sitter-0.25.2-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:b878e296e63661c8e124177cc3084b041ba3f5936b43076d57c487822426f614" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter/0.25.2/tree_sitter-0.25.2-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:d77605e0d353ba3fe5627e5490f0fbfe44141bafa4478d88ef7954a61a848dae" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter/0.25.2/tree_sitter-0.25.2-cp313-cp313-win_amd64.whl", hash = "sha256:463c032bd02052d934daa5f45d183e0521ceb783c2548501cf034b0beba92c9b" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter/0.25.2/tree_sitter-0.25.2-cp313-cp313-win_arm64.whl", hash = "sha256:b3f63a1796886249bd22c559a5944d64d05d43f2be72961624278eff0dcc5cb8" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter/0.25.2/tree_sitter-0.25.2-cp314-cp314-macosx_10_13_x86_64.whl", hash = "sha256:65d3c931013ea798b502782acab986bbf47ba2c452610ab0776cf4a8ef150fc0" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter/0.25.2/tree_sitter-0.25.2-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:bda059af9d621918efb813b22fb06b3fe00c3e94079c6143fcb2c565eb44cb87" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter/0.25.2/tree_sitter-0.25.2-cp314-cp314-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:eac4e8e4c7060c75f395feec46421eb61212cb73998dbe004b7384724f3682ab" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter/0.25.2/tree_sitter-0.25.2-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:260586381b23be33b6191a07cea3d44ecbd6c01aa4c6b027a0439145fcbc3358" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter/0.25.2/tree_sitter-0.25.2-cp314-cp314-musllinux_1_2_x86_64.whl", hash = "sha256:7d2ee1acbacebe50ba0f85fff1bc05e65d877958f00880f49f9b2af38dce1af0" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter/0.25.2/tree_sitter-0.25.2-cp314-cp314-win_amd64.whl", hash = "sha256:4973b718fcadfb04e59e746abfbb0288694159c6aeecd2add59320c03368c721" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter/0.25.2/tree_sitter-0.25.2-cp314-cp314-win_arm64.whl", hash = "sha256:b8d4429954a3beb3e844e2872610d2a4800ba4eb42bb1990c6a4b1949b18459f" },
+]
+
+[[package]]
+name = "tree-sitter-bash"
+version = "0.25.1"
+source = { registry = "http://192.168.239.230:8887/repository/mc-group-pypi/simple/" }
+sdist = { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-bash/0.25.1/tree_sitter_bash-0.25.1.tar.gz", hash = "sha256:bfc0bdaa77bc1e86e3c6652e5a6e140c40c0a16b84185c2b63ad7cd809b88f14" }
+wheels = [
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-bash/0.25.1/tree_sitter_bash-0.25.1-cp310-abi3-macosx_10_9_x86_64.whl", hash = "sha256:0e6235f59e366d220dde7d830196bed597d01e853e44d8ccd1a82c5dd2500acf" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-bash/0.25.1/tree_sitter_bash-0.25.1-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:f4a34a6504c7c5b2a9b8c5c4065531dea19ca2c35026e706cf2eeeebe2c92512" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-bash/0.25.1/tree_sitter_bash-0.25.1-cp310-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:e76c4cfb20b076552406782b7f8c2a3946835993df0a44df006de54b7030c7dc" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-bash/0.25.1/tree_sitter_bash-0.25.1-cp310-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:3f484c4bb8796cde7a87ca351e6116f09653edac0eb3c6d238566359dd28b117" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-bash/0.25.1/tree_sitter_bash-0.25.1-cp310-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:5e76af6df46d958c7f5b6d5884c9743218e3902a00ccb493ec92728b1084430b" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-bash/0.25.1/tree_sitter_bash-0.25.1-cp310-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:a3332d71c7b7d5f78259b19d02d0ea111fcb82b72712ee4a93aaa5b226d3f0a8" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-bash/0.25.1/tree_sitter_bash-0.25.1-cp310-abi3-win_amd64.whl", hash = "sha256:52a6802d9218f86278aa3e8b459c3abdad67eed0fde1f9f13aca5b6c634217a6" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-bash/0.25.1/tree_sitter_bash-0.25.1-cp310-abi3-win_arm64.whl", hash = "sha256:59115057ec2bae319e8082ff29559861045002964c3431ccb0fc92aa4bc9bccb" },
+]
+
+[[package]]
+name = "tree-sitter-c"
+version = "0.24.2"
+source = { registry = "http://192.168.239.230:8887/repository/mc-group-pypi/simple/" }
+sdist = { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-c/0.24.2/tree_sitter_c-0.24.2.tar.gz", hash = "sha256:1628584df0299b5a340aa63f8e67b6c97c91517f52fa7e7a4c557e40adb330a9" }
+wheels = [
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-c/0.24.2/tree_sitter_c-0.24.2-cp310-abi3-macosx_10_9_x86_64.whl", hash = "sha256:4d4579a8b54f0a442f903d88d3304cab77cd5c2031d4015baa4f2f8e15d6dcb7" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-c/0.24.2/tree_sitter_c-0.24.2-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:97bc80a224d48215d4e6e6376bf30d114f4c317b8145ff1b02afe785d4ba7bdd" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-c/0.24.2/tree_sitter_c-0.24.2-cp310-abi3-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:5041ef67eb68ce6bc8bb0b1f8ef3a5585ce523dae0c7eec109ab0627dd75aede" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-c/0.24.2/tree_sitter_c-0.24.2-cp310-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:c098bedcd5ac86ff93fa734d51d1dd86aed40fd5ed7d634c7af11380a0469969" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-c/0.24.2/tree_sitter_c-0.24.2-cp310-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:82842c5a5f2acd93f4de10038c33ac179c8979defc39376f990348d6289e933b" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-c/0.24.2/tree_sitter_c-0.24.2-cp310-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:e2b42e8e22202c251f8629306f9321233542e07a6e01611b5fe83489272143eb" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-c/0.24.2/tree_sitter_c-0.24.2-cp310-abi3-win_amd64.whl", hash = "sha256:abb549225091f7b25df2dd3a0143ece6e208f7055d8bcb4700b41ee79b9ef1e1" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-c/0.24.2/tree_sitter_c-0.24.2-cp310-abi3-win_arm64.whl", hash = "sha256:4a2f4371cd816cc3153458f69062135ebb2ea5f275ddd90494e5c823d778204a" },
+]
+
+[[package]]
+name = "tree-sitter-c-sharp"
+version = "0.23.5"
+source = { registry = "http://192.168.239.230:8887/repository/mc-group-pypi/simple/" }
+sdist = { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-c-sharp/0.23.5/tree_sitter_c_sharp-0.23.5.tar.gz", hash = "sha256:2635c7d5ec93e59f2e831b571bed99c4cc68a5d183a0994020aa769e1b990a71" }
+wheels = [
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-c-sharp/0.23.5/tree_sitter_c_sharp-0.23.5-cp310-abi3-macosx_10_9_x86_64.whl", hash = "sha256:61e1981cf21b09ee547b9c4c68e64fb4394325f8fc8d5f6d50d41471eba923ea" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-c-sharp/0.23.5/tree_sitter_c_sharp-0.23.5-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:a75994a11f6fed3f5b8c36ad6a00e5dc43205bd912c43af3a2a54fdf649664eb" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-c-sharp/0.23.5/tree_sitter_c_sharp-0.23.5-cp310-abi3-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:aa88a780204cd153c4c1ae2d59c654cee1402212fa0d069823d6d34301587438" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-c-sharp/0.23.5/tree_sitter_c_sharp-0.23.5-cp310-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:3ea38fb095d85d360dc5a0bec2fa605e496228876f798c9e089d5f0e72bcef46" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-c-sharp/0.23.5/tree_sitter_c_sharp-0.23.5-cp310-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:05a9256415e7f24d4f133133794a9c224c60d19f677a04e2f6a94c25090b6d65" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-c-sharp/0.23.5/tree_sitter_c_sharp-0.23.5-cp310-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:8636dc70b5a373c35c1036ed5de98e801f2e4d105ae41e2e20b6804c36e3bf33" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-c-sharp/0.23.5/tree_sitter_c_sharp-0.23.5-cp310-abi3-win_amd64.whl", hash = "sha256:41a28cfa3d9ea50f5629e44550a03188c8fbd5079803dfc03554b6fd594b33fa" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-c-sharp/0.23.5/tree_sitter_c_sharp-0.23.5-cp310-abi3-win_arm64.whl", hash = "sha256:2de4ebf95ddc2e92cd3105c8a8e0e7ec646bc82f52bfaf2f3acec0fa2401ec09" },
+]
+
+[[package]]
+name = "tree-sitter-cpp"
+version = "0.23.4"
+source = { registry = "http://192.168.239.230:8887/repository/mc-group-pypi/simple/" }
+sdist = { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-cpp/0.23.4/tree_sitter_cpp-0.23.4.tar.gz", hash = "sha256:6a59c4cebb1ad1dc2e8d586cf8a72b39d21b8108b7b139d089719e81a339e41d" }
+wheels = [
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-cpp/0.23.4/tree_sitter_cpp-0.23.4-cp39-abi3-macosx_10_9_x86_64.whl", hash = "sha256:aacb1759f0efd9dbc25bd8ee88184a340483018869f75412d9c3bc32c039a520" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-cpp/0.23.4/tree_sitter_cpp-0.23.4-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:bc3c404d9f0cbd87951213a85440afbf4c31e718f8d907fa9ee12bea4b8d276f" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-cpp/0.23.4/tree_sitter_cpp-0.23.4-cp39-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:ccc43ddf1279d5d5a4ef190373f4cb16522801bec4492bcd4754edf2aeba2b7b" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-cpp/0.23.4/tree_sitter_cpp-0.23.4-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:773d2cafc08bbc0f998687fa33f42f378c1a371cdb582870c4d13abb06092706" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-cpp/0.23.4/tree_sitter_cpp-0.23.4-cp39-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:247d127f0eb6574b0f6b30c0151e0bd0774e2e7acf9c558bdf9fbb8adc2e80c0" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-cpp/0.23.4/tree_sitter_cpp-0.23.4-cp39-abi3-win_amd64.whl", hash = "sha256:68606a45bea92669d155399e1239f771a7767d8683cd8f8e30e7d813107030ca" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-cpp/0.23.4/tree_sitter_cpp-0.23.4-cp39-abi3-win_arm64.whl", hash = "sha256:712f84f18be94cbe2a148fa4fdf40fcf4a8c25a8f7670efb9f8a47ddec2fc281" },
+]
+
+[[package]]
+name = "tree-sitter-elixir"
+version = "0.3.5"
+source = { registry = "http://192.168.239.230:8887/repository/mc-group-pypi/simple/" }
+sdist = { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-elixir/0.3.5/tree_sitter_elixir-0.3.5.tar.gz", hash = "sha256:ead089393b1ce732304e6b6fb0bc0ab79e3295663d697be025bd49f0f367b74d" }
+wheels = [
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-elixir/0.3.5/tree_sitter_elixir-0.3.5-cp39-abi3-macosx_10_9_x86_64.whl", hash = "sha256:514078a2f68d27da9a1e6b6e9601b8456faba6260ecfa252e898a848c4f8584d" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-elixir/0.3.5/tree_sitter_elixir-0.3.5-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:015f537731af690cfa238b0fb76a8af4f0d1a2c54a38563f159926d2967ce650" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-elixir/0.3.5/tree_sitter_elixir-0.3.5-cp39-abi3-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:ebfe3491a3d00ac50b12a3bfcabb1c564f3809ed8a095099fe87f49d6b3987e6" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-elixir/0.3.5/tree_sitter_elixir-0.3.5-cp39-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:d1159057f914d4468fc53cb9d7e8369f8a7826e1d07765bb53fbf391e6058863" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-elixir/0.3.5/tree_sitter_elixir-0.3.5-cp39-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:d6187b4d592bfb31760799ac6ddbb5a2457ba0a612de43d77bcbcd5f00cc49bf" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-elixir/0.3.5/tree_sitter_elixir-0.3.5-cp39-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:b5d5d8aa077ff244d24406b1fb5a17c03a2919c5183c51ca35654870d08b239b" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-elixir/0.3.5/tree_sitter_elixir-0.3.5-cp39-abi3-win_amd64.whl", hash = "sha256:c0b5df229405d42ba5c94254d92e414b1f200be8422561d243ae5b3558e84f76" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-elixir/0.3.5/tree_sitter_elixir-0.3.5-cp39-abi3-win_arm64.whl", hash = "sha256:fee42b90962e1e131cc31720f3038410291b2196ed231e00c1721597fc0567df" },
+]
+
+[[package]]
+name = "tree-sitter-fortran"
+version = "0.6.0"
+source = { registry = "http://192.168.239.230:8887/repository/mc-group-pypi/simple/" }
+sdist = { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-fortran/0.6.0/tree_sitter_fortran-0.6.0.tar.gz", hash = "sha256:65fea540148ae431335b3920267dffaeeb157ef2b21c0716798c751f6a9e193b" }
+wheels = [
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-fortran/0.6.0/tree_sitter_fortran-0.6.0-cp39-abi3-macosx_10_9_x86_64.whl", hash = "sha256:b6495c4c25cf68785ffd30e615b5481219415761ca66dde14a9577d03075714d" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-fortran/0.6.0/tree_sitter_fortran-0.6.0-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:a0fe5929fd91d245aba5a3b414399a296fb9924942a549190cee226e5b1ec96c" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-fortran/0.6.0/tree_sitter_fortran-0.6.0-cp39-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:1fd7b179305db93ffe8435ee42f6895e76677744721707b3f2f328a92dd4f61e" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-fortran/0.6.0/tree_sitter_fortran-0.6.0-cp39-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:ac4800b4abc1b25e6e7ab4a3f2eae274c5b19107beb18d3a473c0f67509c7486" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-fortran/0.6.0/tree_sitter_fortran-0.6.0-cp39-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:9f9ba6ca864d39f5df2787ed58222ee25570c47c659df0d7b5753a8c4dc3e29d" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-fortran/0.6.0/tree_sitter_fortran-0.6.0-cp39-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:9348398630d6d7e5e3588a14517f889fc0315c33b059e004d0468000db2a7206" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-fortran/0.6.0/tree_sitter_fortran-0.6.0-cp39-abi3-win_amd64.whl", hash = "sha256:cccd5bce1cdebcf34d3a130ecf4944bc409ddc93096317e3249838ffdaf927eb" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-fortran/0.6.0/tree_sitter_fortran-0.6.0-cp39-abi3-win_arm64.whl", hash = "sha256:45b0e226325e626101949d6aafcf0422fc210c3cf3ae9b9a2281b41f47d9cc20" },
+]
+
+[[package]]
+name = "tree-sitter-go"
+version = "0.25.0"
+source = { registry = "http://192.168.239.230:8887/repository/mc-group-pypi/simple/" }
+sdist = { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-go/0.25.0/tree_sitter_go-0.25.0.tar.gz", hash = "sha256:a7466e9b8d94dda94cae8d91629f26edb2d26166fd454d4831c3bf6dfa2e8d68" }
+wheels = [
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-go/0.25.0/tree_sitter_go-0.25.0-cp310-abi3-macosx_10_9_x86_64.whl", hash = "sha256:b852993063a3429a443e7bd0aa376dd7dd329d595819fabf56ac4cf9d7257b54" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-go/0.25.0/tree_sitter_go-0.25.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:503b81a2b4c31e302869a1de3a352ad0912ccab3df9ac9950197b0a9ceeabd8f" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-go/0.25.0/tree_sitter_go-0.25.0-cp310-abi3-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:04b3b3cb4aff18e74e28d49b716c6f24cb71ddfdd66768987e26e4d0fa812f74" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-go/0.25.0/tree_sitter_go-0.25.0-cp310-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:148255aca2f54b90d48c48a9dbb4c7faad6cad310a980b2c5a5a9822057ed145" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-go/0.25.0/tree_sitter_go-0.25.0-cp310-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:4d338116cdf8a6c6ff990d2441929b41323ef17c710407abe0993c13417d6aad" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-go/0.25.0/tree_sitter_go-0.25.0-cp310-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:5608e089d2a29fa8d2b327abeb2ad1cdb8e223c440a6b0ceab0d3fa80bdeebae" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-go/0.25.0/tree_sitter_go-0.25.0-cp310-abi3-win_amd64.whl", hash = "sha256:30d4ada57a223dfc2c32d942f44d284d40f3d1215ddcf108f96807fd36d53022" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-go/0.25.0/tree_sitter_go-0.25.0-cp310-abi3-win_arm64.whl", hash = "sha256:d5d62362059bf79997340773d47cc7e7e002883b527a05cca829c46e40b70ded" },
+]
+
+[[package]]
+name = "tree-sitter-groovy"
+version = "0.1.2"
+source = { registry = "http://192.168.239.230:8887/repository/mc-group-pypi/simple/" }
+sdist = { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-groovy/0.1.2/tree_sitter_groovy-0.1.2.tar.gz", hash = "sha256:49b004c4ae946d3f01a602f325cd8996423e034e5b3ad36fc34a1d1e42afa8da" }
+wheels = [
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-groovy/0.1.2/tree_sitter_groovy-0.1.2-cp39-abi3-macosx_10_9_x86_64.whl", hash = "sha256:27adb7a4077511782dbd94a12f4635dfb52ccb88f734fe1569393e2d28b18bbd" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-groovy/0.1.2/tree_sitter_groovy-0.1.2-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:db35a5bdceb826382c7f52d33db0b2075217473f698daf77eb8d4e557a161d51" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-groovy/0.1.2/tree_sitter_groovy-0.1.2-cp39-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:4cdb4c62284f19fbfdd4900e816c3e8604672de107e4e52a8e65b663f368b4cb" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-groovy/0.1.2/tree_sitter_groovy-0.1.2-cp39-abi3-manylinux_2_5_x86_64.manylinux1_x86_64.manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:9e938e9c2cd5fdb08fd1b28d7d621d15ea959a17a4bc0b77833e07a94fe7d263" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-groovy/0.1.2/tree_sitter_groovy-0.1.2-cp39-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:beda8f7b0c596e20cabc75fc076a3e6e9af8318e30c1869df6a036183a8cdd33" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-groovy/0.1.2/tree_sitter_groovy-0.1.2-cp39-abi3-win_amd64.whl", hash = "sha256:bb8b20e2c92a18509ad3b830aeba9f5754778903e7dfd6999c3efb3c79c43d76" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-groovy/0.1.2/tree_sitter_groovy-0.1.2-cp39-abi3-win_arm64.whl", hash = "sha256:1942a9a1b22e154da9bbf1b03e6b4dbec4211b1109d24bcf4c12b006cbc04037" },
+]
+
+[[package]]
+name = "tree-sitter-java"
+version = "0.23.5"
+source = { registry = "http://192.168.239.230:8887/repository/mc-group-pypi/simple/" }
+sdist = { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-java/0.23.5/tree_sitter_java-0.23.5.tar.gz", hash = "sha256:f5cd57b8f1270a7f0438878750d02ccc79421d45cca65ff284f1527e9ef02e38" }
+wheels = [
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-java/0.23.5/tree_sitter_java-0.23.5-cp39-abi3-macosx_10_9_x86_64.whl", hash = "sha256:355ce0308672d6f7013ec913dee4a0613666f4cda9044a7824240d17f38209df" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-java/0.23.5/tree_sitter_java-0.23.5-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:24acd59c4720dedad80d548fe4237e43ef2b7a4e94c8549b0ca6e4c4d7bf6e69" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-java/0.23.5/tree_sitter_java-0.23.5-cp39-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:9401e7271f0b333df39fc8a8336a0caf1b891d9a2b89ddee99fae66b794fc5b7" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-java/0.23.5/tree_sitter_java-0.23.5-cp39-abi3-manylinux_2_5_x86_64.manylinux1_x86_64.manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:370b204b9500b847f6d0c5ad584045831cee69e9a3e4d878535d39e4a7e4c4f1" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-java/0.23.5/tree_sitter_java-0.23.5-cp39-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:aae84449e330363b55b14a2af0585e4e0dae75eb64ea509b7e5b0e1de536846a" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-java/0.23.5/tree_sitter_java-0.23.5-cp39-abi3-win_amd64.whl", hash = "sha256:1ee45e790f8d31d416bc84a09dac2e2c6bc343e89b8a2e1d550513498eedfde7" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-java/0.23.5/tree_sitter_java-0.23.5-cp39-abi3-win_arm64.whl", hash = "sha256:402efe136104c5603b429dc26c7e75ae14faaca54cfd319ecc41c8f2534750f4" },
+]
+
+[[package]]
+name = "tree-sitter-javascript"
+version = "0.25.0"
+source = { registry = "http://192.168.239.230:8887/repository/mc-group-pypi/simple/" }
+sdist = { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-javascript/0.25.0/tree_sitter_javascript-0.25.0.tar.gz", hash = "sha256:329b5414874f0588a98f1c291f1b28138286617aa907746ffe55adfdcf963f38" }
+wheels = [
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-javascript/0.25.0/tree_sitter_javascript-0.25.0-cp310-abi3-macosx_10_9_x86_64.whl", hash = "sha256:b70f887fb269d6e58c349d683f59fa647140c410cfe2bee44a883b20ec92e3dc" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-javascript/0.25.0/tree_sitter_javascript-0.25.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:8264a996b8845cfce06965152a013b5d9cbb7d199bc3503e12b5682e62bb1de1" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-javascript/0.25.0/tree_sitter_javascript-0.25.0-cp310-abi3-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:9dc04ba91fc8583344e57c1f1ed5b2c97ecaaf47480011b92fbeab8dda96db75" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-javascript/0.25.0/tree_sitter_javascript-0.25.0-cp310-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:199d09985190852e0912da2b8d26c932159be314bc04952cf917ed0e4c633e6b" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-javascript/0.25.0/tree_sitter_javascript-0.25.0-cp310-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:dfcf789064c58dc13c0a4edb550acacfc6f0f280577f1e7a00de3e89fc7f8ddc" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-javascript/0.25.0/tree_sitter_javascript-0.25.0-cp310-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:1b852d3aee8a36186dbcc32c798b11b4869f9b5041743b63b65c2ef793db7a54" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-javascript/0.25.0/tree_sitter_javascript-0.25.0-cp310-abi3-win_amd64.whl", hash = "sha256:e5ed840f5bd4a3f0272e441d19429b26eedc257abe5574c8546da6b556865e3c" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-javascript/0.25.0/tree_sitter_javascript-0.25.0-cp310-abi3-win_arm64.whl", hash = "sha256:622a69d677aa7f6ee2931d8c77c981a33f0ebb6d275aa9d43d3397c879a9bb0b" },
+]
+
+[[package]]
+name = "tree-sitter-json"
+version = "0.24.8"
+source = { registry = "http://192.168.239.230:8887/repository/mc-group-pypi/simple/" }
+sdist = { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-json/0.24.8/tree_sitter_json-0.24.8.tar.gz", hash = "sha256:ca8486e52e2d261819311d35cf98656123d59008c3b7dcf91e61d2c0c6f3120e" }
+wheels = [
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-json/0.24.8/tree_sitter_json-0.24.8-cp39-abi3-macosx_10_9_x86_64.whl", hash = "sha256:59ac06c6db1877d0e2076bce54a5fddcdd2fc38ca778905662e80fa9ffcea2ab" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-json/0.24.8/tree_sitter_json-0.24.8-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:62b4c45b561db31436a81a3f037f71ec29049f4fc9bf5269b6ec3ebaaa35a1cd" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-json/0.24.8/tree_sitter_json-0.24.8-cp39-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:f8627f7d375fda9fc193ebee368c453f374f65c2f25c58b6fea4e6b49a7fccbc" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-json/0.24.8/tree_sitter_json-0.24.8-cp39-abi3-manylinux_2_5_x86_64.manylinux1_x86_64.manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:85cca779872f7278f3a74eb38533d34b9c4de4fd548615e3361fa64fe350ad0a" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-json/0.24.8/tree_sitter_json-0.24.8-cp39-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:deeb45850dcc52990fbb52c80196492a099e3fa3512d928a390a91cf061068cc" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-json/0.24.8/tree_sitter_json-0.24.8-cp39-abi3-win_amd64.whl", hash = "sha256:e4849a03cd7197267b2688a4506a90a13568a8e0e8588080bd0212fcb38974e3" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-json/0.24.8/tree_sitter_json-0.24.8-cp39-abi3-win_arm64.whl", hash = "sha256:591e0096c882d12668b88f30d3ca6f85b9db3406910eaaab6afb6b17d65367dd" },
+]
+
+[[package]]
+name = "tree-sitter-julia"
+version = "0.23.1"
+source = { registry = "http://192.168.239.230:8887/repository/mc-group-pypi/simple/" }
+sdist = { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-julia/0.23.1/tree_sitter_julia-0.23.1.tar.gz", hash = "sha256:07607c4fc902b21e6821622f56b08aa2321b921fe0644e2ab4aba1747e6c8808" }
+wheels = [
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-julia/0.23.1/tree_sitter_julia-0.23.1-cp39-abi3-macosx_10_9_x86_64.whl", hash = "sha256:4bd4d8e76ab780a2de9af90cefada494cb174991d74993b6a243f28081e9432b" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-julia/0.23.1/tree_sitter_julia-0.23.1-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:8197c8d9b0cb51421aa2832f3fb539504d7b514cbb1fc79130bb1445c0b4a457" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-julia/0.23.1/tree_sitter_julia-0.23.1-cp39-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:7708a4a01831dd7cb7e6ee25146e654a0bf89077e85ffe8b5025b63a302af145" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-julia/0.23.1/tree_sitter_julia-0.23.1-cp39-abi3-manylinux_2_5_x86_64.manylinux1_x86_64.manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:7d4f6ae938198fc0be9b6ea76313ade24fcdb89be01a791e0cc90c88fae5743d" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-julia/0.23.1/tree_sitter_julia-0.23.1-cp39-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:a8aa8e959e73158632687423f4c6c61aa52dea65a451220e3e0223b67149a046" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-julia/0.23.1/tree_sitter_julia-0.23.1-cp39-abi3-win_amd64.whl", hash = "sha256:13031aa4c9ac7d0665aa3ecd9fbc6f9c6afd601c68f6ae67a8eeaca01465aeed" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-julia/0.23.1/tree_sitter_julia-0.23.1-cp39-abi3-win_arm64.whl", hash = "sha256:673ad3079f2328c28affbee5dbedb63c7e6dab248579aabdb813bc7b862a0261" },
+]
+
+[[package]]
+name = "tree-sitter-kotlin"
+version = "1.1.0"
+source = { registry = "http://192.168.239.230:8887/repository/mc-group-pypi/simple/" }
+sdist = { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-kotlin/1.1.0/tree_sitter_kotlin-1.1.0.tar.gz", hash = "sha256:322a35bdae75e25ae64dae6027be609c5422fab282084117816c4ebcda6168da" }
+wheels = [
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-kotlin/1.1.0/tree_sitter_kotlin-1.1.0-cp39-abi3-macosx_10_9_x86_64.whl", hash = "sha256:6cca5ef06d090e8494ac1d9f0aac71ed32207d412766b5df7da00d94334181a2" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-kotlin/1.1.0/tree_sitter_kotlin-1.1.0-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:910b41a580dae00d319e555075f3886a41386d1067931b14c7de504eeae3ae2a" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-kotlin/1.1.0/tree_sitter_kotlin-1.1.0-cp39-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:906e5444ebb01db439cb3ad65913598a4ea957b0e068aa973265926a17eb00e0" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-kotlin/1.1.0/tree_sitter_kotlin-1.1.0-cp39-abi3-manylinux_2_5_x86_64.manylinux1_x86_64.manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:9a92afe24b634cf914c5812af0f5c53184b1c18bdf6ee5505c83afac81f6bf6c" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-kotlin/1.1.0/tree_sitter_kotlin-1.1.0-cp39-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:5960034a5c5bcc7ccb21dc7a29e4267ac4f0ef37884f39d75695eac7f004deff" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-kotlin/1.1.0/tree_sitter_kotlin-1.1.0-cp39-abi3-win_amd64.whl", hash = "sha256:d4d3f330f515ba8b91da04a5335eb9ff3ce071c7b7855958912f2560f6e14976" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-kotlin/1.1.0/tree_sitter_kotlin-1.1.0-cp39-abi3-win_arm64.whl", hash = "sha256:e030f127a7d07952907adb9070248bd42fb86dc76fd92744727551b50e131ee7" },
+]
+
+[[package]]
+name = "tree-sitter-lua"
+version = "0.5.0"
+source = { registry = "http://192.168.239.230:8887/repository/mc-group-pypi/simple/" }
+sdist = { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-lua/0.5.0/tree_sitter_lua-0.5.0.tar.gz", hash = "sha256:0e46356038ccb8ce1049289104c56230003448309a335f2e353f1edc7b373552" }
+wheels = [
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-lua/0.5.0/tree_sitter_lua-0.5.0-cp310-abi3-macosx_10_9_x86_64.whl", hash = "sha256:cc4f2eb734dc9223bf96c0eeffa78a9485db207d00841e27e52c8b036f2164f7" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-lua/0.5.0/tree_sitter_lua-0.5.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:c14714ad395c4166566f3e4dd0cc0979411684cbcd23702e3c631c3e6eae84fd" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-lua/0.5.0/tree_sitter_lua-0.5.0-cp310-abi3-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:5ec448c854fea32414a0449147d648bc5baddf7a0357008c4abe3269db35370a" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-lua/0.5.0/tree_sitter_lua-0.5.0-cp310-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:b02f057a997e618c5b1b03a5cef9dd6c2673043d396ca86edba372728f17ef53" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-lua/0.5.0/tree_sitter_lua-0.5.0-cp310-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:9a048571f55a3dd30c94e2313091274338284cab23e757c181e4961c185ba9d0" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-lua/0.5.0/tree_sitter_lua-0.5.0-cp310-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:922a5a3d0fec8af373cab504cbcd9abeeebb212d454f54163591c50c183466be" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-lua/0.5.0/tree_sitter_lua-0.5.0-cp310-abi3-win_amd64.whl", hash = "sha256:ace3dd61218124ee08410a55601cb5fbbb00be3ee004b30e705cef9ef25165a9" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-lua/0.5.0/tree_sitter_lua-0.5.0-cp310-abi3-win_arm64.whl", hash = "sha256:8488f3bea40779896f5771bcfcdc26900eb21e94f6658eb68a848fc37dd39221" },
+]
+
+[[package]]
+name = "tree-sitter-objc"
+version = "3.0.2"
+source = { registry = "http://192.168.239.230:8887/repository/mc-group-pypi/simple/" }
+sdist = { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-objc/3.0.2/tree_sitter_objc-3.0.2.tar.gz", hash = "sha256:ac55aefe8a4f3ea6f1da2a2e05372a4f37100001934e36a81e0f96c4c6252809" }
+wheels = [
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-objc/3.0.2/tree_sitter_objc-3.0.2-cp39-abi3-macosx_10_9_x86_64.whl", hash = "sha256:bd25b3c4ca99263c0898aa7a362a1b8d9bb642692ae9ddd357755586019b1544" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-objc/3.0.2/tree_sitter_objc-3.0.2-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:9fa8b1221d2651a51cf42e1551c0804e9f48707da70f41f3195910c599b5522b" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-objc/3.0.2/tree_sitter_objc-3.0.2-cp39-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:30b6f9cd49593bac50161a6de6e1b8d591b318d64b33b8bde5385faa05461084" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-objc/3.0.2/tree_sitter_objc-3.0.2-cp39-abi3-manylinux_2_5_x86_64.manylinux1_x86_64.manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:e71282ac9c096a966bf2fa6a4ecdbea4bd037d3e01ea4aa9bbc64d9a4c0022f6" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-objc/3.0.2/tree_sitter_objc-3.0.2-cp39-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:d288d5ad4951fa31eeaf39972b39b41694eec8cc70739d48e745357c2e2c4aad" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-objc/3.0.2/tree_sitter_objc-3.0.2-cp39-abi3-win_amd64.whl", hash = "sha256:f3c93e991a86e96b8996cc735a4b31b38c65820913bf5a96904d07a51a8d9423" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-objc/3.0.2/tree_sitter_objc-3.0.2-cp39-abi3-win_arm64.whl", hash = "sha256:9a99d9b81a4e507bd33329be136928b3ebe424ce8b9d6b8a8339083ceb453b5b" },
+]
+
+[[package]]
+name = "tree-sitter-php"
+version = "0.24.1"
+source = { registry = "http://192.168.239.230:8887/repository/mc-group-pypi/simple/" }
+wheels = [
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-php/0.24.1/tree_sitter_php-0.24.1-cp310-abi3-macosx_10_9_x86_64.whl", hash = "sha256:d56e2dcf025450f84a2cdbf4b18a09e6cb88b92e9e6858e63de3d4133ab2e43e" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-php/0.24.1/tree_sitter_php-0.24.1-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:29759c67d4c27a68c227ed82c0b7e4699617b1bd23757d50c081f81a12b4f80d" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-php/0.24.1/tree_sitter_php-0.24.1-cp310-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:94b89832ac09f078eed2acd88598838bc51012224cbcebb916dbb6a37e74357e" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-php/0.24.1/tree_sitter_php-0.24.1-cp310-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:7a1404a30f2972498ace040b0029738b8dac45d0a12932ccb8b605eb94bafbe4" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-php/0.24.1/tree_sitter_php-0.24.1-cp310-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:3e96f61462a960c78e5389c7ba6c16c25e66b465c763b8e63ad66423326c2fa7" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-php/0.24.1/tree_sitter_php-0.24.1-cp310-abi3-win_amd64.whl", hash = "sha256:1a1b65b72a8410d421f914ee13d38fd546a94d01cb834f69b27c78ba7589a5b5" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-php/0.24.1/tree_sitter_php-0.24.1-cp310-abi3-win_arm64.whl", hash = "sha256:56a70c5ef1bddb15f220a479b2f2edf3042c764b6c443921fbd7ca9174d664e3" },
+]
+
+[[package]]
+name = "tree-sitter-powershell"
+version = "0.26.4"
+source = { registry = "http://192.168.239.230:8887/repository/mc-group-pypi/simple/" }
+sdist = { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-powershell/0.26.4/tree_sitter_powershell-0.26.4.tar.gz", hash = "sha256:ffc7f7526420fe335cb78823b38bc8b0c27453eb974ca6056779e4cfefffa605" }
+wheels = [
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-powershell/0.26.4/tree_sitter_powershell-0.26.4-cp310-abi3-macosx_10_9_x86_64.whl", hash = "sha256:0bf8beac7ed4501d1c52456f8ae9728ab2a5a079325548b06b1bc9746655524e" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-powershell/0.26.4/tree_sitter_powershell-0.26.4-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:b5dde429c9de55b75906e240d6db1cf85417e2fc0a56d7b321810c2cd4cf3f98" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-powershell/0.26.4/tree_sitter_powershell-0.26.4-cp310-abi3-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:56508e4ac7aad1e3b26f2ef96b8d2b60b149c4efa0c23742e91e809a11db73ee" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-powershell/0.26.4/tree_sitter_powershell-0.26.4-cp310-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:c0989b221ce6cc1dfe3bc9993d3ca1ee96f3ca62173423b9a332a61c5afa3c12" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-powershell/0.26.4/tree_sitter_powershell-0.26.4-cp310-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:1170665958ed29abe015ad294408f15b1f76e5d52e0b96e7718ffbf340b9670c" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-powershell/0.26.4/tree_sitter_powershell-0.26.4-cp310-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:b2222e192edba88930b89ed5e5da66c75ea21a064768a10261c5bb01e1348de8" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-powershell/0.26.4/tree_sitter_powershell-0.26.4-cp310-abi3-win_amd64.whl", hash = "sha256:702eadf70ec8b1fd0bbf9b4169ed58f0ee0bcab333e5103e97c0f562be299088" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-powershell/0.26.4/tree_sitter_powershell-0.26.4-cp310-abi3-win_arm64.whl", hash = "sha256:5651d240387d5b9cd23ae20afdd8aad17934304a1a21d4e7825e4df38e39dda6" },
+]
+
+[[package]]
+name = "tree-sitter-python"
+version = "0.25.0"
+source = { registry = "http://192.168.239.230:8887/repository/mc-group-pypi/simple/" }
+sdist = { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-python/0.25.0/tree_sitter_python-0.25.0.tar.gz", hash = "sha256:b13e090f725f5b9c86aa455a268553c65cadf325471ad5b65cd29cac8a1a68ac" }
+wheels = [
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-python/0.25.0/tree_sitter_python-0.25.0-cp310-abi3-macosx_10_9_x86_64.whl", hash = "sha256:14a79a47ddef72f987d5a2c122d148a812169d7484ff5c75a3db9609d419f361" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-python/0.25.0/tree_sitter_python-0.25.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:480c21dbd995b7fe44813e741d71fed10ba695e7caab627fb034e3828469d762" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-python/0.25.0/tree_sitter_python-0.25.0-cp310-abi3-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:86f118e5eecad616ecdb81d171a36dde9bef5a0b21ed71ea9c3e390813c3baf5" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-python/0.25.0/tree_sitter_python-0.25.0-cp310-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:be71650ca2b93b6e9649e5d65c6811aad87a7614c8c1003246b303f6b150f61b" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-python/0.25.0/tree_sitter_python-0.25.0-cp310-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:e6d5b5799628cc0f24691ab2a172a8e676f668fe90dc60468bee14084a35c16d" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-python/0.25.0/tree_sitter_python-0.25.0-cp310-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:71959832fc5d9642e52c11f2f7d79ae520b461e63334927e93ca46cd61cd9683" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-python/0.25.0/tree_sitter_python-0.25.0-cp310-abi3-win_amd64.whl", hash = "sha256:9bcde33f18792de54ee579b00e1b4fe186b7926825444766f849bf7181793a76" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-python/0.25.0/tree_sitter_python-0.25.0-cp310-abi3-win_arm64.whl", hash = "sha256:0fbf6a3774ad7e89ee891851204c2e2c47e12b63a5edbe2e9156997731c128bb" },
+]
+
+[[package]]
+name = "tree-sitter-ruby"
+version = "0.23.1"
+source = { registry = "http://192.168.239.230:8887/repository/mc-group-pypi/simple/" }
+sdist = { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-ruby/0.23.1/tree_sitter_ruby-0.23.1.tar.gz", hash = "sha256:886ed200bfd1f3ca7628bf1c9fefd42421bbdba70c627363abda67f662caa21e" }
+wheels = [
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-ruby/0.23.1/tree_sitter_ruby-0.23.1-cp39-abi3-macosx_10_9_x86_64.whl", hash = "sha256:39f391322d2210843f07081182dbf00f8f69cfbfa4687b9575cac6d324bae443" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-ruby/0.23.1/tree_sitter_ruby-0.23.1-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:aa4ee7433bd42fac22e2dad4a3c0f332292ecf482e610316828c711a0bb7f794" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-ruby/0.23.1/tree_sitter_ruby-0.23.1-cp39-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:62b36813a56006b7569db7868f6b762caa3f4e419bd0f8cf9ccbb4abb1b6254c" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-ruby/0.23.1/tree_sitter_ruby-0.23.1-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:f7bcd93972b4ca2803856d4fe0fbd04123ff29c4592bbb9f12a27528bd252341" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-ruby/0.23.1/tree_sitter_ruby-0.23.1-cp39-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:66c65d6c2a629783ca4ab2bab539bd6f271ce6f77cacb62845831e11665b5bd3" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-ruby/0.23.1/tree_sitter_ruby-0.23.1-cp39-abi3-win_amd64.whl", hash = "sha256:02e2c19ebefe29226c14aa63e11e291d990f5b5c20a99940ab6e7eda44e744e5" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-ruby/0.23.1/tree_sitter_ruby-0.23.1-cp39-abi3-win_arm64.whl", hash = "sha256:ed042007e89f2cceeb1cbdd8b0caa68af1e2ce54c7eb2053ace760f90657ac9f" },
+]
+
+[[package]]
+name = "tree-sitter-rust"
+version = "0.24.2"
+source = { registry = "http://192.168.239.230:8887/repository/mc-group-pypi/simple/" }
+sdist = { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-rust/0.24.2/tree_sitter_rust-0.24.2.tar.gz", hash = "sha256:54fb02a5911e345308b405174465112479f56dc39e3f1e7744d7568595f00db9" }
+wheels = [
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-rust/0.24.2/tree_sitter_rust-0.24.2-cp39-abi3-macosx_10_9_x86_64.whl", hash = "sha256:3620cfd12340efa43082d45df76349ff511893a9c361da2f8d6d51e307020a59" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-rust/0.24.2/tree_sitter_rust-0.24.2-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:01a46622735498493f29f3e628a90de95c96a07bfbeb88996243eb986b1cee36" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-rust/0.24.2/tree_sitter_rust-0.24.2-cp39-abi3-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:e033c5a93b57c88e0a835880de39fc802909ff69f57aaff6000211c196ea5190" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-rust/0.24.2/tree_sitter_rust-0.24.2-cp39-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:9d76d1208c3638b871236090759dfc13d478921320653a6c9da5336e7c58f65a" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-rust/0.24.2/tree_sitter_rust-0.24.2-cp39-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:87930163a462408c49ab62c667e74029bc26b4cc7123dd1bdc7352215786c64a" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-rust/0.24.2/tree_sitter_rust-0.24.2-cp39-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:da2b86099028fd42c6cd32878b7b16b01f8aac0f7b0e98742b7fa6bc3cf09b89" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-rust/0.24.2/tree_sitter_rust-0.24.2-cp39-abi3-win_amd64.whl", hash = "sha256:4529c125d928882ddfb879fdc6bc0704913261ecc078b6fa7902559e0daf200d" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-rust/0.24.2/tree_sitter_rust-0.24.2-cp39-abi3-win_arm64.whl", hash = "sha256:66ba90f61bd54f4c4f5d30434957daf64507c16b0313df76becb37d63f70a227" },
+]
+
+[[package]]
+name = "tree-sitter-scala"
+version = "0.26.2"
+source = { registry = "http://192.168.239.230:8887/repository/mc-group-pypi/simple/" }
+sdist = { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-scala/0.26.2/tree_sitter_scala-0.26.2.tar.gz", hash = "sha256:2f6c38288c08f8c69bcbd87f4c6904287651e3d2ff4d7730d7154177e9115fda" }
+wheels = [
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-scala/0.26.2/tree_sitter_scala-0.26.2-cp39-abi3-macosx_10_9_x86_64.whl", hash = "sha256:beab6a0397d4f45cecaed715f224f444652d6bb1c5318d46c641893cd91de98d" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-scala/0.26.2/tree_sitter_scala-0.26.2-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:54d2e92824c7908b7e688f218dc1d65c5684c365cd7a3e8028e8860847aeabd4" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-scala/0.26.2/tree_sitter_scala-0.26.2-cp39-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:679bb420771e236d6bcc60c2c7f6096f344cf07d829a7f401250735ad4f4a695" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-scala/0.26.2/tree_sitter_scala-0.26.2-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:0e68e55c50fa7e7f2866ce7ca590df8df6407dd7a85e484e9f20e974cbc6d8f2" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-scala/0.26.2/tree_sitter_scala-0.26.2-cp39-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:a2ba6e45827e01f11790b24cdae357db51ede59ee7ee5c8b7eccc61e9a7782ea" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-scala/0.26.2/tree_sitter_scala-0.26.2-cp39-abi3-win_amd64.whl", hash = "sha256:eba630fc41cee1093005883fa70e275ecb26351e3ca6471ac2f6f83779478d07" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-scala/0.26.2/tree_sitter_scala-0.26.2-cp39-abi3-win_arm64.whl", hash = "sha256:0ac121c9afd813e0820c9f0e90c2d028ca90e096298cbcab2f139ba5f4a8aaaa" },
+]
+
+[[package]]
+name = "tree-sitter-swift"
+version = "0.7.3"
+source = { registry = "http://192.168.239.230:8887/repository/mc-group-pypi/simple/" }
+sdist = { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-swift/0.7.3/tree_sitter_swift-0.7.3.tar.gz", hash = "sha256:a87f1dba3050a346ee3442aad8d727afd74555dea258e31c71c7934d8c04af9b" }
+wheels = [
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-swift/0.7.3/tree_sitter_swift-0.7.3-cp38-abi3-macosx_10_9_x86_64.whl", hash = "sha256:2531ec866c22ea52384e2786e07f3b2bb396c6446428a2df02cc74af3f7e6b6a" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-swift/0.7.3/tree_sitter_swift-0.7.3-cp38-abi3-macosx_11_0_arm64.whl", hash = "sha256:ee627e027d0868c552beca13dcdfa9944662b126f642464c5038ee3204e68340" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-swift/0.7.3/tree_sitter_swift-0.7.3-cp38-abi3-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:f38feeb4f7350c8b30d567a0dc08bf1eeaa67c241b6888d72a45a8b1a4aa7187" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-swift/0.7.3/tree_sitter_swift-0.7.3-cp38-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:eee02fecb60a07267edd123148c583d6ec9efc5d7fcb25e53da4e56869fd4cf3" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-swift/0.7.3/tree_sitter_swift-0.7.3-cp38-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:f30c30831f090ebe245f54ddcd280d2c5f7020ba17d6bbec1662bbfae140c467" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-swift/0.7.3/tree_sitter_swift-0.7.3-cp38-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:01c1e812289a2f7f01f63627a5d94a0b57d69332e8b52624becfe79ee8061651" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-swift/0.7.3/tree_sitter_swift-0.7.3-cp38-abi3-win_amd64.whl", hash = "sha256:4b1de6122cbd82b2cea6d3a295f9f5f9297601b829061119e161da17a7ba7d17" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-swift/0.7.3/tree_sitter_swift-0.7.3-cp38-abi3-win_arm64.whl", hash = "sha256:af44acc50d16f284abb607ae0cf7f81011d5566283d6c62a045a549a9331a653" },
+]
+
+[[package]]
+name = "tree-sitter-typescript"
+version = "0.23.2"
+source = { registry = "http://192.168.239.230:8887/repository/mc-group-pypi/simple/" }
+sdist = { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-typescript/0.23.2/tree_sitter_typescript-0.23.2.tar.gz", hash = "sha256:7b167b5827c882261cb7a50dfa0fb567975f9b315e87ed87ad0a0a3aedb3834d" }
+wheels = [
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-typescript/0.23.2/tree_sitter_typescript-0.23.2-cp39-abi3-macosx_10_9_x86_64.whl", hash = "sha256:3cd752d70d8e5371fdac6a9a4df9d8924b63b6998d268586f7d374c9fba2a478" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-typescript/0.23.2/tree_sitter_typescript-0.23.2-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:c7cc1b0ff5d91bac863b0e38b1578d5505e718156c9db577c8baea2557f66de8" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-typescript/0.23.2/tree_sitter_typescript-0.23.2-cp39-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:4b1eed5b0b3a8134e86126b00b743d667ec27c63fc9de1b7bb23168803879e31" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-typescript/0.23.2/tree_sitter_typescript-0.23.2-cp39-abi3-manylinux_2_5_x86_64.manylinux1_x86_64.manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:e96d36b85bcacdeb8ff5c2618d75593ef12ebaf1b4eace3477e2bdb2abb1752c" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-typescript/0.23.2/tree_sitter_typescript-0.23.2-cp39-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:8d4f0f9bcb61ad7b7509d49a1565ff2cc363863644a234e1e0fe10960e55aea0" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-typescript/0.23.2/tree_sitter_typescript-0.23.2-cp39-abi3-win_amd64.whl", hash = "sha256:3f730b66396bc3e11811e4465c41ee45d9e9edd6de355a58bbbc49fa770da8f9" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-typescript/0.23.2/tree_sitter_typescript-0.23.2-cp39-abi3-win_arm64.whl", hash = "sha256:05db58f70b95ef0ea126db5560f3775692f609589ed6f8dd0af84b7f19f1cbb7" },
+]
+
+[[package]]
+name = "tree-sitter-verilog"
+version = "1.0.3"
+source = { registry = "http://192.168.239.230:8887/repository/mc-group-pypi/simple/" }
+sdist = { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-verilog/1.0.3/tree_sitter_verilog-1.0.3.tar.gz", hash = "sha256:d4043cba50e1ba8402396e3106e17de755c86eca311b23ab826e018ea9818984" }
+wheels = [
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-verilog/1.0.3/tree_sitter_verilog-1.0.3-cp39-abi3-macosx_10_9_x86_64.whl", hash = "sha256:ee20fe0e21c93bf1a10e20c13cbca959eb3c9693194afb90b0567758cbf1744e" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-verilog/1.0.3/tree_sitter_verilog-1.0.3-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:5b9d70d86cf6913abc08766b6180e285d72848c7491a3f3f8e7bb8d8c440049d" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-verilog/1.0.3/tree_sitter_verilog-1.0.3-cp39-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:7d617dff782a8bf56fabac8d1e782ee4ca9ebe2977682eb02d1596ff7ef89958" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-verilog/1.0.3/tree_sitter_verilog-1.0.3-cp39-abi3-manylinux_2_5_x86_64.manylinux1_x86_64.manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:747dd7d4bc95fb389bc37225f82d16f0c40549856e9a244be3ff9d7bfe62b730" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-verilog/1.0.3/tree_sitter_verilog-1.0.3-cp39-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:0476d1f828954683aba38d48a7089e8b698767269950afc7615527a45de641e5" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-verilog/1.0.3/tree_sitter_verilog-1.0.3-cp39-abi3-win_amd64.whl", hash = "sha256:da82da153a8d515941da26d84d51b6b79d0fe42d0a0de19845562c3b1dd091c1" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-verilog/1.0.3/tree_sitter_verilog-1.0.3-cp39-abi3-win_arm64.whl", hash = "sha256:11576eaa43f89266ab8869fb8d2fb1c22c8da74aa8dc82e67259d6560635c68f" },
+]
+
+[[package]]
+name = "tree-sitter-zig"
+version = "1.1.2"
+source = { registry = "http://192.168.239.230:8887/repository/mc-group-pypi/simple/" }
+sdist = { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-zig/1.1.2/tree_sitter_zig-1.1.2.tar.gz", hash = "sha256:da24db16df92f7fcfa34448e06a14b637b1ff985f7ce2ee19183c489e187a92e" }
+wheels = [
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-zig/1.1.2/tree_sitter_zig-1.1.2-cp39-abi3-macosx_10_9_x86_64.whl", hash = "sha256:e7542354a5edba377b5692b2add4f346501306d455e192974b7e76bf1a61a282" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-zig/1.1.2/tree_sitter_zig-1.1.2-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:daa2cdd7c1a2d278f2a917c85993adb6e84d37778bfc350ee9e342872e7f8be2" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-zig/1.1.2/tree_sitter_zig-1.1.2-cp39-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:1962e95067ac5ee784daddd573f828ef32f15e9c871967df6833d3d389113eae" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-zig/1.1.2/tree_sitter_zig-1.1.2-cp39-abi3-manylinux_2_5_x86_64.manylinux1_x86_64.manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:e924509dcac5a6054da357e3d6bcf37ea82984ee1d2a376569753d32f61ea8bb" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-zig/1.1.2/tree_sitter_zig-1.1.2-cp39-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:d8f463c370cdd71025b8d40f90e21e8fc25c7394eb64ebd53b1e566d712a3a68" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-zig/1.1.2/tree_sitter_zig-1.1.2-cp39-abi3-win_amd64.whl", hash = "sha256:7b94f00a0e69231ac4ebf0aa763734b9b5637e0ff13634ebfe6d13fadece71e9" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/tree-sitter-zig/1.1.2/tree_sitter_zig-1.1.2-cp39-abi3-win_arm64.whl", hash = "sha256:88152ebeaeca1431a6fc943a8b391fee6f6a8058f17435015135157735061ddf" },
 ]
 
 [[package]]

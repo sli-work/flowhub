@@ -6,9 +6,9 @@ import logging
 from time import perf_counter
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from fastapi.responses import StreamingResponse
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from flowhub_api.authz.authorizer import build_authorizer, get_current_user
@@ -397,7 +397,13 @@ async def test_expert(expert_id: str, version_id: str, body: ExpertRunReq, user:
 
 
 def run_brief(run: ExpertRun) -> dict:
-    return {"id": run.id, "session": run.input[:64], "expert": run.expert_id, "version": run.expert_version_id, "deployment": run.deployment_id or "—", "expertId": run.expert_id, "versionId": run.expert_version_id, "deploymentId": run.deployment_id, "status": run.status, "input": run.input, "output": run.output, "traceId": run.trace_id, "error": run.error, "duration": "—", "started": run.started_at, "startedAt": run.started_at, "finishedAt": run.finished_at, "events": []}
+    duration = "—"
+    if run.started_at and run.finished_at:
+        try:
+            duration = f"{max(0, (datetime.fromisoformat(run.finished_at) - datetime.fromisoformat(run.started_at)).total_seconds()):.1f}s"
+        except ValueError:
+            pass
+    return {"id": run.id, "session": run.input[:64], "expert": run.expert_id, "version": run.expert_version_id, "deployment": run.deployment_id or "—", "expertId": run.expert_id, "versionId": run.expert_version_id, "deploymentId": run.deployment_id, "status": run.status, "input": run.input, "output": run.output, "traceId": run.trace_id, "error": run.error, "duration": duration, "started": run.started_at, "startedAt": run.started_at, "finishedAt": run.finished_at, "events": []}
 
 
 @router.post("/experts/{expert_id}/versions/{version_id}/publish")
@@ -448,12 +454,19 @@ async def change_deployment_status(deployment_id: str, action: str, user: Annota
 
 
 @router.get("/expert-runs")
-async def list_runs(session: Annotated[AsyncSession, Depends(get_db)], user: Annotated[User, Depends(get_current_user)], status: str = ""):
+async def list_runs(session: Annotated[AsyncSession, Depends(get_db)], user: Annotated[User, Depends(get_current_user)], status: str = "", q: str = "", page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100)):
     statement = select(ExpertRun).where(ExpertRun.requested_by == user.id)
     if status:
         statement = statement.where(ExpertRun.status == status)
-    rows = (await session.execute(statement.order_by(ExpertRun.started_at.desc()))).scalars().all()
-    return ok({"items": [run_brief(row) for row in rows]})
+    if q.strip():
+        needle = f"%{q.strip()}%"
+        statement = statement.where(or_(ExpertRun.id.ilike(needle), ExpertRun.trace_id.ilike(needle), ExpertRun.expert_id.ilike(needle), ExpertRun.input.ilike(needle)))
+    total = (await session.execute(select(func.count()).select_from(statement.subquery()))).scalar_one()
+    rows = (await session.execute(statement.order_by(ExpertRun.started_at.desc(), ExpertRun.id.desc()).offset((page - 1) * page_size).limit(page_size))).scalars().all()
+    statuses = (await session.execute(select(ExpertRun.status).where(ExpertRun.requested_by == user.id))).scalars().all()
+    succeeded, failed = statuses.count("succeeded"), statuses.count("failed")
+    settled = succeeded + failed
+    return ok({"items": [run_brief(row) for row in rows], "total": total, "page": page, "page_size": page_size, "metrics": {"running": statuses.count("running"), "interrupted": statuses.count("interrupted"), "succeeded": succeeded, "failed": failed, "success_rate": round(succeeded * 100 / settled, 1) if settled else None}})
 
 
 @router.post("/expert-runs")
@@ -613,17 +626,17 @@ async def create_chat_message(session_id: str, body: ExpertChatMessageReq, sessi
         assistant_text = "运行已中断，等待审批。" if run.status == "interrupted" else (run.output or run.error or "运行完成，无文本输出。")
         run_id, run_status = run.id, run.status
     else:
-        assistant_text, tool_trace = await run_native_flowhub_chat(session, body.content, user, chat.provider_model_id, history=history_text, project_name=chat.project_name)
+        assistant_text, tool_trace = await run_native_flowhub_chat(session, body.content, user, chat.provider_model_id, history=history_text, project_name=chat.project_name, quality_mode=body.quality_mode)
         run_id, run_status = None, "completed"
     chat_files: list[dict] = []
     if not bound_version:
-        ref = await save_chat_output_document(session, project_name=chat.project_name, output=assistant_text, user=user, prompt=body.content)
+        ref = await save_chat_output_document(session, project_name=chat.project_name, output=assistant_text, user=user, create_file=body.create_file)
         if ref:
             chat_files = [ref]
     if bound_version:
         tool_trace = [{"tool": event.title, "status": event.status, "summary": event.payload} for event in (await session.execute(select(ExpertRunEvent).where(ExpertRunEvent.run_id == run.id).order_by(ExpertRunEvent.sequence))).scalars().all()]
         if run_status == "succeeded" and run.output:
-            ref = await save_chat_output_document(session, project_name=chat.project_name, output=run.output, user=user, prompt=run.input)
+            ref = await save_chat_output_document(session, project_name=chat.project_name, output=run.output, user=user, create_file=body.create_file)
             if ref:
                 chat_files = [ref]
         if not deployment:
@@ -713,7 +726,7 @@ async def stream_chat_message(session_id: str, body: ExpertChatMessageReq, sessi
                     # 长文档型产出自动归档为项目文档，挂到消息 files（右侧产出文件栏可下载/预览）
                     chat_files: list[dict] = []
                     if run.status == "succeeded" and run.output:
-                        ref = await save_chat_output_document(worker_session, project_name=worker_chat.project_name, output=run.output, user=worker_user, prompt=run.input)
+                        ref = await save_chat_output_document(worker_session, project_name=worker_chat.project_name, output=run.output, user=worker_user, create_file=body.create_file)
                         if ref:
                             chat_files = [ref]
                             await emit("trace", {"kind": "tool", "tool": "flowhub.doc.save", "status": "succeeded", "summary": {"summary": f"产出已归档为文档：{ref['name']}"}})
@@ -741,12 +754,12 @@ async def stream_chat_message(session_id: str, body: ExpertChatMessageReq, sessi
                         streamed = True
                         await queue.put(("token", {"text": token}))
 
-                    assistant_text, trace = await run_native_flowhub_chat(worker_session, body.content, worker_user, worker_chat.provider_model_id, history=history_text, on_token=on_token, on_trace=lambda item: emit("trace", item), project_name=worker_chat.project_name)
+                    assistant_text, trace = await run_native_flowhub_chat(worker_session, body.content, worker_user, worker_chat.provider_model_id, history=history_text, on_token=on_token, on_trace=lambda item: emit("trace", item), project_name=worker_chat.project_name, quality_mode=body.quality_mode)
                     if not streamed:
                         await queue.put(("token", {"text": assistant_text}))
                     # 长文档型产出自动归档为项目文档，挂到消息 files（右侧产出文件栏可下载/预览）
                     chat_files = []
-                    ref = await save_chat_output_document(worker_session, project_name=worker_chat.project_name, output=assistant_text, user=worker_user, prompt=body.content)
+                    ref = await save_chat_output_document(worker_session, project_name=worker_chat.project_name, output=assistant_text, user=worker_user, create_file=body.create_file)
                     if ref:
                         chat_files = [ref]
                         await emit("trace", {"kind": "tool", "tool": "flowhub.doc.save", "status": "succeeded", "summary": {"summary": f"产出已归档为文档：{ref['name']}"}})

@@ -36,6 +36,9 @@ async def lifespan(_: FastAPI):
             await load_runtime_config(session)
         from flowhub_api.services.expert_runtime import setup_checkpointer
         await setup_checkpointer()
+        from flowhub_api.services.expert_runtime import recover_interrupted_runs
+        async with SessionFactory() as session:
+            await recover_interrupted_runs(session)
         from flowhub_api.services.repo_mirror import schedule_all_mirror_builds
         await schedule_all_mirror_builds()  # 启动预热：为绑定仓库的后台任务自愈重建镜像（不阻塞）
         logger.info("数据库初始化完成（PostgreSQL 已连接）")

@@ -154,3 +154,18 @@
   .canvas-node .node-port { transition: r 0.15s ease; }
   .canvas-node:hover .node-port { r: 7.5; }
 }
+
+/* Milkdown WYSIWYG（SchemaForm textarea 字段）：撑满容器宽度，避免 theme frame 默认窄栏竖排观感 */
+.flowhub-milkdown-wrap .milkdown,
+.flowhub-milkdown-wrap .editor,
+.flowhub-milkdown-wrap .ProseMirror {
+  width: 100% !important;
+  max-width: 100% !important;
+  padding: 10px 12px;
+  box-sizing: border-box;
+}
+.flowhub-milkdown-wrap .ProseMirror {
+  outline: none;
+  min-height: 64px;
+}
+.flowhub-milkdown-wrap .milkdown ~ * { max-width: 100%; }

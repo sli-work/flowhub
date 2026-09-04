@@ -55,15 +55,17 @@ class WorkflowService:
         if tpl is None:
             raise BizError(BizCode.NOT_FOUND, "模板不存在")
         # 项目必须绑定该模板（docs/04 §5.1）
-        bound = any(b.template_id == template_id for b in project.template_bindings)
-        if not bound:
+        binding = next((b for b in project.template_bindings if b.template_id == template_id and b.status == "active"), None)
+        if binding is None:
             raise BizError(BizCode.FORBIDDEN, f"项目未绑定模板「{tpl.name}」，无法发起流程")
+        version = binding.version
         title = (start_values or {}).get("title", "").strip()
         if not title:
             raise BizError(BizCode.VALIDATION, "标题必填")
 
         wi_type = tpl.type
-        start_node = next((n for n in tpl.nodes if n.get("type") == "start"), tpl.nodes[0] if tpl.nodes else {"id": "", "label": "开始"})
+        nodes = await self.nodes_of(tpl, version)
+        start_node = next((n for n in nodes if n.get("type") == "start"), nodes[0] if nodes else {"id": "", "label": "开始"})
         start_label = start_node.get("label", "开始")
         # 权限：只有第一个节点的候选处理人（或系统/组织管理员）才能创建工作项；
         # start 节点未配置处理人时允许任何登录用户创建
@@ -88,7 +90,7 @@ class WorkflowService:
         )
         instance = WorkflowInstance(
             id=gen_id("inst"), work_item_id=wi.id, template_id=template_id,
-            version=next((b.version for b in project.template_bindings if b.template_id == template_id), "v1"),
+            version=version,
             current_node=start_node.get("id", ""), state="running",
         )
         # 起始节点任务：创建后【自动完成并直接流转到下一节点】——
@@ -196,7 +198,10 @@ class WorkflowService:
     async def build_task_brief(self, task: TaskItem, tpl: GlobalTemplate) -> str:
         """结构化任务书：节点目的 + 产出要求 + 验收标准 + 表单字段 + 上游摘要。
         人（处理页任务书）与 AI（Expert 运行 prompt）消费同一份契约。"""
-        cfg = await self._node_cfg_of(tpl, task.node_id) or {}
+        instance = (await self.session.execute(
+            select(WorkflowInstance).where(WorkflowInstance.work_item_id == task.wi_id)
+        )).scalar_one_or_none()
+        cfg = await self._node_cfg_of(tpl, task.node_id, instance.version if instance else None) or {}
         deliverable = self.deliverable_of(cfg)
         wi = await self.session.get(WorkItem, task.wi_id)
         lines: list[str] = [f"# 任务书：{task.node}"]
@@ -285,12 +290,14 @@ class WorkflowService:
     async def advance(self, task: TaskItem, project: Project, tpl: GlobalTemplate, auto_depth: int = 0) -> dict:
         """完成任务 → 沿边推进到下一节点（决策按条件选分支 / 并行分叉拆单 / 汇合等齐）→ 绑定解析 → 生成新任务。
         auto_depth：自动节点的递归采纳深度（防连环自动节点 + 环画布无限递归）。"""
-        nodes = tpl.nodes
-        edges = await self._edges_of(tpl)
+        instance = (await self.session.execute(select(WorkflowInstance).where(WorkflowInstance.work_item_id == task.wi_id))).scalar_one_or_none()
+        version = instance.version if instance is not None else None
+        nodes = await self.nodes_of(tpl, version)
+        edges = await self._edges_of(tpl, version)
         current = task.node_id
         cur_node = next((n for n in nodes if n.get("id") == current), None)
         out_edges = [b for a, b in edges if a == current]
-        cfg = await self._node_cfg_of(tpl, current) or {}
+        cfg = await self._node_cfg_of(tpl, current, version) or {}
         values = task.form_values or {}
 
         # 产出契约统一校验：所有产出节点的 schema 必填项 + 验收清单强制勾选（此前仅 end 节点校验）
@@ -356,7 +363,7 @@ class WorkflowService:
                 nxt = next((n for n in nodes if n.get("id") == to), {"id": to, "label": to})
                 # 幂等兜底：该分支节点已有未终结任务则复用，不重复生成
                 existing = await self._find_open_task_at(task, to)
-                new_tasks.append(existing if existing is not None else await self._spawn_task(task, project, tpl, nxt, auto_depth=auto_depth))
+                new_tasks.append(existing if existing is not None else await self._spawn_task(task, project, tpl, nxt, auto_depth=auto_depth, version=version))
             task.status = "completed"
             wi = await self.session.get(WorkItem, task.wi_id)
             # 首分支若是自动节点且已被递归采纳流转，进度以内层更新为准
@@ -400,7 +407,7 @@ class WorkflowService:
         if existing is not None:
             new_task = existing
         else:
-            new_task = await self._spawn_task(task, project, tpl, next_node, auto_depth=auto_depth)
+            new_task = await self._spawn_task(task, project, tpl, next_node, auto_depth=auto_depth, version=version)
         task.status = "completed"
         wi = await self.session.get(WorkItem, task.wi_id)
         # 若 new_task 是自动节点且已被递归采纳并继续流转（status 已 completed），
@@ -424,7 +431,9 @@ class WorkflowService:
         """把 Expert Run 产出解析为节点表单值（upload 字段自动生成工作项文档）。
 
         优先消费 Run 成功时预生成的 parsed 快照（幂等：重复采纳不重复解析/生成文档）；
-        快照缺失（存量 Run/无 schema 节点）时回退现场解析。"""
+        快照缺失（存量 Run/无 schema 节点）时回退现场解析。
+        同任务同字段的上一轮 AI 文档会被替换（覆盖式重跑后再采纳时，旧产出不入库堆积）。"""
+        from flowhub_api.models import DocItem
         from flowhub_api.services.expert_runtime import parse_schema_output
 
         schema = cfg.get("schema") or []
@@ -433,6 +442,21 @@ class WorkflowService:
             values, warnings = dict(snapshot.get("values") or {}), list(snapshot.get("warnings") or [])
         else:
             values, warnings = parse_schema_output(schema, run.output or "")
+        # 本轮将要重新生成文档的 upload 字段：先删掉上一轮采纳生成的同名旧文档
+        # （以「字段label-任务id」命名规则定位；MinIO 对象随行删除由查询方按 object_name 处理）
+        regenerate_keys = [
+            f.get("key", "") for f in schema
+            if f.get("type") in ("upload", "file") and isinstance(values.get(f.get("key", "")), str) and values[f.get("key", "")].strip()
+        ]
+        stale_names = [f"{next(f.get('label', k) for f in schema if f.get('key') == k)}-{task.id}" for k in regenerate_keys]
+        stale_names += [f"{name}.md" for name in stale_names if "." not in name]
+        if stale_names:
+            stale_docs = (await self.session.execute(
+                select(DocItem).where(DocItem.wi == task.wi_id, DocItem.name.in_(stale_names))
+            )).scalars().all()
+            for d in stale_docs:
+                await self._delete_doc_object(d)
+                await self.session.delete(d)
         for f in schema:
             key, ftype = f.get("key", ""), f.get("type", "")
             if ftype in ("upload", "file") and isinstance(values.get(key), str) and values[key].strip():
@@ -445,6 +469,20 @@ class WorkflowService:
                 values[key] = [ref]
         return values, warnings
 
+    async def _delete_doc_object(self, doc) -> None:
+        """删除文档在 MinIO 中的对象（未配置 MinIO 或对象缺失时静默跳过）。"""
+        if not doc.object_name:
+            return
+        try:
+            from flowhub_api.clients.minio import get_minio
+            from flowhub_api.core.config import get_settings
+
+            minio = get_minio()
+            if minio:
+                minio.remove_object(get_settings().minio_bucket, doc.object_name)
+        except Exception:  # noqa: BLE001 — 对象清理失败不阻塞采纳流程
+            pass
+
     def acceptance_checks_ai(self, cfg: dict) -> dict:
         """Expert 自动路径：验收清单由 AI 自评逐条确认（快照标注来源，供人复核）。"""
         acceptance = self.deliverable_of(cfg).get("acceptance") or []
@@ -452,7 +490,18 @@ class WorkflowService:
 
     async def ai_autosubmit(self, task: TaskItem, project: Project, tpl: GlobalTemplate, cfg: dict, run, actor: User, auto_depth: int = 0) -> dict:
         """Expert 自动节点：采纳 run 产出填充表单后自动流转。返回 advance 结果。
-        若节点开启 ai_auto 拆分且模型输出带 split 数组，则拆分为多条子线（父完成不 advance）。"""
+        若节点开启 ai_auto 拆分且模型输出带 split 数组，则拆分为多条子线（父完成不 advance）。
+        采纳前先做 AI 二次格式修正（只调格式不改内容）；修正失败静默降级原解析，不阻塞自动流转。"""
+        schema = cfg.get("schema") or []
+        if schema and isinstance(run.parsed, dict) and not run.parsed.get("normalized"):
+            from flowhub_api.services.expert_runtime import normalize_run_output
+
+            try:
+                n_values, n_warnings = await normalize_run_output(self.session, run, schema)
+                run.parsed = {**run.parsed, "values": n_values, "warnings": n_warnings,
+                              "normalized": True, "formattedAt": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")}
+            except Exception:  # noqa: BLE001 — 自动路径修正失败不阻塞流转
+                pass
         values, warnings = await self.fill_task_from_run(task, run, cfg, actor)
         task.acceptance_checks = self.acceptance_checks_ai(cfg)
         split_mode = (cfg.get("split") or {}).get("mode", "off")
@@ -502,12 +551,7 @@ class WorkflowService:
             for d in docs:
                 d.wi = t.wi_id
         # 推进流程：需要项目 + 模板定位主边
-        project = (await self.session.execute(select(Project).where(Project.name == t.project))).scalar_one_or_none()
-        tpl = None
-        if project:
-            binding = next((b for b in project.template_bindings if b.status == "active"), None)
-            if binding:
-                tpl = await self.session.get(GlobalTemplate, binding.template_id)
+        project, tpl = await self.resolve_template_for_task(t)
         if project and tpl:
             result = await self.advance(t, project, tpl)
         else:
@@ -522,15 +566,15 @@ class WorkflowService:
         return result
 
     async def resolve_template_for_task(self, task: TaskItem) -> tuple[Project | None, GlobalTemplate | None]:
+        """按流程实例定位模板，不能随项目后来绑定的版本漂移。"""
         project = (await self.session.execute(select(Project).where(Project.name == task.project))).scalar_one_or_none()
-        tpl = None
-        if project:
-            binding = next((b for b in project.template_bindings if b.status == "active"), None)
-            if binding:
-                tpl = await self.session.get(GlobalTemplate, binding.template_id)
+        instance = (await self.session.execute(
+            select(WorkflowInstance).where(WorkflowInstance.work_item_id == task.wi_id)
+        )).scalar_one_or_none()
+        tpl = await self.session.get(GlobalTemplate, instance.template_id) if instance else None
         return project, tpl
 
-    async def _spawn_task(self, task: TaskItem, project: Project, tpl: GlobalTemplate, next_node: dict, *, title: str = "", assignee: str = "", due_hours: int | None = None, brief: str = "", parent_task_id: str | None = None, lineage_root_id: str | None = None, auto_depth: int = 0) -> TaskItem:
+    async def _spawn_task(self, task: TaskItem, project: Project, tpl: GlobalTemplate, next_node: dict, *, title: str = "", assignee: str = "", due_hours: int | None = None, brief: str = "", parent_task_id: str | None = None, lineage_root_id: str | None = None, auto_depth: int = 0, version: str | None = None) -> TaskItem:
         """为 next_node 生成任务并触发绑定的 Expert Deployment。
         覆盖参数供子任务拆分使用（标题/负责人/截止/拆分说明/父链接）。"""
         next_id = next_node.get("id", "")
@@ -544,7 +588,9 @@ class WorkflowService:
             assignee=assignee or (resolved[0].name if resolved else "待分配"),
             due=(datetime.now(UTC) + due).strftime("%m-%d %H:%M"),
             sla_hours=due_hours or 48,
-            parent_task_id=parent_task_id,
+            # 子线后续节点持续保留原拆分父任务，才能读取父任务上下文；
+            # 显式传参仅用于拆分起点，普通任务不受影响。
+            parent_task_id=parent_task_id if parent_task_id is not None else task.parent_task_id,
             # 普通后继沿用当前子线 root；拆分起点首次创建时稍后以自身 id 固定 root
             lineage_root_id=lineage_root_id if lineage_root_id is not None else task.lineage_root_id,
             brief=brief,
@@ -554,7 +600,7 @@ class WorkflowService:
         # run 语义统一（不再走 write_intent 审批中断）：
         # - 自动节点：run 成功后直接采纳产出 → 填充表单 → 自动流转（免人工介入）
         # - 协助节点：run 结果由处理人在任务页点击「采纳」回填表单
-        canvas_cfg = await self._node_cfg_of(tpl, next_id)
+        canvas_cfg = await self._node_cfg_of(tpl, next_id, version)
         handler = (canvas_cfg or {}).get("handler", "")
         expert_cfg = (canvas_cfg or {}).get("expert") or {}
         deployment_id = expert_cfg.get("expertDeploymentId")
@@ -604,7 +650,12 @@ class WorkflowService:
                             svc = WorkflowService(bg_session)
                             project_bg, tpl_bg = await svc.resolve_template_for_task(bg_task)
                             if project_bg is not None and tpl_bg is not None:
-                                cfg_bg = await svc._node_cfg_of(tpl_bg, bg_task.node_id) or {}
+                                bg_instance = (await bg_session.execute(
+                                    select(WorkflowInstance).where(WorkflowInstance.work_item_id == bg_task.wi_id)
+                                )).scalar_one_or_none()
+                                cfg_bg = await svc._node_cfg_of(
+                                    tpl_bg, bg_task.node_id, bg_instance.version if bg_instance else None,
+                                ) or {}
                                 if cfg_bg.get("handler") == "Expert 自动":
                                     await svc.ai_autosubmit(
                                         bg_task, project_bg, tpl_bg, cfg_bg, bg_run, bg_user,
@@ -629,16 +680,20 @@ class WorkflowService:
         await self.session.flush()
         return new_task
 
-    async def split_task(self, task: TaskItem, project: Project, tpl: GlobalTemplate, children: list[dict], actor: User) -> list[TaskItem]:
+    async def split_task(self, task: TaskItem, project: Project, tpl: GlobalTemplate, children: list[dict], actor: User, form_values: dict | None = None) -> list[TaskItem]:
         """把当前任务拆分为多个子任务：父任务完成（不 advance），子任务在下一节点独立流转。
         约束：仅任务类型节点、单出边、cfg.split.mode != off；每个子任务带独立标题/负责人/截止/需求说明。"""
-        nodes = tpl.nodes
-        edges = await self._edges_of(tpl)
+        instance = (await self.session.execute(
+            select(WorkflowInstance).where(WorkflowInstance.work_item_id == task.wi_id)
+        )).scalar_one_or_none()
+        version = instance.version if instance else None
+        nodes = await self.nodes_of(tpl, version)
+        edges = await self._edges_of(tpl, version)
         current = task.node_id
         cur_node = next((n for n in nodes if n.get("id") == current), None)
         if not cur_node or cur_node.get("type") != "task":
             raise BizError(BizCode.VALIDATION, "仅任务类型节点支持拆分子任务", http_status=422)
-        cfg = await self._node_cfg_of(tpl, current) or {}
+        cfg = await self._node_cfg_of(tpl, current, version) or {}
         split_mode = (cfg.get("split") or {}).get("mode", "off")
         if split_mode == "off":
             raise BizError(BizCode.VALIDATION, "该节点未开启子任务拆分（请在流程画布节点配置中开启）", http_status=422)
@@ -646,26 +701,26 @@ class WorkflowService:
         if len(out_edges) != 1:
             raise BizError(BizCode.VALIDATION, "拆分要求节点只有一条后继分支；多分支请使用并行分叉节点", http_status=422)
         next_node = next((n for n in nodes if n.get("id") == out_edges[0]), {"id": out_edges[0], "label": out_edges[0]})
-
         created: list[TaskItem] = []
         for child in children:
             spawned = await self._spawn_task(
                 task, project, tpl, next_node,
                 title=child.get("title", ""), assignee=child.get("assignee", ""),
                 due_hours=child.get("due_hours"), brief=child.get("note", ""),
-                parent_task_id=task.id,
+                parent_task_id=task.id, version=version,
             )
             # 每个拆分起点就是一条独立子线 root；其后的普通流转会一直继承此标识
             spawned.lineage_root_id = spawned.id
             created.append(spawned)
         task.status = "completed"
-        task.form_values = {
-            "__split__": True,
-            "split_to": [{"task": c.id, "title": c.title, "assignee": c.assignee} for c in created],
-        }
+        # 父任务的表单产出是所有子线的继承上下文，拆分不能覆盖它。
+        # 拆分元数据已记录在审计日志和子任务 parent_task_id，不再混入业务表单。
+        task.form_values = dict(form_values) if form_values is not None else (task.form_values or None)
         wi = await self.session.get(WorkItem, task.wi_id)
         if wi:
             wi.progress = f"{next_node.get('label', '')}（{len(created)} 条子线）"
+        # 处理页的子任务已位于下一节点，画布实例游标必须同步，避免仍高亮父节点。
+        await self._sync_instance(task.wi_id, node_id=next_node.get("id", ""))
         await AuditService(self.session).record(
             actor=actor.name, action="task:split", target=f"{task.id} · {task.node}",
             result="success", after={"children": [c.id for c in created]},
@@ -673,7 +728,18 @@ class WorkflowService:
         await self.session.flush()
         return created
 
-    async def _edges_of(self, tpl: GlobalTemplate) -> list[tuple[str, str]]:
+    async def nodes_of(self, tpl: GlobalTemplate, version: str | None = None) -> list[dict]:
+        """读取实例冻结版本的节点；仅旧实例没有版本时才沿用最新发布版本。"""
+        from flowhub_api.models import TemplateCanvas
+
+        if version:
+            canvas = await self.session.get(TemplateCanvas, f"{tpl.id}:{version}")
+            if canvas is not None and canvas.nodes:
+                return canvas.nodes
+            return tpl.nodes
+        return await self.latest_published_canvas_nodes(tpl) or tpl.nodes
+
+    async def _edges_of(self, tpl: GlobalTemplate, version: str | None = None) -> list[tuple[str, str]]:
         """模板主边：优先取最新 published 版本的画布边（引擎按已发布流程执行），
         无 published 有边版本时回退最新有画布的草稿；再兜底按节点顺序串联。
 
@@ -681,6 +747,13 @@ class WorkflowService:
         污染边集，导致流程找不到出边、进度卡死。
         """
         from flowhub_api.models import TemplateCanvas, TemplateVersion
+
+        if version:
+            canvas = await self.session.get(TemplateCanvas, f"{tpl.id}:{version}")
+            if canvas is not None and canvas.edges:
+                return [(e[0], e[1]) for e in canvas.edges]
+            ids = [n.get("id") for n in tpl.nodes]
+            return list(zip(ids, ids[1:])) if len(ids) > 1 else []
 
         rows = (await self.session.execute(
             select(TemplateVersion).where(TemplateVersion.template_id == tpl.id)
@@ -702,9 +775,13 @@ class WorkflowService:
         ids = [n.get("id") for n in tpl.nodes]
         return list(zip(ids, ids[1:])) if len(ids) > 1 else []
 
-    async def latest_published_canvas_nodes(self, tpl: GlobalTemplate) -> list[dict]:
+    async def latest_published_canvas_nodes(self, tpl: GlobalTemplate, version: str | None = None) -> list[dict]:
         """引擎视角的节点配置来源：最新 published 画布（与 _node_cfg_of/_edges_of 同一选择规则）。"""
         from flowhub_api.models import TemplateCanvas, TemplateVersion
+
+        if version:
+            canvas = await self.session.get(TemplateCanvas, f"{tpl.id}:{version}")
+            return canvas.nodes if canvas is not None and canvas.nodes else tpl.nodes
 
         rows = (await self.session.execute(
             select(TemplateVersion).where(TemplateVersion.template_id == tpl.id)
@@ -720,10 +797,19 @@ class WorkflowService:
                 return canvas.nodes
         return []
 
-    async def _node_cfg_of(self, tpl: GlobalTemplate, node_id: str) -> dict | None:
+    async def _node_cfg_of(self, tpl: GlobalTemplate, node_id: str, version: str | None = None) -> dict | None:
         """读模板指定节点的 cfg（含 agent 绑定）：优先取最新 published 版本画布，
         与主边同一版本配套（避免残缺草稿覆盖节点配置）；无 published 时回退最新草稿。"""
         from flowhub_api.models import TemplateCanvas, TemplateVersion
+
+        if version:
+            canvas = await self.session.get(TemplateCanvas, f"{tpl.id}:{version}")
+            if canvas is not None and canvas.nodes:
+                node = next((n for n in canvas.nodes if n.get("id") == node_id), None)
+                if node is not None:
+                    return node.get("cfg") or {}
+            node = next((n for n in tpl.nodes if n.get("id") == node_id), None)
+            return {"handler": "", "purpose": (node or {}).get("label", "")}
 
         rows = (await self.session.execute(
             select(TemplateVersion).where(TemplateVersion.template_id == tpl.id)

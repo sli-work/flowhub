@@ -1,7 +1,7 @@
 """模板路由（docs/02 §四-五）：模板池 / 创建 / 改名 / 删除 / 版本 / 画布定义。"""
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -207,10 +207,12 @@ async def template_start_schema(
     template_id: str,
     session: Annotated[AsyncSession, Depends(get_db)],
     _: Annotated[User, Depends(get_current_user)],
+    version: str = Query(default="", max_length=16),
 ):
     """模板最新版本的起始节点表单（硬性要求，FormField[]）：
 
-    优先取最新 published 版本画布 start 节点的 cfg.schema；
+    指定 version 时严格取该版本画布 start 节点的 cfg.schema；
+    未指定时优先取最新 published 版本画布；
     无 published 版本时回退最新草稿版本；画布无 schema 时回退模板级 start_schema（seed 静态值）。
     返回 version 供前端展示「来自最新版本 vX」。
     """
@@ -223,7 +225,7 @@ async def template_start_schema(
     ordered = sorted(
         rows, key=lambda tv: int(tv.version[1:]) if tv.version[1:].isdigit() else 0, reverse=True,
     )
-    chosen = next(
+    chosen = next((tv for tv in ordered if tv.version == version), None) if version else next(
         (tv for tv in ordered if tv.status == "published"),
         next((tv for tv in ordered if tv.status == "draft"), None),
     )

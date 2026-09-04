@@ -176,6 +176,9 @@ class TestAxurePreview:
         assert r.status_code == 200, r.text
         token = r.json()["data"]["link"].split("token=", 1)[1]
 
+        archive = client.get(f"/api/v1/documents/{doc_id}/archive?token={token}")
+        assert archive.json()["data"]["preview_type"] == "axure"
+
         # index.html：query token 可访问
         idx = client.get(f"/api/v1/documents/{doc_id}/preview/index.html?token={token}")
         assert idx.status_code == 200, idx.text
@@ -190,3 +193,22 @@ class TestAxurePreview:
         sub = client.get(f"/api/v1/documents/{doc_id}/preview/resources/style.css",
                          cookies={cookie_name: cookie_value})
         assert sub.status_code == 200, sub.text
+
+    def test_standard_zip_lists_entries_instead_of_requiring_axure_index(self, client: TestClient, leader_headers: dict):
+        """普通 ZIP 不含 Axure index.html 时，仍可在文件浏览器中查看包内文件。"""
+        buf = io.BytesIO()
+        import zipfile as _zf
+
+        with _zf.ZipFile(buf, "w") as archive:
+            archive.writestr("交付说明.txt", "release notes")
+            archive.writestr("assets/logo.png", b"png")
+        doc_id = self._upload(client, leader_headers, buf.getvalue())
+        link = client.post(f"/api/v1/documents/{doc_id}/link", headers=leader_headers)
+        token = link.json()["data"]["link"].split("token=", 1)[1]
+
+        response = client.get(f"/api/v1/documents/{doc_id}/archive?token={token}")
+
+        assert response.status_code == 200, response.text
+        data = response.json()["data"]
+        assert data["preview_type"] == "archive"
+        assert [entry["path"] for entry in data["entries"]] == ["assets/logo.png", "交付说明.txt"]

@@ -38,11 +38,30 @@ async def migrate(conn: AsyncConnection) -> None:
         if task_columns and column not in task_columns:
             await conn.execute(text(f'ALTER TABLE tasks ADD COLUMN "{column}" {ddl}'))
             logger.info("migrate: tasks.%s added", column)
+    # 历史版本的拆分只把 child IDs 写入 task:split 审计，未写 parent_task_id。
+    # 由审计精确回填直接父链（同一工作项保护），使重启后流程图和子任务继承上下文永久恢复。
+    if task_columns:
+        restored = await conn.execute(text(
+            "UPDATE tasks AS child SET "
+            "parent_task_id = parent.id, "
+            "lineage_root_id = COALESCE(child.lineage_root_id, child.id) "
+            "FROM audits AS audit "
+            "JOIN tasks AS parent ON parent.id = split_part(audit.target, ' · ', 1) "
+            "WHERE child.parent_task_id IS NULL "
+            "AND child.wi_id = parent.wi_id "
+            "AND audit.action = 'task:split' "
+            "AND audit.result = 'success' "
+            # audits.after 是 JSON（非 JSONB），先转换才可使用 JSONB 的数组成员操作符。
+            "AND (audit.after::jsonb -> 'children') ? child.id"
+        ))
+        if restored.rowcount:
+            logger.info("migrate: restored %d historical task split links", restored.rowcount)
     # users：邮箱（编辑用户可改）与软删标记（删除用户保留审计引用）
     user_columns = await _existing_columns(conn, "users")
     user_columns_to_add = {
         "email": "VARCHAR(128) DEFAULT ''",
         "deleted": "BOOLEAN DEFAULT FALSE",
+        "theme": "VARCHAR(8) DEFAULT 'dark'",
     }
     for column, ddl in user_columns_to_add.items():
         if user_columns and column not in user_columns:

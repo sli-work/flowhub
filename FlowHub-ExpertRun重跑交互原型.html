@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Expert Run 重新执行 + 上下文输入 · 交互原型</title>
+<style>
+  :root {
+    --slate-900: #0f172a; --slate-700: #334155; --slate-600: #475569; --slate-500: #64748b;
+    --slate-400: #94a3b8; --slate-300: #cbd5e1; --slate-200: #e2e8f0; --slate-100: #f1f5f9; --slate-50: #f8fafc;
+    --violet-700: #6d28d9; --violet-600: #7c3aed; --violet-500: #8b5cf6; --violet-200: #ddd6fe; --violet-100: #ede9fe; --violet-50: #f5f3ff;
+    --emerald-700: #047857; --emerald-50: #ecfdf5;
+    --red-700: #b91c1c; --red-100: #fee2e2; --red-50: #fef2f2;
+    --blue-600: #2563eb; --blue-50: #eff6ff;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+    background: var(--slate-100); color: var(--slate-900); padding: 28px 16px 80px;
+  }
+  .page { max-width: 760px; margin: 0 auto; }
+
+  /* ---------- 原型说明条 ---------- */
+  .proto-note {
+    background: linear-gradient(135deg, #1e1b4b, #312e81); color: #e0e7ff;
+    border-radius: 14px; padding: 18px 22px; margin-bottom: 22px; font-size: 13px; line-height: 1.75;
+  }
+  .proto-note h1 { font-size: 16px; margin-bottom: 6px; color: #fff; }
+  .proto-note b { color: #c4b5fd; }
+  .proto-note ol { margin: 6px 0 0 18px; }
+  .proto-note code { background: rgba(255,255,255,.12); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+
+  /* ---------- 卡片骨架（还原 SectionCard） ---------- */
+  .card { background: #fff; border: 1px solid var(--slate-200); border-radius: 14px; box-shadow: 0 1px 2px rgba(15,23,42,.04); }
+  .card-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 20px; border-bottom: 1px solid var(--slate-100); }
+  .card-title { font-size: 14px; font-weight: 600; }
+  .card-body { padding: 20px; }
+  .link-btn { font-size: 12px; font-weight: 500; color: var(--blue-600); background: none; border: none; cursor: pointer; }
+  .link-btn:hover { text-decoration: underline; }
+
+  /* ---------- 任务书小卡（示意页面上下文） ---------- */
+  .brief { border: 1px solid var(--slate-200); border-radius: 10px; padding: 12px 14px; font-size: 12.5px; color: var(--slate-600); line-height: 1.7; margin-bottom: 16px; }
+  .brief b { color: var(--slate-900); font-size: 13px; }
+  .brief .muted { color: var(--slate-400); font-size: 11.5px; }
+
+  /* ---------- Run 卡片 ---------- */
+  .runs { display: flex; flex-direction: column; gap: 12px; }
+  .run { border: 1px solid var(--violet-100); background: rgba(245,243,255,.5); border-radius: 10px; padding: 14px; transition: border-color .2s; }
+  .run.failed { border-color: var(--red-100); background: rgba(254,242,242,.5); }
+  .run-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .run-id { display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; color: var(--violet-700); }
+  .run-id svg { width: 16px; height: 16px; flex: none; }
+  .run-actions { display: flex; align-items: center; gap: 8px; flex: none; }
+  .badge { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; }
+  .badge.succeeded { background: var(--emerald-50); color: var(--emerald-700); }
+  .badge.failed { background: var(--red-50); color: var(--red-700); }
+  .badge.running { background: var(--blue-50); color: var(--blue-600); }
+  .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--blue-600); margin-right: 5px; animation: pulse 1.2s infinite; vertical-align: 1px; }
+  @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .25 } }
+
+  .btn { font-size: 11.5px; font-weight: 500; padding: 4px 10px; border-radius: 7px; cursor: pointer; transition: all .15s; border: 1px solid transparent; display: inline-flex; align-items: center; gap: 5px; }
+  .btn svg { width: 12px; height: 12px; }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+  .btn-adopt { border-color: var(--violet-200); color: var(--violet-600); background: #fff; }
+  .btn-adopt:hover:not(:disabled) { background: var(--violet-50); }
+  .btn-rerun { border-color: var(--violet-200); color: var(--violet-600); background: #fff; }
+  .btn-rerun:hover:not(:disabled) { background: var(--violet-50); border-color: var(--violet-500); }
+  .btn-rerun.primary { background: var(--violet-600); color: #fff; border-color: var(--violet-600); }
+  .btn-rerun.primary:hover:not(:disabled) { background: var(--violet-700); }
+  .spin { animation: rot 1s linear infinite; }
+  @keyframes rot { to { transform: rotate(360deg) } }
+
+  /* ---------- 输出区（带滚动条） ---------- */
+  .out-wrap { margin-top: 10px; max-height: 288px; overflow-y: auto; border-radius: 8px; padding-right: 4px; }
+  .out-wrap::-webkit-scrollbar { width: 8px; }
+  .out-wrap::-webkit-scrollbar-thumb { background: var(--slate-300); border-radius: 8px; }
+  .out-wrap::-webkit-scrollbar-thumb:hover { background: var(--slate-400); }
+  .out { white-space: pre-wrap; word-break: break-word; font-size: 12.5px; line-height: 1.75; color: var(--slate-600); }
+  .run-meta { margin-top: 8px; font-size: 11px; color: var(--slate-400); }
+  .ctx-tag { display: inline-flex; align-items: center; gap: 3px; background: var(--violet-100); color: var(--violet-700); font-size: 10.5px; font-weight: 600; padding: 1px 7px; border-radius: 999px; margin-right: 6px; }
+
+  /* ---------- 上下文输入面板（展开/收起） ---------- */
+  .composer { overflow: hidden; max-height: 0; opacity: 0; transition: max-height .28s ease, opacity .2s ease, margin .28s; }
+  .composer.open { max-height: 320px; opacity: 1; margin-top: 12px; }
+  .composer-inner { border: 1px solid var(--violet-200); background: #fff; border-radius: 10px; padding: 12px; }
+  .composer-label { font-size: 12px; font-weight: 600; color: var(--slate-700); display: flex; align-items: center; gap: 5px; margin-bottom: 8px; }
+  .composer-label .optional { color: var(--slate-400); font-weight: 400; font-size: 11px; }
+  .composer textarea {
+    width: 100%; min-height: 88px; resize: vertical; border: 1px solid var(--slate-300); border-radius: 8px;
+    padding: 10px 12px; font-size: 12.5px; line-height: 1.7; font-family: inherit; color: var(--slate-900); outline: none;
+  }
+  .composer textarea:focus { border-color: var(--violet-500); box-shadow: 0 0 0 3px rgba(139,92,246,.12); }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .chip { font-size: 11px; color: var(--violet-600); background: var(--violet-50); border: 1px solid var(--violet-100); border-radius: 999px; padding: 3px 10px; cursor: pointer; }
+  .chip:hover { background: var(--violet-100); }
+  .composer-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; }
+  .count { font-size: 11px; color: var(--slate-400); }
+  .foot-btns { display: flex; gap: 8px; }
+  .btn-cancel { border-color: var(--slate-200); color: var(--slate-500); background: #fff; }
+  .btn-cancel:hover { background: var(--slate-50); }
+  .btn-go { background: var(--violet-600); color: #fff; border-color: var(--violet-600); padding: 5px 14px; font-size: 12px; }
+  .btn-go:hover:not(:disabled) { background: var(--violet-700); }
+  .kbd { border: 1px solid var(--slate-200); border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; font-size: 10px; color: var(--slate-400); }
+
+  /* ---------- 运行中的骨架条 ---------- */
+  .shimmer { margin-top: 10px; height: 10px; border-radius: 6px; background: linear-gradient(90deg, var(--violet-100) 25%, #fff 50%, var(--violet-100) 75%); background-size: 400% 100%; animation: shine 1.4s infinite; }
+  .shimmer + .shimmer { margin-top: 6px; width: 78%; }
+  .shimmer + .shimmer + .shimmer { width: 56%; }
+  @keyframes shine { 0% { background-position: 100% 0 } 100% { background-position: 0 0 } }
+
+  /* ---------- Toast ---------- */
+  #toasts { position: fixed; right: 20px; bottom: 20px; display: flex; flex-direction: column; gap: 8px; z-index: 99; }
+  .toast { background: var(--slate-900); color: #fff; font-size: 12.5px; padding: 10px 16px; border-radius: 10px; box-shadow: 0 8px 24px rgba(15,23,42,.25); animation: rise .25s ease; }
+  .toast.ok { border-left: 3px solid #34d399; }
+  @keyframes rise { from { transform: translateY(8px); opacity: 0 } to { transform: none; opacity: 1 } }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="proto-note">
+    <h1>Expert Run · 重新执行 + 补充上下文 —— 交互原型</h1>
+    位置：任务处理页 →「Expert Run 结果」卡片。交互点：
+    <ol>
+      <li>每条 Run 头部新增 <b>「重新执行」</b>按钮（成功态为描边次按钮；失败态升级为紫色主按钮）；</li>
+      <li>点击后在 <b>该 Run 卡片内部</b>展开「补充执行上下文」输入框 —— <b>旧输出保持可见，可边看边写纠偏要求</b>；</li>
+      <li>输入框支持快捷标签一键插入、字数统计（上限 2000）、<code>⌘/Ctrl+Enter</code> 提交、<code>Esc</code> 取消；</li>
+      <li>确认后新 Run 置顶进入 <b>running</b> 态（骨架屏 + 3s 轮询），完成后替换展示，带上下文的 Run 显示 <b>「上下文 N 字」</b>标记便于追溯；</li>
+      <li>重新执行期间所有「重新执行」按钮禁用，避免并发 Run。</li>
+    </ol>
+  </div>
+
+  <!-- 任务书卡片（页面上下文示意，静态） -->
+  <div class="card" style="margin-bottom:16px">
+    <div class="card-head"><span class="card-title">需求分析 任务书</span><span class="badge succeeded" style="background:var(--blue-50);color:var(--blue-600)">assigned</span></div>
+    <div class="card-body">
+      <div class="brief">
+        <b>任务：分析「客户工单响应慢」问题并输出结论</b><br>
+        上下文：工作项 REQ-2026-0241 · 项目「华南制造数字化」 · SLA 剩余 18h<br>
+        <span class="muted">表单：conclusion（textarea）、verdict（select）、report（upload）— 由节点 schema 驱动</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Expert Run 结果卡片（原型主体） -->
+  <div class="card">
+    <div class="card-head">
+      <span class="card-title">Expert Run 结果</span>
+      <button class="link-btn">审批队列</button>
+    </div>
+    <div class="card-body">
+      <div class="runs" id="runs">
+
+        <!-- Run 1：成功（含长输出 + 滚动条） -->
+        <div class="run" id="run-a">
+          <div class="run-head">
+            <span class="run-id">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>
+              ER-8f3a2c71
+            </span>
+            <span class="run-actions">
+              <span class="badge succeeded">succeeded</span>
+              <button class="btn btn-adopt" onclick="toast('已采纳 ER-8f3a2c71 产出，表单值已回填（原型演示）','ok')">采纳</button>
+              <button class="btn btn-rerun" data-rerun="a" onclick="toggleComposer('a')">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+                重新执行
+              </button>
+            </span>
+          </div>
+          <!-- 上下文输入面板（收起态） -->
+          <div class="composer" id="composer-a">
+            <div class="composer-inner">
+              <div class="composer-label">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                补充执行上下文 <span class="optional">可选 · 将与任务书一并交给 Expert</span>
+              </div>
+              <textarea id="ctx-a" maxlength="2000" placeholder="例如：上一轮结论遗漏了备件库存因素；请重点参考附件《Q2 服务复盘》；输出按「原因 / 影响 / 建议」三段结构…&#10;留空则按任务书原样重新生成。" oninput="updateCount('a')" onkeydown="composerKey(event,'a')"></textarea>
+              <div class="chips">
+                <button class="chip" onclick="insertChip('a','请参考上一轮输出继续优化，修正其中的遗漏与表述')">↻ 参考上一轮优化</button>
+                <button class="chip" onclick="insertChip('a','输出请按「原因 / 影响 / 建议」三段结构组织，每段不超过 200 字')">结构化输出</button>
+                <button class="chip" onclick="insertChip('a','补充背景：客户已两次升级投诉， SLA 只剩 18 小时，请优先给可立即执行的措施')">补充客户背景</button>
+              </div>
+              <div class="composer-foot">
+                <span class="count"><span id="count-a">0</span>/2000 · <span class="kbd">⌘↵</span> 提交 · <span class="kbd">Esc</span> 取消</span>
+                <span class="foot-btns">
+                  <button class="btn btn-cancel" onclick="toggleComposer('a',false)">取消</button>
+                  <button class="btn btn-go" id="go-a" onclick="submitRerun('a')">↻ 重新执行</button>
+                </span>
+              </div>
+            </div>
+          </div>
+          <div class="out-wrap">
+            <div class="out">【结论】客户工单响应慢的主因是二线支持排班与工单路由规则不匹配：夜间时段（22:00–8:00）工单默认路由至深圳二部，但该时段仅有 1 名值班工程师，导致平均首响时间从白天的 12 分钟恶化至 47 分钟。
+
+【影响】近 30 天夜间工单 214 单，其中超 SLA 38 单（占比 17.8%），集中在每周二/四（例行变更窗口叠加）。
+
+【建议】
+1. 夜间路由改为「值班工程师 + 上海一部 oncall」双通道；
+2. 例行变更窗口期间临时提升二线优先级阈值；
+3. 对超 30 分钟未响应的工单自动升级至企业微信群提醒。</div>
+          </div>
+          <div class="run-meta">09-02 14:32 · 采纳后产出解析为表单值，人工审核后提交</div>
+        </div>
+
+        <!-- Run 2：失败（主按钮态） -->
+        <div class="run failed" id="run-b">
+          <div class="run-head">
+            <span class="run-id">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>
+              ER-7b21d90e
+            </span>
+            <span class="run-actions">
+              <span class="badge failed">failed</span>
+              <button class="btn btn-rerun primary" data-rerun="b" onclick="toggleComposer('b')">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+                重新执行
+              </button>
+            </span>
+          </div>
+          <div class="composer" id="composer-b">
+            <div class="composer-inner">
+              <div class="composer-label">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                补充执行上下文 <span class="optional">可选 · 将与任务书一并交给 Expert</span>
+              </div>
+              <textarea id="ctx-b" maxlength="2000" placeholder="例如：指出上一轮失败原因、需要绕开的数据源、或这次要重点关注的方向…&#10;留空则按任务书原样重新生成。" oninput="updateCount('b')" onkeydown="composerKey(event,'b')"></textarea>
+              <div class="chips">
+                <button class="chip" onclick="insertChip('b','上一轮因知识库检索超时失败，本次请仅基于任务书与表单schema生成')">说明失败原因</button>
+                <button class="chip" onclick="insertChip('b','请先输出简版结论（100字内），再给详细分析')">先简后详</button>
+              </div>
+              <div class="composer-foot">
+                <span class="count"><span id="count-b">0</span>/2000 · <span class="kbd">⌘↵</span> 提交 · <span class="kbd">Esc</span> 取消</span>
+                <span class="foot-btns">
+                  <button class="btn btn-cancel" onclick="toggleComposer('b',false)">取消</button>
+                  <button class="btn btn-go" id="go-b" onclick="submitRerun('b')">↻ 重新执行</button>
+                </span>
+              </div>
+            </div>
+          </div>
+          <div class="out-wrap">
+            <div class="out">Expert 运行失败：知识库检索超时（repo-mirror 连接 10s 超时），已保留任务现场，可重试。</div>
+          </div>
+          <div class="run-meta">09-02 11:08 · 采纳后产出解析为表单值，人工审核后提交</div>
+        </div>
+
+      </div>
+      <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--slate-100)">
+        <div style="font-size:12px;font-weight:600;color:var(--slate-500);margin-bottom:8px">本节点 Expert Runtime 策略</div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px">
+          <span style="font-size:11px;padding:3px 9px;border-radius:999px;background:var(--emerald-50);color:var(--emerald-700)">read_context · direct</span>
+          <span style="font-size:11px;padding:3px 9px;border-radius:999px;background:var(--emerald-50);color:var(--emerald-700)">read_documents · direct</span>
+          <span style="font-size:11px;padding:3px 9px;border-radius:999px;background:#fffbeb;color:#b45309">write_form · 需确认</span>
+          <span style="font-size:11px;padding:3px 9px;border-radius:999px;background:var(--red-50);color:var(--red-700)">submit_task · 禁止</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <p style="margin-top:16px;font-size:11.5px;color:var(--slate-400);text-align:center">原型仅供交互评审 · 数据为模拟 · 落地时后端 ai-fill 接口新增 context 参数拼入 prompt</p>
+</div>
+
+<div id="toasts"></div>
+
+<script>
+  const busy = { a: false, b: false }
+
+  function toggleComposer(id, force) {
+    if (busy[id]) return
+    const panel = document.getElementById('composer-' + id)
+    const open = force !== undefined ? force : !panel.classList.contains('open')
+    // 同时只开一个面板
+    for (const k of ['a', 'b']) {
+      if (k !== id) document.getElementById('composer-' + k).classList.remove('open')
+    }
+    panel.classList.toggle('open', open)
+    if (open) setTimeout(() => document.getElementById('ctx-' + id).focus(), 260)
+  }
+
+  function updateCount(id) {
+    document.getElementById('count-' + id).textContent = document.getElementById('ctx-' + id).value.length
+  }
+
+  function insertChip(id, text) {
+    const ta = document.getElementById('ctx-' + id)
+    ta.value = (ta.value ? ta.value.replace(/\s*$/, '\n') : '') + text
+    updateCount(id); ta.focus()
+  }
+
+  function composerKey(e, id) {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); submitRerun(id) }
+    if (e.key === 'Escape') toggleComposer(id, false)
+  }
+
+  function setBusyUI(id, on) {
+    busy[id] = on
+    document.querySelectorAll('[data-rerun]').forEach(b => b.disabled = on)
+    document.getElementById('go-' + id).disabled = on
+    if (on) document.getElementById('go-' + id).innerHTML = '<svg class="spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg> 发起中…'
+    else document.getElementById('go-' + id).innerHTML = '↻ 重新执行'
+  }
+
+  function submitRerun(id) {
+    if (busy[id]) return
+    const ctx = document.getElementById('ctx-' + id).value.trim()
+    setBusyUI(id, true)
+    toggleComposer(id, false)
+    toast(ctx ? `已重新发起 Expert Run（附带 ${ctx.length} 字补充上下文）` : '已重新发起 Expert Run（按任务书原样）', 'ok')
+
+    // 模拟：新 Run 置顶 → running 骨架屏 → 2.8s 后 succeeded
+    setTimeout(() => {
+      const runId = 'ER-' + Math.random().toString(16).slice(2, 10)
+      const el = document.createElement('div')
+      el.className = 'run'
+      el.innerHTML = `
+        <div class="run-head">
+          <span class="run-id">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>
+            ${runId}
+          </span>
+          <span class="run-actions">
+            <span class="badge running"><span class="dot"></span>running</span>
+          </span>
+        </div>
+        <div class="shimmer"></div><div class="shimmer"></div><div class="shimmer"></div>
+        <div class="run-meta">刚刚${ctx ? ` · <span class="ctx-tag">上下文 ${ctx.length} 字</span>` : ''} · 采纳后产出解析为表单值，人工审核后提交</div>`
+      document.getElementById('runs').prepend(el)
+
+      setTimeout(() => {
+        el.innerHTML = `
+        <div class="run-head">
+          <span class="run-id">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>
+            ${runId}
+          </span>
+          <span class="run-actions">
+            <span class="badge succeeded">succeeded</span>
+            <button class="btn btn-adopt" onclick="toast('已采纳 ${runId} 产出，表单值已回填（原型演示）','ok')">采纳</button>
+            <button class="btn btn-rerun" data-rerun="${runId}" onclick="toggleComposer('${runId}')">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+              重新执行
+            </button>
+          </span>
+        </div>
+        <div class="composer" id="composer-${runId}">
+          <div class="composer-inner">
+            <div class="composer-label">补充执行上下文 <span class="optional">可选 · 将与任务书一并交给 Expert</span></div>
+            <textarea id="ctx-${runId}" maxlength="2000" placeholder="留空则按任务书原样重新生成。" oninput="updateCount('${runId}')" onkeydown="composerKey(event,'${runId}')"></textarea>
+            <div class="composer-foot">
+              <span class="count"><span id="count-${runId}">0</span>/2000 · <span class="kbd">⌘↵</span> 提交 · <span class="kbd">Esc</span> 取消</span>
+              <span class="foot-btns">
+                <button class="btn btn-cancel" onclick="toggleComposer('${runId}',false)">取消</button>
+                <button class="btn btn-go" id="go-${runId}" onclick="submitRerun('${runId}')">↻ 重新执行</button>
+              </span>
+            </div>
+          </div>
+        </div>
+        <div class="out-wrap"><div class="out">${ctx ? '【依据补充上下文重跑】\n\n' : ''}【结论】夜间时段路由单点 + 例行变更窗口叠加是响应慢的核心原因；建议双通道值班路由并动态调整优先级阈值，预计可将夜间首响 P95 从 47 分钟降至 15 分钟以内。\n\n【影响】夜间 SLA 超时占比 17.8%，客户满意度（CSAT）环比下降 6 个百分点，升级投诉 2 起。\n\n【建议】\n1. 立即（本周）：夜间启用「深圳二部 + 上海 oncall」双通道路由；\n2. 短期（2 周内）：变更窗口自动提升二线阈值并同步企微提醒；\n3. 中期（1 月）：按历史工单热力重排值班班表，夜间配置 ≥2 名工程师。</div></div>
+        <div class="run-meta">刚刚${ctx ? ` · <span class="ctx-tag">上下文 ${ctx.length} 字</span>` : ''} · 采纳后产出解析为表单值，人工审核后提交</div>`
+        setBusyUI(id, false)
+        toast(`${runId} 执行完成，可审核采纳`, 'ok')
+      }, 2800)
+    }, 600)
+  }
+
+  function toast(msg, kind) {
+    const box = document.getElementById('toasts')
+    const t = document.createElement('div')
+    t.className = 'toast' + (kind === 'ok' ? ' ok' : '')
+    t.textContent = msg
+    box.appendChild(t)
+    setTimeout(() => { t.style.opacity = '0'; t.style.transition = 'opacity .3s'; setTimeout(() => t.remove(), 320) }, 3000)
+  }
+</script>
+</body>
+</html>
