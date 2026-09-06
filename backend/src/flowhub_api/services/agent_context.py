@@ -100,7 +100,7 @@ async def build_task_context(session: AsyncSession, user: User, task: TaskItem, 
 
     # 绑定仓库的地图层（目录概览/README/依赖清单）：失败降级为空，不阻断上下文
     if wi is not None:
-        repo_section = await repo_mirror.repo_map_section(session, wi.project, allow_clone=True)
+        repo_section = await repo_mirror.repo_map_section(session, wi.project, allow_clone=True, query=f"{task.title} {task.brief}")
         if repo_section:
             lines.append("")
             lines.append(repo_section)

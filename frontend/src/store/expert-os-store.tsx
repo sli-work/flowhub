@@ -121,7 +121,7 @@ interface ExpertOsContextValue {
   setDeploymentStatus: (deploymentId: string, status: DeploymentRecord['status']) => Promise<void>
   deleteExpert: (expertId: string) => Promise<void>
   duplicateExpert: (expertId: string) => Promise<void>
-  addProvider: (input: { id?: string; name: string; baseUrl: string; models: string[]; apiKey: string; maxContextTokens?: number }) => Promise<void>
+  addProvider: (input: { id?: string; name: string; baseUrl: string; models: string[]; apiKey: string; maxContextTokens?: number; modelLimits?: Record<string, { max_context_tokens: number | null; max_output_tokens: number | null }> }) => Promise<void>
   addKnowledgeBase: (input: Pick<KnowledgeBaseRecord, 'name' | 'description' | 'sensitivity'>) => Promise<void>
   finishKnowledgeIndex: (knowledgeBaseId: string) => Promise<void>
   uploadSkill: (file: File, metadata?: { name?: string; version?: string; description?: string }) => Promise<void>
@@ -241,8 +241,8 @@ export function ExpertOsProvider({ children }: { children: ReactNode }) {
     deleteExpert: async (expertId) => { await api.del(`/api/v1/experts/${expertId}`); setState((current) => ({ ...current, experts: current.experts.filter((item) => item.id !== expertId) })) },
     duplicateExpert: async (expertId) => { const result = await api.post<{ expert: ExpertRecord }>(`/api/v1/experts/${expertId}/duplicate`); setState((current) => ({ ...current, experts: [...current.experts, result.expert] })) },
   addProvider: async (input) => {
-    if (input.id) await api.patch(`/api/v1/providers/${input.id}`, { name: input.name, base_url: input.baseUrl, api_key: input.apiKey, models: input.models, max_context_tokens: input.maxContextTokens ?? 1_000_000 })
-    else await api.post('/api/v1/providers', { name: input.name, base_url: input.baseUrl, api_key: input.apiKey, models: input.models, max_context_tokens: input.maxContextTokens ?? 1_000_000 })
+    if (input.id) await api.patch(`/api/v1/providers/${input.id}`, { name: input.name, base_url: input.baseUrl, api_key: input.apiKey, models: input.models, max_context_tokens: input.maxContextTokens ?? 32_000, model_limits: input.modelLimits ?? {} })
+    else await api.post('/api/v1/providers', { name: input.name, base_url: input.baseUrl, api_key: input.apiKey, models: input.models, max_context_tokens: input.maxContextTokens ?? 32_000, model_limits: input.modelLimits ?? {} })
     const providers = await api.get<{ items: ProviderRecord[] }>('/api/v1/providers')
     setState((current) => ({ ...current, providers: providers.items }))
   },

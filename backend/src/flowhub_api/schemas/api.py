@@ -120,6 +120,7 @@ class TaskAdoptRunReq(BaseModel):
     run_id: str = Field(min_length=1)
     normalize: bool = False
     values: dict | None = None
+    approve_quality_override: bool = False
 
 
 class TaskAiFillReq(BaseModel):
@@ -141,12 +142,18 @@ class TaskSplitReq(BaseModel):
 
 
 # ---------- Expert Runtime ----------
+class ModelLimitsReq(BaseModel):
+    max_context_tokens: int | None = Field(default=None, ge=8000, le=10_000_000)
+    max_output_tokens: int | None = Field(default=None, ge=256, le=1_000_000)
+
+
 class ProviderReq(BaseModel):
     name: str = Field(min_length=1, max_length=64)
     base_url: str = Field(min_length=1, max_length=255)
     api_key: str = ""
     models: list[str] = []
-    max_context_tokens: int = Field(default=1_000_000, ge=8_000, le=10_000_000)  # 模型最大上下文窗口（token），压缩预算取 80%
+    model_limits: dict[str, ModelLimitsReq] = Field(default_factory=dict)
+    max_context_tokens: int = Field(default=32_000, ge=8_000, le=10_000_000)  # 模型最大上下文窗口（token），压缩预算取 80%
 
 
 class ProviderTestReq(BaseModel):

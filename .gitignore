@@ -26,3 +26,4 @@ frontend/public/
 
 # 仓库镜像本地缓存（git bare clone，含代码副本，不入库）
 backend/.repo-mirror/
+backend/.dsh/

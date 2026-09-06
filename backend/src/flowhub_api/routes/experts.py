@@ -16,10 +16,12 @@ from flowhub_api.core.response import BizCode, BizError, ok
 from flowhub_api.db.session import get_db
 from flowhub_api.models import Expert, ExpertApproval, ExpertChatMessage, ExpertChatSession, ExpertDeployment, ExpertRun, ExpertRunEvent, ExpertSkill, ExpertVersion, LlmProvider, LlmProviderModel, McpServer, McpTool, User
 from flowhub_api.schemas.api import ApprovalDecisionReq, DeploymentReq, ExpertChatMessageReq, ExpertChatSessionRenameReq, ExpertChatSessionReq, ExpertCreateReq, ExpertRunReq, ExpertVersionReq, McpServerReq, McpToolUpdateReq, ProviderReq, ProviderTestReq
+from flowhub_api.services.chat_session_guard import guard_chat_session
+from flowhub_api.services.context_budget import budget_for_model, prepare_session_history
 from flowhub_api.services.audit import AuditService
 from flowhub_api.services.crypto import encrypt_secret
-from flowhub_api.services.repo_mirror import schedule_mirror_build
-from flowhub_api.services.expert_runtime import build_session_history, chat_file_entry, compact_session_async, context_budget_bytes, execute_run, new_id, now_iso, resume_approved_run, run_native_flowhub_chat, save_chat_output_document, session_history_preview, validate_version
+from flowhub_api.services.repo_mirror import can_user_read_project, schedule_mirror_build
+from flowhub_api.services.expert_runtime import chat_file_entry, execute_run, new_id, now_iso, resume_approved_run, run_native_flowhub_chat, save_chat_output_document, validate_version
 
 router = APIRouter(prefix="/api/v1", tags=["experts"])
 
@@ -222,7 +224,7 @@ def version_brief(version: ExpertVersion) -> dict:
 async def list_providers(session: Annotated[AsyncSession, Depends(get_db)], _: Annotated[User, Depends(get_current_user)]):
     providers = (await session.execute(select(LlmProvider))).scalars().all()
     models = (await session.execute(select(LlmProviderModel))).scalars().all()
-    return ok({"items": [{"id": item.id, "name": item.name, "provider": item.name, "engine": "api", "baseUrl": item.base_url, "credential": "configured" if item.credential_configured else "missing", "status": item.status, "maxContextTokens": item.max_context_tokens, "latency": "未检测", "models": [model.model for model in models if model.provider_id == item.id and model.enabled], "modelEntries": [{"id": model.id, "model": model.model} for model in models if model.provider_id == item.id and model.enabled]} for item in providers]})
+    return ok({"items": [{"id": item.id, "name": item.name, "provider": item.name, "engine": "api", "baseUrl": item.base_url, "credential": "configured" if item.credential_configured else "missing", "status": item.status, "maxContextTokens": item.max_context_tokens, "latency": "未检测", "models": [model.model for model in models if model.provider_id == item.id and model.enabled], "modelEntries": [{"id": model.id, "model": model.model, "maxContextTokens": model.max_context_tokens, "maxOutputTokens": model.max_output_tokens} for model in models if model.provider_id == item.id and model.enabled]} for item in providers]})
 
 
 @router.post("/providers")
@@ -233,6 +235,10 @@ async def create_provider(body: ProviderReq, user: Annotated[User, Depends(get_c
     created_models: list[LlmProviderModel] = []
     for model in body.models:
         created_model = LlmProviderModel(id=new_id("lpm"), provider_id=provider.id, model=model, label=model)
+        limits = body.model_limits.get(model)
+        if limits:
+            created_model.max_context_tokens = limits.max_context_tokens
+            created_model.max_output_tokens = limits.max_output_tokens
         created_models.append(created_model)
         session.add(created_model)
     await session.commit()
@@ -271,9 +277,14 @@ async def update_provider(provider_id: str, body: ProviderReq, user: Annotated[U
     requested = {model.strip() for model in body.models if model.strip()}
     for model in existing:
         model.enabled = model.model in requested
+        limits = body.model_limits.get(model.model)
+        if limits:
+            model.max_context_tokens = limits.max_context_tokens
+            model.max_output_tokens = limits.max_output_tokens
     existing_names = {model.model for model in existing}
     for model_name in requested - existing_names:
-        session.add(LlmProviderModel(id=new_id("lpm"), provider_id=provider_id, model=model_name, label=model_name))
+        limits = body.model_limits.get(model_name)
+        session.add(LlmProviderModel(id=new_id("lpm"), provider_id=provider_id, model=model_name, label=model_name, max_context_tokens=limits.max_context_tokens if limits else None, max_output_tokens=limits.max_output_tokens if limits else None))
     await session.commit()
     return ok({"provider": {"id": provider.id, "name": provider.name}}, "Provider 已更新")
 
@@ -403,7 +414,7 @@ def run_brief(run: ExpertRun) -> dict:
             duration = f"{max(0, (datetime.fromisoformat(run.finished_at) - datetime.fromisoformat(run.started_at)).total_seconds()):.1f}s"
         except ValueError:
             pass
-    return {"id": run.id, "session": run.input[:64], "expert": run.expert_id, "version": run.expert_version_id, "deployment": run.deployment_id or "—", "expertId": run.expert_id, "versionId": run.expert_version_id, "deploymentId": run.deployment_id, "status": run.status, "input": run.input, "output": run.output, "traceId": run.trace_id, "error": run.error, "duration": duration, "started": run.started_at, "startedAt": run.started_at, "finishedAt": run.finished_at, "events": []}
+    return {"id": run.id, "session": run.input[:64], "expert": run.expert_id, "version": run.expert_version_id, "deployment": run.deployment_id or "—", "expertId": run.expert_id, "versionId": run.expert_version_id, "deploymentId": run.deployment_id, "status": run.status, "input": run.input, "output": run.output, "traceId": run.trace_id, "error": run.error, "duration": duration, "started": run.started_at, "startedAt": run.started_at, "finishedAt": run.finished_at, "quality": run.quality_result or {"status": (run.parsed or {}).get("qualityStatus", "unknown"), "issues": (run.parsed or {}).get("qualityIssues", [])}, "events": []}
 
 
 @router.post("/experts/{expert_id}/versions/{version_id}/publish")
@@ -526,6 +537,8 @@ async def create_chat_session(body: ExpertChatSessionReq, session: Annotated[Asy
             raise BizError(BizCode.NOT_FOUND, "默认对话模型不存在")
         if not selected_model.enabled or not selected_provider or selected_provider.status != "healthy" or not selected_provider.credential_configured:
             raise BizError(BizCode.FLOW_VALIDATE, "请选择健康且已配置凭据的 Provider 模型", http_status=422)
+    if body.project_name and not await can_user_read_project(session, user, body.project_name):
+        raise BizError(BizCode.NOT_FOUND, "项目不存在或无权绑定到当前会话")
     row = ExpertChatSession(id=new_id("chat"), owner_id=user.id, expert_id=deployment.expert_id if deployment else (bound_version.expert_id if bound_version else None), expert_version_id=bound_version.id if bound_version else None, deployment_id=deployment.id if deployment else None, provider_model_id=body.provider_model_id or None, project_name=body.project_name or None, title=body.title[:160] or "新会话", created_at=now_iso(), updated_at=now_iso())
     session.add(row)
     await session.commit()
@@ -563,6 +576,8 @@ async def rename_chat_session(session_id: str, body: ExpertChatSessionRenameReq,
                 raise BizError(BizCode.FLOW_VALIDATE, "请选择健康且已配置凭据的 Provider 模型", http_status=422)
         chat.provider_model_id = body.provider_model_id or None
     if "project_name" in body.model_fields_set:
+        if body.project_name and not await can_user_read_project(session, user, body.project_name):
+            raise BizError(BizCode.NOT_FOUND, "项目不存在或无权绑定到当前会话")
         chat.project_name = body.project_name or None
     chat.updated_at = now_iso()
     await session.commit()
@@ -580,7 +595,42 @@ async def list_chat_messages(session_id: str, session: Annotated[AsyncSession, D
     return ok({"items": [chat_message_brief(row) for row in rows]})
 
 
-@router.post("/expert-chat/sessions/{session_id}/messages")
+async def _prepare_chat_history(session, chat, version, prompt, sequence):
+    from langchain_openai import ChatOpenAI
+    from flowhub_api.services.crypto import decrypt_secret
+
+    rows = (await session.execute(select(ExpertChatMessage).where(
+        ExpertChatMessage.session_id == chat.id, ExpertChatMessage.sequence < sequence
+    ).order_by(ExpertChatMessage.sequence))).scalars().all()
+    model_id = chat.provider_model_id or (version.provider_model_id if version else None)
+    model = await session.get(LlmProviderModel, model_id) if model_id else (await session.execute(
+        select(LlmProviderModel).join(LlmProvider).where(LlmProviderModel.enabled.is_(True), LlmProvider.status == "healthy", LlmProvider.credential_configured.is_(True)).order_by(LlmProviderModel.id).limit(1)
+    )).scalars().first()
+    provider = await session.get(LlmProvider, model.provider_id) if model else None
+    budget = budget_for_model(model, provider)
+
+    async def summarize(messages, max_tokens):
+        llm = ChatOpenAI(model=model.model, base_url=provider.base_url, api_key=decrypt_secret(provider.api_key), temperature=0, timeout=60, max_retries=1, max_tokens=max_tokens)
+        result = await llm.ainvoke(messages)
+        return result.content if isinstance(result.content, str) else ""
+
+    prepared = await prepare_session_history(
+        [(row.sequence, row.role, row.content) for row in rows],
+        summary=chat.compaction_summary, marker=chat.compaction_sequence,
+        budget=budget, essential_messages=[("human", prompt)],
+        summarize=summarize if model and provider and provider.credential_configured else None,
+    )
+    if prepared.compacted:
+        await session.execute(update(ExpertChatSession).where(
+            ExpertChatSession.id == chat.id,
+            ExpertChatSession.compaction_version == (chat.compaction_version or 0),
+            ExpertChatSession.compaction_sequence == chat.compaction_sequence,
+        ).values(compaction_summary=prepared.summary, compaction_sequence=prepared.marker,
+                 compaction_version=(chat.compaction_version or 0) + 1))
+    return prepared.messages, prepared.compacted
+
+
+@router.post("/expert-chat/sessions/{session_id}/messages", dependencies=[Depends(guard_chat_session)])
 async def create_chat_message(session_id: str, body: ExpertChatMessageReq, session: Annotated[AsyncSession, Depends(get_db)], user: Annotated[User, Depends(get_current_user)]):
     chat = await session.get(ExpertChatSession, session_id)
     if not chat or chat.owner_id != user.id:
@@ -596,46 +646,25 @@ async def create_chat_message(session_id: str, body: ExpertChatMessageReq, sessi
     sequence = (existing.sequence if existing else 0) + 1
     user_message = ExpertChatMessage(id=new_id("msg"), session_id=session_id, sequence=sequence, role="user", content=body.content, created_at=now_iso())
     session.add(user_message)
-    # 组装会话历史（token 预算制）：预览不阻塞当前轮；超预算 → 后台异步压缩（Claude Code 式）
-    history_rows = [(m.sequence, m.role, m.content) for m in (await session.execute(
-        select(ExpertChatMessage).where(ExpertChatMessage.session_id == session_id, ExpertChatMessage.sequence < sequence).order_by(ExpertChatMessage.sequence)
-    )).scalars().all()]
-    provider_max_tokens: int | None = None
-    if chat.provider_model_id:
-        _pm = await session.get(LlmProviderModel, chat.provider_model_id)
-        if _pm:
-            _pp = await session.get(LlmProvider, _pm.provider_id) if _pm.provider_id else None
-            provider_max_tokens = _pp.max_context_tokens if _pp else None
-    elif bound_version and bound_version.provider_model_id:
-        _pm = await session.get(LlmProviderModel, bound_version.provider_model_id)
-        if _pm:
-            _pp = await session.get(LlmProvider, _pm.provider_id) if _pm.provider_id else None
-            provider_max_tokens = _pp.max_context_tokens if _pp else None
-    budget = context_budget_bytes(provider_max_tokens)
-    history_text, needs_compact = session_history_preview(
-        history_rows, summary=chat.compaction_summary, marker=chat.compaction_sequence, budget_bytes=budget)
-    if needs_compact:
-        import asyncio
-        from flowhub_api.services.expert_runtime import compact_session_async
-        asyncio.create_task(compact_session_async(session_id, provider_max_tokens))  # 后台压缩，不阻塞当前问答
+    history_text, needs_compact = await _prepare_chat_history(session, chat, bound_version, body.content, sequence)
     if bound_version:
         run = ExpertRun(id=new_id("run"), expert_id=bound_version.expert_id, expert_version_id=bound_version.id, deployment_id=deployment.id if deployment else None, session_id=session_id, requested_by=user.id, status="interrupted" if body.write_intent else "running", input=body.content, trace_id=new_id("trace"), started_at=now_iso())
         session.add(run)
         await session.flush()
-        await execute_run(session, run, bound_version, user, history=history_text, provider_model_id=chat.provider_model_id, project_name=chat.project_name)
+        await execute_run(session, run, bound_version, user, history=history_text, provider_model_id=chat.provider_model_id, project_name=chat.project_name, quality_mode=body.quality_mode)
         assistant_text = "运行已中断，等待审批。" if run.status == "interrupted" else (run.output or run.error or "运行完成，无文本输出。")
         run_id, run_status = run.id, run.status
     else:
         assistant_text, tool_trace = await run_native_flowhub_chat(session, body.content, user, chat.provider_model_id, history=history_text, project_name=chat.project_name, quality_mode=body.quality_mode)
         run_id, run_status = None, "completed"
     chat_files: list[dict] = []
-    if not bound_version:
+    if not bound_version and any(item.get("kind") == "quality" and item.get("status") == "passed" for item in tool_trace):
         ref = await save_chat_output_document(session, project_name=chat.project_name, output=assistant_text, user=user, create_file=body.create_file)
         if ref:
             chat_files = [ref]
     if bound_version:
         tool_trace = [{"tool": event.title, "status": event.status, "summary": event.payload} for event in (await session.execute(select(ExpertRunEvent).where(ExpertRunEvent.run_id == run.id).order_by(ExpertRunEvent.sequence))).scalars().all()]
-        if run_status == "succeeded" and run.output:
+        if run_status == "succeeded" and run.output and (run.parsed or {}).get("qualityStatus") == "passed":
             ref = await save_chat_output_document(session, project_name=chat.project_name, output=run.output, user=user, create_file=body.create_file)
             if ref:
                 chat_files = [ref]
@@ -649,16 +678,15 @@ async def create_chat_message(session_id: str, body: ExpertChatMessageReq, sessi
     assistant_message = ExpertChatMessage(id=new_id("msg"), session_id=session_id, run_id=run_id, sequence=sequence + 1, role="assistant", content=assistant_text, status=run_status, tool_trace=tool_trace, files=chat_files, created_at=now_iso())
     session.add(assistant_message)
     chat.updated_at = now_iso()
-    # marker/摘要写回由后台 compact_session_async 负责（主请求不阻塞、不写回）
     if chat.title == "新会话":
         chat.title = body.content[:60]
     await session.commit()
     brief = chat_message_brief(assistant_message)
-    brief["compacted"] = needs_compact  # 前端提示"早期上下文将自动压缩"
+    brief["compacted"] = needs_compact
     return ok({"userMessage": chat_message_brief(user_message), "assistantMessage": brief, "run": run_brief(run) if bound_version else None}, "消息已处理")
 
 
-@router.post("/expert-chat/sessions/{session_id}/messages/stream")
+@router.post("/expert-chat/sessions/{session_id}/messages/stream", dependencies=[Depends(guard_chat_session)])
 async def stream_chat_message(session_id: str, body: ExpertChatMessageReq, session: Annotated[AsyncSession, Depends(get_db)], user: Annotated[User, Depends(get_current_user)]):
     """流式消息端点：原生 FlowHub 会话逐 token；Expert/版本测试会话经 emitter 逐 token + 实时 trace。"""
     chat = await session.get(ExpertChatSession, session_id)
@@ -675,24 +703,7 @@ async def stream_chat_message(session_id: str, body: ExpertChatMessageReq, sessi
     sequence = (existing.sequence if existing else 0) + 1
     user_message = ExpertChatMessage(id=new_id("msg"), session_id=session_id, sequence=sequence, role="user", content=body.content, created_at=now_iso())
     session.add(user_message)
-    # 会话历史（token 预算制）与 create_chat_message 同源；超预算后台压缩
-    history_rows = [(m.sequence, m.role, m.content) for m in (await session.execute(
-        select(ExpertChatMessage).where(ExpertChatMessage.session_id == session_id, ExpertChatMessage.sequence < sequence).order_by(ExpertChatMessage.sequence)
-    )).scalars().all()]
-    provider_max_tokens: int | None = None
-    if chat.provider_model_id:
-        _pm = await session.get(LlmProviderModel, chat.provider_model_id)
-        _pp = await session.get(LlmProvider, _pm.provider_id) if _pm else None
-        provider_max_tokens = _pp.max_context_tokens if _pp else None
-    elif bound_version and bound_version.provider_model_id:
-        _pm = await session.get(LlmProviderModel, bound_version.provider_model_id)
-        _pp = await session.get(LlmProvider, _pm.provider_id) if _pm else None
-        provider_max_tokens = _pp.max_context_tokens if _pp else None
-    budget = context_budget_bytes(provider_max_tokens)
-    history_text, needs_compact = session_history_preview(
-        history_rows, summary=chat.compaction_summary, marker=chat.compaction_sequence, budget_bytes=budget)
-    if needs_compact:
-        asyncio.create_task(compact_session_async(session_id, provider_max_tokens))
+    history_text, needs_compact = await _prepare_chat_history(session, chat, bound_version, body.content, sequence)
     await session.commit()
     queue: asyncio.Queue[tuple[str, dict] | None] = asyncio.Queue()
     producer_cancelled = asyncio.Event()
@@ -720,12 +731,12 @@ async def stream_chat_message(session_id: str, body: ExpertChatMessageReq, sessi
                     run = ExpertRun(id=new_id("run"), expert_id=worker_version.expert_id, expert_version_id=worker_version.id, deployment_id=worker_deployment.id if worker_deployment else None, session_id=session_id, requested_by=worker_user.id, status="interrupted" if body.write_intent else "running", input=body.content, trace_id=new_id("trace"), started_at=now_iso())
                     worker_session.add(run)
                     await worker_session.flush()
-                    await execute_run(worker_session, run, worker_version, worker_user, history=history_text, provider_model_id=worker_chat.provider_model_id, emitter=emit, project_name=worker_chat.project_name)
+                    await execute_run(worker_session, run, worker_version, worker_user, history=history_text, provider_model_id=worker_chat.provider_model_id, emitter=emit, project_name=worker_chat.project_name, quality_mode=body.quality_mode)
                     tool_trace = [{"tool": event.title, "status": event.status, "summary": event.payload} for event in (await worker_session.execute(select(ExpertRunEvent).where(ExpertRunEvent.run_id == run.id).order_by(ExpertRunEvent.sequence))).scalars().all()]
                     assistant_text = "运行已中断，等待审批。" if run.status == "interrupted" else (run.output or run.error or "运行完成，无文本输出。")
                     # 长文档型产出自动归档为项目文档，挂到消息 files（右侧产出文件栏可下载/预览）
                     chat_files: list[dict] = []
-                    if run.status == "succeeded" and run.output:
+                    if run.status == "succeeded" and run.output and (run.parsed or {}).get("qualityStatus") == "passed":
                         ref = await save_chat_output_document(worker_session, project_name=worker_chat.project_name, output=run.output, user=worker_user, create_file=body.create_file)
                         if ref:
                             chat_files = [ref]
@@ -742,24 +753,15 @@ async def stream_chat_message(session_id: str, body: ExpertChatMessageReq, sessi
                     if worker_chat.title == "新会话":
                         worker_chat.title = body.content[:60]
                     await worker_session.commit()
-                    done_payload: dict = {"message": chat_message_brief(assistant_message)}
+                    done_payload: dict = {"message": {**chat_message_brief(assistant_message), "compacted": needs_compact}}
                     if run.status != "interrupted":
                         done_payload["run"] = run_brief(run)
                     await queue.put(("done", done_payload))
                 else:
-                    streamed = False
-
-                    async def on_token(token: str) -> None:
-                        nonlocal streamed
-                        streamed = True
-                        await queue.put(("token", {"text": token}))
-
-                    assistant_text, trace = await run_native_flowhub_chat(worker_session, body.content, worker_user, worker_chat.provider_model_id, history=history_text, on_token=on_token, on_trace=lambda item: emit("trace", item), project_name=worker_chat.project_name, quality_mode=body.quality_mode)
-                    if not streamed:
-                        await queue.put(("token", {"text": assistant_text}))
+                    assistant_text, trace = await run_native_flowhub_chat(worker_session, body.content, worker_user, worker_chat.provider_model_id, history=history_text, emitter=emit, project_name=worker_chat.project_name, quality_mode=body.quality_mode)
                     # 长文档型产出自动归档为项目文档，挂到消息 files（右侧产出文件栏可下载/预览）
                     chat_files = []
-                    ref = await save_chat_output_document(worker_session, project_name=worker_chat.project_name, output=assistant_text, user=worker_user, create_file=body.create_file)
+                    ref = await save_chat_output_document(worker_session, project_name=worker_chat.project_name, output=assistant_text, user=worker_user, create_file=body.create_file) if any(item.get("kind") == "quality" and item.get("status") == "passed" for item in trace) else None
                     if ref:
                         chat_files = [ref]
                         await emit("trace", {"kind": "tool", "tool": "flowhub.doc.save", "status": "succeeded", "summary": {"summary": f"产出已归档为文档：{ref['name']}"}})
@@ -769,7 +771,7 @@ async def stream_chat_message(session_id: str, body: ExpertChatMessageReq, sessi
                     if worker_chat.title == "新会话":
                         worker_chat.title = body.content[:60]
                     await worker_session.commit()
-                    await queue.put(("done", {"message": chat_message_brief(assistant_message)}))
+                    await queue.put(("done", {"message": {**chat_message_brief(assistant_message), "compacted": needs_compact}}))
             except asyncio.CancelledError:
                 await worker_session.rollback()
                 raise
@@ -780,7 +782,7 @@ async def stream_chat_message(session_id: str, body: ExpertChatMessageReq, sessi
                 try:
                     failed = ExpertChatMessage(
                         id=new_id("msg"), session_id=session_id, sequence=sequence + 1,
-                        role="assistant", content=f"生成失败：{type(exc).__name__}：{exc}",
+                        role="assistant", content="生成失败，请稍后重试或联系管理员查看运行日志。",
                         status="failed", tool_trace=[], files=[], created_at=now_iso(),
                     )
                     worker_session.add(failed)
@@ -807,7 +809,11 @@ async def stream_chat_message(session_id: str, body: ExpertChatMessageReq, sessi
                     break
                 event, payload = item
                 yield f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
-            # 正常收尾：producer 已 put None，等待其自然退出即可（不得 cancel，否则响应缺终止块）
+                # done 表示 assistant 消息已提交；SSE 必须在此处终止，不能再等待
+                # producer 的 Session 清理，否则客户端会长期保持 Loading。
+                if event == "done":
+                    return
+            # 没有 done 的异常路径才等待 producer 退出，以完成错误事件收尾。
             await asyncio.gather(producer, return_exceptions=True)
         except asyncio.CancelledError:
             # 客户端断开：主动终止 producer 并传播取消
@@ -820,7 +826,7 @@ async def stream_chat_message(session_id: str, body: ExpertChatMessageReq, sessi
     return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
-@router.delete("/expert-chat/sessions/{session_id}/messages")
+@router.delete("/expert-chat/sessions/{session_id}/messages", dependencies=[Depends(guard_chat_session)])
 async def clear_chat_messages(session_id: str, session: Annotated[AsyncSession, Depends(get_db)], user: Annotated[User, Depends(get_current_user)]):
     """清空会话消息（保留会话与绑定）。"""
     chat = await session.get(ExpertChatSession, session_id)
@@ -828,12 +834,15 @@ async def clear_chat_messages(session_id: str, session: Annotated[AsyncSession, 
         raise BizError(BizCode.NOT_FOUND, "会话不存在")
     await session.execute(delete(ExpertChatMessage).where(ExpertChatMessage.session_id == session_id))
     chat.updated_at = now_iso()
+    chat.compaction_summary = ""
+    chat.compaction_sequence = 0
+    chat.compaction_version = (chat.compaction_version or 0) + 1
     await AuditService(session).record(actor=user.name, action="chat:clear", target=f"会话 {session_id[:12]}", result="success")
     await session.commit()
     return ok({"sessionId": session_id}, "会话消息已清空")
 
 
-@router.delete("/expert-chat/sessions/{session_id}")
+@router.delete("/expert-chat/sessions/{session_id}", dependencies=[Depends(guard_chat_session)])
 async def delete_chat_session(session_id: str, session: Annotated[AsyncSession, Depends(get_db)], user: Annotated[User, Depends(get_current_user)]):
     """删除会话（级联删除消息与 Run 记录保留）。"""
     chat = await session.get(ExpertChatSession, session_id)
@@ -870,7 +879,7 @@ async def decide_approval(approval_id: str, decision: str, body: ApprovalDecisio
     if decision not in {"approve", "reject"}:
         raise BizError(BizCode.VALIDATION, "未知审批动作")
     build_authorizer(user).require("expert:approve")
-    approval = await session.get(ExpertApproval, approval_id)
+    approval = (await session.execute(select(ExpertApproval).where(ExpertApproval.id == approval_id).with_for_update())).scalars().first()
     if not approval or approval.status != "pending":
         raise BizError(BizCode.DUPLICATE_OPERATION, "审批不存在或已处理")
     if approval.expires_at < now_iso():
@@ -881,29 +890,26 @@ async def decide_approval(approval_id: str, decision: str, body: ApprovalDecisio
     run = await session.get(ExpertRun, approval.run_id)
     if decision == "approve":
         await resume_approved_run(session, approval, user)
-        # Expert 自动节点闭环：审批通过后继续生成的产出回填节点表单并自动流转；
-        # 审批后模型生成失败 → 任务回退人工兜底
-        if run is not None and run.task_id:
-            from flowhub_api.models import TaskItem
-            from flowhub_api.services.workflow import WorkflowService
-
-            task = await session.get(TaskItem, run.task_id)
-            if task is not None and task.status == "pending_confirmation":
-                if run.status == "succeeded":
-                    service = WorkflowService(session)
-                    project, tpl = await service.resolve_template_for_task(task)
-                    cfg = (await service._node_cfg_of(tpl, task.node_id) or {}) if project and tpl else {}
-                    if cfg.get("handler") == "Expert 自动":
-                        await service.ai_autosubmit(task, project, tpl, cfg, run, user)
-                else:
-                    task.status = "assigned"
     elif run:
         run.status, run.finished_at = "cancelled", now_iso()
+    if run is not None:
+        from flowhub_api.models.expert import ExpertJob
+        from flowhub_api.services.expert_scheduler import complete_workflow
+        job = (await session.execute(select(ExpertJob).where(
+            ExpertJob.run_id == run.id, ExpertJob.generation == run.execution_generation,
+        ).with_for_update())).scalar_one_or_none()
+        if job is not None:
+            await complete_workflow(session, run, job.completion or {})
+            job.status, job.finished_at, job.lease_until = "completed", now_iso(), None
+        elif run.task_id:
+            # Legacy inline runs have no persisted automatic-completion metadata.
+            await complete_workflow(session, run, {"automatic": False})
     await AuditService(session).record(actor=user.name, action=f"expert:approval_{decision}", target=approval.id, result="success")
     if run and run.session_id:
         message = (await session.execute(select(ExpertChatMessage).where(ExpertChatMessage.run_id == run.id))).scalars().first()
         if message:
             message.status = run.status
-            message.content = "审批已通过，运行已恢复完成。" if decision == "approve" else "审批已拒绝，运行已终止。"
+            message.content = (run.output or run.error or "运行未生成正文，请查看运行状态。") if decision == "approve" else "审批已拒绝，运行已终止。"
+            message.tool_trace = [{"tool": event.title, "status": event.status, "summary": event.payload} for event in (await session.execute(select(ExpertRunEvent).where(ExpertRunEvent.run_id == run.id).order_by(ExpertRunEvent.sequence))).scalars().all()]
     await session.commit()
     return ok({"approval": {"id": approval.id, "status": approval.status}}, "审批已处理")

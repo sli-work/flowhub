@@ -465,7 +465,7 @@ async def task_action(
         auth.require("task:return")
         if not body.to_node_id:
             raise BizError(BizCode.VALIDATION, "请选择回退目标节点")
-        from flowhub_api.models import TemplateCanvas, WorkflowInstance
+        from flowhub_api.models import TemplateCanvas
 
         instance = (await session.execute(
             select(WorkflowInstance).where(WorkflowInstance.work_item_id == t.wi_id)
@@ -660,7 +660,7 @@ async def ai_fill_task(
     latest = (await session.execute(
         select(ExpertRun).where(ExpertRun.task_id == t.id).order_by(ExpertRun.started_at.desc(), ExpertRun.id.desc()).limit(1)
     )).scalar_one_or_none()
-    if latest is not None and latest.status == "running":
+    if latest is not None and latest.status in {"queued", "running", "interrupted"}:
         raise BizError(BizCode.LOCKED, "Expert Run 仍在执行中，请稍后再重跑", http_status=423)
     schema = cfg.get("schema") or []
     deployment_id = (cfg.get("expert") or {}).get("expertDeploymentId") or ""
@@ -726,16 +726,37 @@ async def adopt_run(
         manual = {k: v for k, v in body.values.items()
                   if k in schema_keys and next((f.get("type") for f in schema if f.get("key") == k), "") not in ("upload", "file")}
         if manual:
+            from flowhub_api.services.expert_runtime import schema_validation_issues
+
             base = snapshot.get("values") if isinstance(snapshot, dict) else None
             # originalValues 保留「采纳前」的原始解析值（首次覆盖时记录，后续编辑不回写），供 diff 展示
             prev_original = snapshot.get("originalValues") if isinstance(snapshot, dict) else None
             before = dict(prev_original) if isinstance(prev_original, dict) else dict(base or {})
             edited_keys = sorted(k for k in manual if manual.get(k) != (base or {}).get(k))
-            run.parsed = {**(snapshot or {}), "values": {**(base or {}), **manual},
+            edited_values = {**(base or {}), **manual}
+            validation_issues = schema_validation_issues(schema, edited_values)
+            run.parsed = {**(snapshot or {}), "values": edited_values,
                           "warnings": list(snapshot.get("warnings") or []) if isinstance(snapshot, dict) else [],
+                          "valid": not validation_issues, "validationIssues": validation_issues,
                           "originalValues": before, "manualEdited": True,
                           "editedKeys": edited_keys,
                           "editedAt": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")}
+            if body.approve_quality_override and run.parsed.get("qualityStatus") not in (None, "passed"):
+                from flowhub_api.services.runtime_quality import content_hash
+                import json
+
+                manual_hash = content_hash(json.dumps(edited_values, ensure_ascii=False, sort_keys=True, default=str))
+                run.quality_result = {
+                    "status": "passed",
+                    "issues": [],
+                    "contentHash": manual_hash,
+                    "overriddenBy": user.id,
+                    "overriddenAt": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                }
+                run.parsed = {**run.parsed, "qualityReview": {
+                    "status": run.parsed.get("qualityStatus"), "issues": list(run.parsed.get("qualityIssues") or []),
+                    "overriddenBy": user.id, "overriddenAt": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                }, "qualityStatus": "passed", "qualityIssues": [], "contentHash": manual_hash}
             snapshot = run.parsed
             manual_edited = True
             diff_fields = edited_keys
@@ -748,10 +769,17 @@ async def adopt_run(
             from flowhub_api.services.expert_runtime import normalize_run_output
 
             try:
+                from flowhub_api.services.expert_runtime import schema_validation_issues
+
                 n_values, n_warnings = await normalize_run_output(session, run, schema)
                 before = snapshot.get("values") or {}
                 diff_fields = [k for k in n_values if n_values.get(k) != before.get(k)]
+                validation_issues = schema_validation_issues(schema, n_values)
                 run.parsed = {**snapshot, "values": n_values, "warnings": n_warnings, "originalValues": before,
+                              "valid": not validation_issues, "validationIssues": validation_issues,
+                              "qualityStatus": run.quality_result.get("status", "needs_human_review"),
+                              "qualityIssues": list(run.quality_result.get("issues") or []),
+                              "contentHash": run.quality_result.get("contentHash", ""),
                               "normalized": True, "formattedAt": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")}
                 snapshot = run.parsed
                 normalized = True
@@ -775,7 +803,7 @@ async def adopt_run(
     await AuditService(session).record(
         actor=user.name, action="task:adopt_run", target=f"{t.id} · {t.node}", result="success",
         after={"runId": run.id, "fields": list(values.keys()), "warnings": warnings[:5],
-               "normalized": normalized, "diffFields": diff_fields[:10]},
+               "normalized": normalized, "diffFields": diff_fields[:10], "qualityOverride": bool(body.approve_quality_override and manual_edited)},
     )
     await session.commit()
     msg = "已按编辑内容采纳，请审核后提交" if manual_edited else ("已采纳 Expert 产出（经 AI 格式规范），请审核后提交" if normalized else "已采纳 Expert 产出，请审核后提交")

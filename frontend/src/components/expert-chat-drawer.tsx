@@ -1,10 +1,11 @@
+import { nextDraft, type DraftState } from '@/lib/chat-draft.mjs'
 import { useEffect, useRef, useState } from 'react'
 import { CircleAlert, LoaderCircle, Send, Square, X } from 'lucide-react'
 import { getToken } from '../lib/api'
 import { cn } from '../lib/utils'
 import { ApprovalPendingCard } from './approval-card'
 
-interface TraceItem { kind?: 'skill' | 'mcp' | 'tool' | 'approval' | 'model'; tool: string; status: string; summary: string | Record<string, unknown> }
+interface TraceItem { kind?: 'skill' | 'mcp' | 'tool' | 'approval' | 'model' | 'quality'; tool: string; status: string; summary: string | Record<string, unknown> }
 
 interface ChatMessage {
   id: string
@@ -17,6 +18,7 @@ interface ChatMessage {
 }
 
 interface AssistantPayload {
+  runId?: string
   id: string
   content: string
   status?: string
@@ -30,7 +32,7 @@ const deriveWriteIntent = (content: string) => /提交|创建|写入|删除|发�
 
 /**
  * 编辑器「在 AiChat 中测试」抽屉：绑定当前草稿版本的多轮对话。
- * Expert/版本会话服务端不走逐 token 流式：SSE 或整段 JSON 双路径解析，均归一为最终消息。
+ * 支持带修订版本的草稿流，最终以服务端持久化消息为准。
  */
 export function ExpertChatDrawer({ sessionId, sessionTitle, subtitle, modelLabel, onClose, onTested }: { sessionId: string | null; sessionTitle: string; subtitle?: string; modelLabel?: string; onClose: () => void; onTested?: () => void }) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
@@ -58,7 +60,7 @@ export function ExpertChatDrawer({ sessionId, sessionTitle, subtitle, modelLabel
   if (!sessionId) return null
 
   const absorb = (payload: AssistantPayload, toolTrace: TraceItem[], runId?: string) => {
-    const message: ChatMessage = { id: payload.id, role: 'assistant', content: payload.content || '（无文本输出）', status: payload.status, toolTrace: payload.toolTrace?.length ? payload.toolTrace : toolTrace, runId }
+    const message: ChatMessage = { id: payload.id, role: 'assistant', content: payload.content || '（无文本输出）', status: payload.status, toolTrace: payload.toolTrace?.length ? payload.toolTrace : toolTrace, runId: runId ?? payload.runId }
     setMessages((current) => [...current, message])
     setStreamText('')
     setStreamingTraces([])
@@ -77,6 +79,7 @@ export function ExpertChatDrawer({ sessionId, sessionTitle, subtitle, modelLabel
     abortRef.current = controller
     // 跨分支累积：SSE 与 JSON 路径、以及 abort 时都能拿到当前已生成内容
     let accumulated = ''
+    let draft: DraftState | undefined
     let accumulatedTraces: TraceItem[] = []
     try {
       const response = await fetch(`/api/v1/expert-chat/sessions/${sessionId}/messages/stream`, {
@@ -96,6 +99,7 @@ export function ExpertChatDrawer({ sessionId, sessionTitle, subtitle, modelLabel
         const decoder = new TextDecoder()
         let buffer = ''
         let finalMessage: AssistantPayload | null = null
+        let finished = false
         try {
           while (true) {
             const chunk = await reader.read()
@@ -107,29 +111,35 @@ export function ExpertChatDrawer({ sessionId, sessionTitle, subtitle, modelLabel
               const event = lines.find((line) => line.startsWith('event: '))?.slice(7)
               const raw = lines.find((line) => line.startsWith('data: '))?.slice(6)
               if (!event || !raw) continue
-              const data = JSON.parse(raw) as TraceItem & { text?: string; message?: AssistantPayload }
+              const data = JSON.parse(raw) as TraceItem & { text?: string; attemptId?: string | number; message?: AssistantPayload }
               if (event === 'trace') {
                 accumulatedTraces = [...accumulatedTraces.filter((item) => item.tool !== data.tool), { tool: data.tool, status: data.status, summary: data.summary }]
                 setStreamingTraces(accumulatedTraces)
               }
-              if (event === 'token' && data.text) {
-                accumulated += data.text
+              if (event === 'error') throw new Error(typeof data.message === 'string' ? data.message : '生成失败')
+              if (event === 'draft_start' || event === 'token') {
+                draft = nextDraft(draft, event, data)
+                accumulated = draft.text
                 setStreamText(accumulated)
               }
-              if (event === 'done' && data.message) finalMessage = data.message
+              if (event === 'done' && data.message) {
+                finalMessage = data.message
+                finished = true
+              }
             }
-            if (chunk.done) break
+            if (finished || chunk.done) break
           }
         } finally {
           await reader.cancel().catch(() => {})
         }
-        absorb(finalMessage ?? { id: `a-${Date.now()}`, content: accumulated }, accumulatedTraces)
+        if (!finalMessage) throw new Error('连接中断，回答尚未完成校验，请刷新查看状态')
+        absorb(finalMessage, accumulatedTraces)
       }
     } catch (error) {
       if (controller.signal.aborted) {
         // 用户主动停止：保留已生成内容并落为消息，便于继续追问
         if (accumulated.trim()) absorb({ id: `a-${Date.now()}`, content: accumulated }, accumulatedTraces)
-        setNotice({ ok: true, text: '已停止生成。已生成部分已保留。' })
+        setNotice({ ok: true, text: '已停止生成。当前部分内容尚未校验。' })
       } else {
         setNotice({ ok: false, text: error instanceof Error ? error.message : '消息发送失败' })
       }
@@ -178,13 +188,14 @@ export function ExpertChatDrawer({ sessionId, sessionTitle, subtitle, modelLabel
           ))}
           {streamText && (
             <div className="max-w-[88%] rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 dark:border-slate-700 dark:bg-slate-900">
+              <p className="text-xs text-amber-600">待校验草稿</p>
               <p className="whitespace-pre-wrap break-words text-[13px] leading-relaxed text-slate-700 dark:text-slate-200">{streamText}</p>
               {!!streamingTraces.length && renderedTraces({ id: 'streaming', role: 'assistant', content: '', toolTrace: streamingTraces })}
             </div>
           )}
           {busy && !streamText && (
             <div className="flex items-center gap-2 rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-[11.5px] text-blue-700 dark:border-blue-500/20 dark:bg-blue-500/10 dark:text-blue-300">
-              <LoaderCircle className="h-3.5 w-3.5 animate-spin" />正在执行 LangGraph · 读取上下文、调用工具并生成回答…
+              <LoaderCircle className="h-3.5 w-3.5 animate-spin" />正在读取上下文、调用工具并生成待校验草稿…
             </div>
           )}
           {notice && (

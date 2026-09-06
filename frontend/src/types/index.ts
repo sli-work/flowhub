@@ -359,7 +359,7 @@ export interface ProviderRecord {
   id: string; name: string; engine: 'opencode' | 'api'; provider: string; baseUrl: string
   status: 'healthy' | 'degraded' | 'disabled'; models: string[]
   /** 与模型列表同序的具体条目（id = LlmProviderModel id），用于按 providerModelId 反查归属 */
-  modelEntries?: { id: string; model: string }[]
+  modelEntries?: { id: string; model: string; maxContextTokens?: number | null; maxOutputTokens?: number | null }[]
   credential: 'configured' | 'missing'; latency: string
   maxContextTokens?: number
 }

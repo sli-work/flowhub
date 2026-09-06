@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     graphify_command: str = "graphify"
     graphify_timeout_seconds: int = 120
     graphify_max_workers: int = 2
-    graphify_max_prompt_chars: int = 2400
+    graphify_max_prompt_chars: int = 6000
 
     # ---------- 通知渠道（docs/06）：钉钉 / 企微机器人 webhook + 邮件 SMTP ----------
     # 留空 = 该渠道未启用（通知中心渠道健康检查会显示"未配置"）

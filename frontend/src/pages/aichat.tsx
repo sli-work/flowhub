@@ -1,3 +1,4 @@
+import { nextDraft, type DraftState } from "@/lib/chat-draft.mjs";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AssistantRuntimeProvider,
@@ -218,7 +219,9 @@ export function AiChatPage() {
           const decoder = new TextDecoder();
           let buffer = "";
           let text = "";
+          let draft: DraftState | undefined;
           let finalMessage: PersistedMessage | null = null;
+          let finished = false;
           const consume = (block: string) => {
             const lines = block.split("\n");
             const event = lines
@@ -231,6 +234,7 @@ export function AiChatPage() {
             if (sid !== sessionIdRef.current) return;
             const data = JSON.parse(raw) as TraceItem & {
               text?: string;
+              attemptId?: string | number;
               message?: PersistedMessage;
             };
             if (event === "trace")
@@ -243,8 +247,15 @@ export function AiChatPage() {
                 next[index] = data;
                 return next;
               });
-            if (event === "token" && data.text) text += data.text;
-            if (event === "done" && data.message) finalMessage = data.message;
+            if (event === "error") throw new Error(typeof data.message === "string" ? data.message : "生成失败");
+            if (event === "draft_start" || event === "token") {
+              draft = nextDraft(draft, event, data);
+              text = draft.text;
+            }
+            if (event === "done" && data.message) {
+              finalMessage = data.message;
+              finished = true;
+            }
           };
           try {
             while (true) {
@@ -255,13 +266,16 @@ export function AiChatPage() {
               const blocks = buffer.split("\n\n");
               buffer = blocks.pop() ?? "";
               blocks.forEach(consume);
-              if (text) yield { content: [{ type: "text" as const, text }] };
-              if (chunk.done) break;
+              if (draft) yield { content: [{ type: "text" as const, text }] };
+              if (finished || chunk.done) break;
             }
           } finally {
             await reader.cancel().catch(() => {});
           }
           const completedMessage = finalMessage as PersistedMessage | null;
+          if (!completedMessage) throw new Error("连接中断，回答尚未完成校验，请刷新查看状态");
+          text = completedMessage.content;
+          yield { content: [{ type: "text" as const, text }] };
           if (completedMessage) {
             setMessages((current) => [...current, completedMessage]);
             if (completedMessage.compacted) setLastCompacted(true);
@@ -795,13 +809,13 @@ export function AiChatPage() {
                     <span>
                       {executingTrace.length
                         ? traceActivityLabel(executingTrace[executingTrace.length - 1])
-                        : "正在思考…"}
+                        : "正在生成待校验草稿…"}
                     </span>
                   </div>
                 )}
                 {lastCompacted && (
                   <div className="mb-4 rounded-lg bg-violet-50 px-3 py-2 text-[11.5px] text-violet-600 dark:bg-violet-500/10 dark:text-violet-300">
-                    🧠 会话较长，早期对话已自动压缩（保留最近 6 轮全文），模型仍可基于摘要理解前文。
+                    🧠 会话较长，早期对话已按模型预算压缩；近期内容优先保留，详细原文仍可在历史中查看。
                   </div>
                 )}
                 {stopped && (

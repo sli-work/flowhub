@@ -116,7 +116,7 @@ async def migrate(conn: AsyncConnection) -> None:
             logger.info("migrate: expert_deployments.%s added", column)
     provider_columns = await _existing_columns(conn, "llm_providers")
     if "max_context_tokens" not in provider_columns:
-        await conn.execute(text('ALTER TABLE llm_providers ADD COLUMN "max_context_tokens" INTEGER DEFAULT 1000000'))
+        await conn.execute(text('ALTER TABLE llm_providers ADD COLUMN "max_context_tokens" INTEGER DEFAULT 32000'))
         logger.info("migrate: llm_providers.max_context_tokens added")
     chat_columns = await _existing_columns(conn, "expert_chat_sessions")
     if "provider_model_id" not in chat_columns:
@@ -141,6 +141,15 @@ async def migrate(conn: AsyncConnection) -> None:
     if run_columns and "context" not in run_columns:
         await conn.execute(text("ALTER TABLE expert_runs ADD COLUMN \"context\" TEXT DEFAULT ''"))
         logger.info("migrate: expert_runs.context added")
+    for table, additions in {
+        "expert_runs": {"config_snapshot": "JSON NOT NULL DEFAULT '{}'", "quality_result": "JSON NOT NULL DEFAULT '{}'", "execution_generation": "INTEGER NOT NULL DEFAULT 1"},
+        "expert_chat_sessions": {"compaction_version": "INTEGER NOT NULL DEFAULT 0"},
+        "llm_provider_models": {"max_context_tokens": "INTEGER", "max_output_tokens": "INTEGER"},
+    }.items():
+        existing = await _existing_columns(conn, table)
+        for column, ddl in additions.items():
+            if existing and column not in existing:
+                await conn.execute(text(f'ALTER TABLE "{table}" ADD COLUMN "{column}" {ddl}'))
     message_columns = await _existing_columns(conn, "expert_chat_messages")
     if "tool_trace" not in message_columns:
         await conn.execute(text("ALTER TABLE expert_chat_messages ADD COLUMN \"tool_trace\" JSON DEFAULT '[]'"))

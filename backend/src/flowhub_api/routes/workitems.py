@@ -10,24 +10,15 @@ from sqlalchemy.orm import selectinload
 from flowhub_api.authz.authorizer import build_authorizer, get_current_user
 from flowhub_api.core.response import BizError, BizCode, ok
 from flowhub_api.db.session import get_db
-from flowhub_api.models import DocItem, NotificationItem, TagItem, TaskItem, User, WorkItem
+from flowhub_api.models import NotificationItem, TaskItem, User, WorkItem
 from flowhub_api.schemas.api import CreateWorkItemReq
 from flowhub_api.seed.init import gen_id
 from flowhub_api.services.audit import AuditService
+from flowhub_api.services.work_item_creation import create_work_item as create_work_item_service
 from flowhub_api.services.task_lineage import historical_split_parent_ids_for_tasks
 from flowhub_api.services.workflow import WorkflowService
 
 router = APIRouter(prefix="/api/v1/work-items", tags=["work-items"])
-
-
-def _attachment_ids(values: dict | None) -> set[str]:
-    """从表单中的新版附件引用提取文档 ID；旧版文件名不能安全关联。"""
-    ids: set[str] = set()
-    for value in (values or {}).values():
-        for entry in value if isinstance(value, list) else [value]:
-            if isinstance(entry, dict) and isinstance(entry.get("id"), str):
-                ids.add(entry["id"])
-    return ids
 
 
 def _brief(wi: WorkItem) -> dict:
@@ -114,33 +105,11 @@ async def create_work_item(
     user: Annotated[User, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_db)],
 ):
-    auth = build_authorizer(user)
-    auth.require("workflow_instance:create")
-    service = WorkflowService(session)
-    result = await service.create_instance(body.project_id, body.template_id, body.start_values, user)
-    wi = result["item"]
-    if body.labels:
-        # 只允许绑定预定义标签：剔除未登记的（宽松处理，避免表单过期标签阻塞创建）
-        registered = set((await session.execute(
-            select(TagItem.name).where(TagItem.name.in_(body.labels), TagItem.deleted == False)  # noqa: E712
-        )).scalars().all())
-        wi.labels = [l for l in dict.fromkeys(body.labels) if l in registered]
-    attachment_ids = _attachment_ids(body.start_values)
-    if attachment_ids:
-        # 起始表单在工作项 ID 生成前上传。仅归档当前用户在同项目上传的未绑定文档，防止借 ID 关联他人文件。
-        docs = (await session.execute(
-            select(DocItem).where(
-                DocItem.id.in_(attachment_ids), DocItem.wi.is_(None),
-                DocItem.project == wi.project, DocItem.uploader == user.name, DocItem.deleted == False,  # noqa: E712
-            )
-        )).scalars().all()
-        for doc in docs:
-            doc.wi = wi.id
-    await AuditService(session).record(
-        actor=user.name, action="workflow_instance:create",
-        target=f"{wi.id} · {wi.title}（{result['next_node'].get('label', '')}）", result="success",
+    result = await create_work_item_service(
+        session, user=user, project_id=body.project_id, template_id=body.template_id,
+        start_values=body.start_values, labels=body.labels,
     )
-    await session.commit()
+    wi = result["item"]
     from flowhub_api.routes.notifications import publish_notification
 
     for notification in result["notifications"]:

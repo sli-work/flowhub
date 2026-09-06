@@ -1,5 +1,7 @@
 """Versioned Expert runtime models backed by LangGraph checkpoints."""
-from sqlalchemy import JSON, Boolean, Enum, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, DateTime, Enum, ForeignKey, Integer, String, Text, UniqueConstraint
+from datetime import datetime
+
 from sqlalchemy.orm import Mapped, mapped_column
 
 from flowhub_api.db.session import Base
@@ -14,7 +16,7 @@ class LlmProvider(Base):
     api_key: Mapped[str] = mapped_column(String(512), default="")
     credential_configured: Mapped[bool] = mapped_column(Boolean, default=False)
     status: Mapped[str] = mapped_column(String(16), default="healthy")
-    max_context_tokens: Mapped[int] = mapped_column(Integer, default=1_000_000)  # 模型最大上下文窗口（token），压缩预算 = 80%
+    max_context_tokens: Mapped[int] = mapped_column(Integer, default=32_000)  # 模型最大上下文窗口（token），压缩预算 = 80%
     created_by: Mapped[str] = mapped_column(String(32), default="")
     created_at: Mapped[str] = mapped_column(String(40), default="")
 
@@ -28,6 +30,8 @@ class LlmProviderModel(Base):
     model: Mapped[str] = mapped_column(String(128))
     label: Mapped[str] = mapped_column(String(128), default="")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    max_context_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    max_output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class ExpertSkill(Base):
@@ -163,6 +167,9 @@ class ExpertRun(Base):
     output: Mapped[str] = mapped_column(Text, default="")
     # 解析快照：Run 成功后按节点 schema 解析的 {values, warnings}，供前端预览与采纳幂等消费
     parsed: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    config_snapshot: Mapped[dict] = mapped_column(JSON, default=dict)
+    quality_result: Mapped[dict] = mapped_column(JSON, default=dict)
+    execution_generation: Mapped[int] = mapped_column(Integer, default=1)
     trace_id: Mapped[str] = mapped_column(String(64), unique=True)
     error: Mapped[str] = mapped_column(Text, default="")
     started_at: Mapped[str] = mapped_column(String(40), default="")
@@ -215,6 +222,7 @@ class ExpertChatSession(Base):
     title: Mapped[str] = mapped_column(String(160), default="新会话")
     created_at: Mapped[str] = mapped_column(String(40), default="")
     updated_at: Mapped[str] = mapped_column(String(40), default="")
+    compaction_version: Mapped[int] = mapped_column(Integer, default=0)
     compaction_sequence: Mapped[int] = mapped_column(Integer, default=0)   # 已压缩的最大消息 sequence（摘要截止标记）
     compaction_summary: Mapped[str] = mapped_column(Text, default="")      # 固化摘要文本（标记之前的早期对话）
 
@@ -232,4 +240,29 @@ class ExpertChatMessage(Base):
     status: Mapped[str] = mapped_column(String(16), default="completed")
     tool_trace: Mapped[list] = mapped_column(JSON, default=list)
     files: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[str] = mapped_column(String(40), default="")
+
+
+class ExpertJob(Base):
+    """Transactional outbox and lease record for one execution generation."""
+    __tablename__ = "expert_jobs"
+    __table_args__ = (UniqueConstraint("run_id", "generation", name="uq_expert_job_generation"),)
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("expert_runs.id", ondelete="CASCADE"), index=True)
+    generation: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(16), default="queued", index=True)
+    claim_token: Mapped[str] = mapped_column(String(32), default="")
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    completion: Mapped[dict] = mapped_column(JSON, default=dict)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[str] = mapped_column(String(40), default="")
+    finished_at: Mapped[str] = mapped_column(String(40), default="")
+
+
+class ExpertObjectCleanup(Base):
+    """Object deletions become visible only after replacement documents commit."""
+    __tablename__ = "expert_object_cleanup"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    object_name: Mapped[str] = mapped_column(String(512))
     created_at: Mapped[str] = mapped_column(String(40), default="")

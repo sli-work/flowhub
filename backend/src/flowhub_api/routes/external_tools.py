@@ -68,6 +68,7 @@ async def download_skill_markdown(_: Annotated[User, Depends(get_current_user)])
 
 ## Write Operations
 
+- `create_work_item`: create and start a new work item in an authorized project/template binding.
 - `claim_task`: claim a transferred/assigned task.
 - `create_document`: save Markdown content as a FlowHub document (for upload-type form fields).
 - `submit_task`: fill the node form and submit, advancing the workflow to the next node.
@@ -83,6 +84,13 @@ async def download_skill_markdown(_: Annotated[User, Depends(get_current_user)])
    - `form_values` 按 formSchema 的 key 组织，upload 字段传 `[{{"id": ..., "name": ...}}]`；
    - `acceptance_checks` 逐项 `{{"<key>": {{"text": "<标准原文>", "checked": true}}}}`，验收标准必须全部勾选，否则校验失败；
 6. 返回 `nextNode` / `nextAssignees` 表示已流转；`waitingJoin: true` 表示并行汇合等待其他分支。
+
+## Work Item Creation（创建工作项）
+
+1. 只有具有 `workflow_instance:create` 权限、且是起始节点处理人（或管理员）的调用者可创建；
+2. 调用 `create_work_item(project_id, template_id, start_values, labels)`；项目必须启用且已绑定模板；
+3. `start_values.title` 必填，其余字段应遵循模板起始节点的表单 Schema；
+4. 这是会创建真实流程、任务和通知的写入操作。项目、模板或表单信息不明确时，先向用户确认，勿猜测默认值。
 
 ## Safety Rules
 

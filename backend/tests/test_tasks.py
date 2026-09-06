@@ -234,7 +234,7 @@ class TestTaskActions:
         r = client.post(f"/api/v1/tasks/{_fresh_task}/actions", headers=leader_headers,
                         json={"action": "return", "to_node_id": "n1"})
         assert r.status_code == 400
-        assert "模板未配置" in r.json()["message"]
+        assert "画布中配置" in r.json()["message"]
 
     def test_return_without_node(self, client: TestClient, leader_headers: dict, _fresh_task: str):
         r = client.post(f"/api/v1/tasks/{_fresh_task}/actions", headers=leader_headers,

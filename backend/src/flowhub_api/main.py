@@ -26,6 +26,7 @@ logger = logging.getLogger("flowhub_api")
 async def lifespan(_: FastAPI):
     """启动：建表 + 幂等 seed（连接信息未配置时优雅降级并提示）。"""
     settings = get_settings()
+    worker_state = None
     try:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
@@ -39,6 +40,8 @@ async def lifespan(_: FastAPI):
         from flowhub_api.services.expert_runtime import recover_interrupted_runs
         async with SessionFactory() as session:
             await recover_interrupted_runs(session)
+        from flowhub_api.services.expert_scheduler import start_workers
+        worker_state = await start_workers()
         from flowhub_api.services.repo_mirror import schedule_all_mirror_builds
         await schedule_all_mirror_builds()  # 启动预热：为绑定仓库的后台任务自愈重建镜像（不阻塞）
         logger.info("数据库初始化完成（PostgreSQL 已连接）")
@@ -48,6 +51,9 @@ async def lifespan(_: FastAPI):
             "Redis / MinIO 为惰性连接，不影响启动。", exc,
         )
     yield
+    if worker_state is not None:
+        from flowhub_api.services.expert_scheduler import stop_workers
+        await stop_workers(worker_state)
     await engine.dispose()
 
 

@@ -130,7 +130,7 @@ class TestReturnAndResubmit:
             r = client.post(f"/api/v1/tasks/{n2_task}/actions", headers=headers,
                             json={"action": "return", "to_node_id": "n1"})
             assert r.status_code == 400
-            assert "模板未配置" in r.json()["message"]
+            assert "画布中配置" in r.json()["message"]
 
 
 # ==================== 3. 并发工作项实例隔离 ====================

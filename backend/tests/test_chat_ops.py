@@ -24,9 +24,10 @@ def test_short_history_no_compact():
 
 
 def test_budget_derived_from_max_context_tokens():
-    # 默认 100 万窗口 × 80% × 3 字节/token
-    assert context_budget_bytes() == int(1_000_000 * 0.8 * 3)
-    assert context_budget_bytes(200_000) == int(200_000 * 0.8 * 3)
+    # Compatibility helper follows the conservative 32k default and always
+    # leaves output plus safety reserve instead of assuming a 1M context.
+    assert 0 < context_budget_bytes() < 32_000
+    assert context_budget_bytes(200_000) > context_budget_bytes()
 
 
 def test_long_history_compacts_once_and_advances_marker():
@@ -41,13 +42,13 @@ def test_long_history_compacts_once_and_advances_marker():
     assert total_bytes > small_budget
     text1, summary1, marker1, compacted1 = build_session_history(rows, budget_bytes=small_budget)
     assert compacted1 is True and marker1 > 0 and summary1
-    assert "早期对话" in text1 and "近期对话" in text1
+    assert "历史已裁剪" in text1
     last_q = rows[-2][2]
     assert last_q[:40] in text1  # 最近一轮保留全文
     # 增量语义：同一批消息再次调用（带已固化摘要与标记）→ 早期不再重复压缩
     text2, summary2, marker2, compacted2 = build_session_history(rows, summary=summary1, marker=marker1, budget_bytes=small_budget)
     assert summary2 == summary1 and marker2 == marker1
-    assert compacted2 is True and "早期对话" in text2
+    assert compacted2 is True and "历史已裁剪" in text2
 
 
 def test_preview_does_not_advance_marker():
@@ -56,7 +57,7 @@ def test_preview_does_not_advance_marker():
     rows = [(i, "user" if i % 2 else "assistant", "长" * 7000) for i in range(1, 41)]
     text, needs = session_history_preview(rows, summary="", marker=0, budget_bytes=small_budget)
     assert needs is True
-    assert "早期对话" not in text  # 未压缩：无摘要标记
+    assert "历史已裁剪" not in text  # 未压缩：无摘要标记
 
 
 def test_new_messages_append_after_marker():

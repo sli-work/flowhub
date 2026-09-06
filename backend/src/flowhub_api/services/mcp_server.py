@@ -35,6 +35,7 @@ _INSTRUCTIONS = """FlowHub 流程协同平台外部接入服务。
 3. get_task_context <task_id> —— 获取完整上下文（含前序节点与文档）；
 4. create_document —— 把 Markdown 产出保存为文档（upload 字段用）；
 5. submit_task <task_id> —— 填充表单并提交，自动流转到下一节点。
+6. create_work_item —— 在有创建权限的项目中启动一个新的工作项流程。
 """
 
 mcp = FastMCP("FlowHub", instructions=_INSTRUCTIONS)
@@ -118,6 +119,51 @@ async def create_document(name: str, content: str, wi_id: str = "") -> dict:
         )
         await session.commit()
         return dict(ref)
+
+
+@mcp.tool()
+async def create_work_item(
+    project_id: str,
+    template_id: str,
+    start_values: dict,
+    labels: list[str] | None = None,
+) -> dict:
+    """创建并启动工作项流程（会产生真实写入）。
+
+    调用者必须具有 workflow_instance:create 权限，并且是起始节点处理人或管理员。
+    project_id 和 template_id 必须是已启用项目中的有效模板绑定；start_values 必须至少含
+    title，且应按起始节点的表单 schema 填写。失败时不会创建任何工作项。
+    """
+    user = _current_user.get()
+    from flowhub_api.routes.notifications import publish_notification
+    from flowhub_api.services.work_item_creation import create_work_item as create_work_item_service
+
+    async with SessionFactory() as session:
+        try:
+            result = await create_work_item_service(
+                session, user=user, project_id=project_id, template_id=template_id,
+                start_values=start_values or {}, labels=labels or [],
+            )
+        except Exception as exc:  # noqa: BLE001
+            detail = getattr(exc, "detail", None) or str(exc)
+            return {"error": f"创建失败：{detail}", "code": getattr(exc, "biz_code", 0)}
+
+        for notification in result.get("notifications") or []:
+            await publish_notification(notification)
+        wi = result["item"]
+        next_node = result.get("next_node") or {}
+        next_tasks = result.get("tasks") or ([result["next_task"]] if result.get("next_task") else [])
+        return {
+            "created": True,
+            "workItem": {
+                "id": wi.id, "title": wi.title, "type": wi.type, "project": wi.project,
+                "status": wi.status, "priority": wi.priority, "labels": wi.labels,
+            },
+            "instance": {"id": result["instance"].id, "currentNode": next_node},
+            "startTask": _task_summary(result["start_task"]),
+            "nextTasks": [_task_summary(task) for task in next_tasks],
+            "closed": bool(result.get("closed")),
+        }
 
 
 @mcp.tool()

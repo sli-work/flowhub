@@ -122,6 +122,8 @@ class FakeChatOpenAI:
             await asyncio.sleep(FakeChatOpenAI.delay)
         if FakeChatOpenAI.should_fail:
             raise ConnectionError("provider unreachable")
+        if any("你是事实核验器" in str(message) for message in messages):
+            return _FakeCompletion('{"pass": true, "issues": []}')
         return _FakeCompletion(FakeChatOpenAI.payload)
 
 
@@ -229,8 +231,9 @@ def test_ai_fill_generates_values_and_document(client, org_headers, fake_model):
     r = client.post(f"/api/v1/tasks/{task_id}/ai-fill", headers=headers, json={})
     assert r.status_code == 200, r.text
     data = r.json()["data"]
-    # 新契约：ai-fill 立即返回 running Run（后台执行，覆盖原记录），结果经任务详情轮询获取
-    assert data["run"]["status"] == "running"
+    # 持久调度契约：提交事务只登记 queued Run；worker 领取后才变为 running。
+    # 结果经任务详情轮询获取，不能把尚未领取误报为正在运行。
+    assert data["run"]["status"] == "queued"
     assert data["run"]["id"] == initial[0]["id"], "重跑应复用原 Run 记录"
     run_id = data["run"]["id"]
     runs = _wait_run_succeeded(client, headers, task_id)
@@ -273,7 +276,7 @@ def test_ai_fill_rerun_with_context(client, org_headers, fake_model):
     assert r.status_code == 200, r.text
     rerun = r.json()["data"]["run"]
     assert rerun["id"] == original_id, "重跑应复用原 Run 记录（覆盖而非新建）"
-    assert rerun["status"] == "running"
+    assert rerun["status"] == "queued"
     assert rerun["context"] == ctx
     runs = _wait_run_succeeded(client, headers, task_id)
     assert len(runs) == len(initial_runs), "覆盖式重跑不应新增 Run 记录"
@@ -304,7 +307,7 @@ def test_ai_fill_running_run_blocks_rerun(client, org_headers, fake_model):
         deadline = time.time() + 8.0
         while time.time() < deadline:
             runs = client.get(f"/api/v1/tasks/{task_id}", headers=headers).json()["data"]["expertRuns"]
-            if runs and runs[0]["status"] == "running":
+            if runs and runs[0]["status"] in {"queued", "running", "interrupted"}:
                 break
             time.sleep(0.02)
         r = client.post(f"/api/v1/tasks/{task_id}/ai-fill", headers=headers, json={})
@@ -349,7 +352,7 @@ def test_ai_fill_model_failure_returns_clear_error(client, org_headers, fake_mod
     # 先等到达时的自动 Run 走完（终态 failed）：覆盖式重跑不允许覆盖 running 中的 Run
     initial = _wait_run_succeeded(client, headers, task_id)
     assert initial and initial[0]["status"] == "failed", "前置：should_fail 下自动 Run 应失败落终态"
-    # ai-fill 覆盖该失败 Run 重跑，应放行并立即返回 running Run
+    # ai-fill 覆盖该失败 Run 重跑，应放行并登记 queued Run。
     r = client.post(f"/api/v1/tasks/{task_id}/ai-fill", headers=headers, json={})
     assert r.status_code == 200, "改为后台执行后，发起本身不应失败"
     run_id = r.json()["data"]["run"]["id"]
@@ -360,7 +363,7 @@ def test_ai_fill_model_failure_returns_clear_error(client, org_headers, fake_mod
     while time.time() < deadline:
         runs = client.get(f"/api/v1/tasks/{task_id}", headers=headers).json()["data"]["expertRuns"]
         run = next((x for x in runs if x["id"] == run_id), None)
-        if run and run["status"] != "running":
+        if run and run["status"] not in {"queued", "running", "interrupted"}:
             break
         time.sleep(0.05)
     assert run and run["status"] == "failed"

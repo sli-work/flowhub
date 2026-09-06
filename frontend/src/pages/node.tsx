@@ -142,7 +142,7 @@ export function NodeProcessPage() {
   /* Expert Run 后台执行：run 进行中或自动节点处理中 → 轮询任务详情（3s）。
      最新 Run 刚成功后刷新预览；仅「Expert 自动」节点会自动采纳并流转，其他节点由用户主动采纳。
      全自动节点完成瞬间（pending_confirmation → completed）：toast 通知并直达下一任务（详情响应 nextTaskId，兜底回工作项） */
-  const expertProcessing = expertRuns[0]?.status === 'running' || task?.status === 'pending_confirmation'
+  const expertProcessing = ['queued', 'running'].includes(expertRuns[0]?.status ?? '') || task?.status === 'pending_confirmation'
   const prevStatusRef = useRef<string | null>(null)
   const autoFilledRunRef = useRef<string | null>(null)
   const adoptRunRef = useRef<(runId: string) => Promise<void>>(async () => {})
@@ -388,6 +388,18 @@ export function NodeProcessPage() {
       const d = await api.post<{ values: Record<string, unknown>; warnings: string[] }>(`/api/v1/tasks/${activeTaskId}/adopt-run`, { run_id: runId })
       applyExpertValues(d.values, d.warnings, '已采纳 Expert 产出，请审核后提交')
     } catch (e) {
+      if (e instanceof ApiError && e.message.includes('事实质量校验未通过') && window.confirm('该产出未通过事实核验。仅当你已逐项人工复核并补全当前表单后，才可覆盖采纳；继续吗？')) {
+        try {
+          const d = await api.post<{ values: Record<string, unknown>; warnings: string[] }>(`/api/v1/tasks/${activeTaskId}/adopt-run`, {
+            run_id: runId, values: formValues, approve_quality_override: true,
+          })
+          applyExpertValues(d.values, d.warnings, '已记录人工复核并采纳，请审核后提交')
+          return
+        } catch (overrideError) {
+          toast.error(overrideError instanceof ApiError ? overrideError.message : '人工复核采纳失败')
+          return
+        }
+      }
       toast.error(e instanceof ApiError ? e.message : '采纳失败')
     } finally { setAdoptBusy(null) }
   }
@@ -517,7 +529,7 @@ export function NodeProcessPage() {
       ]
 
   return (
-    <div className="page-container max-w-[1600px]">
+    <div className="page-container">
       <button className="mb-4 flex items-center gap-1.5 text-[13px] font-medium text-slate-500 transition-colors hover:text-blue-600" onClick={() => (wi ? openWorkItem(wi.id) : navigate('tasks'))}>
         <ArrowLeft className="h-4 w-4" />{wi ? '返回工作项' : '返回任务'}
       </button>
@@ -688,7 +700,7 @@ export function NodeProcessPage() {
           ) : (
             <SectionCard title={`${task?.node ?? '当前节点'} 表单`} extra={
               <div className="flex items-center gap-2">
-                {canExpert && (latestRun?.status === 'running' || rerunBusy) && (
+                {canExpert && (['queued', 'running'].includes(latestRun?.status ?? '') || rerunBusy) && (
                   <button className="inline-flex cursor-wait items-center gap-1 rounded-lg border border-violet-200 px-2.5 py-1 text-[11.5px] font-medium text-violet-500 dark:border-violet-500/30 dark:text-violet-400" disabled>
                     <Bot className="h-3.5 w-3.5 animate-pulse" />Expert 生成中…
                   </button>
@@ -830,17 +842,17 @@ export function NodeProcessPage() {
                           {adoptBusy === latestRun.id ? '采纳中…' : '采纳'}
                         </button>
                       )}
-                      {canExpertRerun && latestRun.status !== 'running' && (
+                      {canExpertRerun && !['queued', 'running'].includes(latestRun.status) && (
                         <button className={cn('inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium transition-colors disabled:opacity-50',
                           latestRun.status === 'failed'
                             ? 'bg-violet-600 text-white hover:bg-violet-700'
                             : 'border border-violet-300 text-violet-600 hover:bg-violet-100 dark:border-violet-500/40 dark:text-violet-300 dark:hover:bg-violet-500/10')}
-                          disabled={rerunBusy || expertRuns.some((r) => r.status === 'running') || adoptBusy !== null}
+                          disabled={rerunBusy || expertRuns.some((r) => ['queued', 'running'].includes(r.status)) || adoptBusy !== null}
                           onClick={() => openRerun(latestRun.id)}>
                           <Undo2 className="h-3 w-3" />重新执行
                         </button>
                       )}
-                      {latestRun.status === 'running' && <span className="text-[11px] text-violet-400">生成中…（完成后自动填充表单）</span>}
+                      {['queued', 'running'].includes(latestRun.status) && <span className="text-[11px] text-violet-400">生成中…（完成后自动填充表单）</span>}
                       {latestRun.status === 'interrupted' && (
                         <button className="rounded-md border border-amber-300 px-2 py-0.5 text-[11px] font-medium text-amber-600 dark:border-amber-500/40 dark:text-amber-300" onClick={() => openDialog('expertApproval')}>去审批</button>
                       )}

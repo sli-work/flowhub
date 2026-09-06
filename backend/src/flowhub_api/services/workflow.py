@@ -440,23 +440,23 @@ class WorkflowService:
         snapshot = run.parsed if isinstance(run.parsed, dict) else None
         if snapshot is not None:
             values, warnings = dict(snapshot.get("values") or {}), list(snapshot.get("warnings") or [])
+            quality_status = snapshot.get("qualityStatus")
+            if quality_status and quality_status != "passed":
+                return {}, warnings + list(snapshot.get("qualityIssues") or []) + ["Expert 事实质量校验未通过，请人工复核后重新生成"]
+            validation_issues = list(snapshot.get("validationIssues") or [])
+            if snapshot.get("valid") is False or validation_issues:
+                return {}, warnings + validation_issues + ["Expert 产出未通过结构化校验，请人工修正后再采纳"]
         else:
             values, warnings = parse_schema_output(schema, run.output or "")
-        # 本轮将要重新生成文档的 upload 字段：先删掉上一轮采纳生成的同名旧文档
-        # （以「字段label-任务id」命名规则定位；MinIO 对象随行删除由查询方按 object_name 处理）
-        regenerate_keys = [
-            f.get("key", "") for f in schema
-            if f.get("type") in ("upload", "file") and isinstance(values.get(f.get("key", "")), str) and values[f.get("key", "")].strip()
-        ]
-        stale_names = [f"{next(f.get('label', k) for f in schema if f.get('key') == k)}-{task.id}" for k in regenerate_keys]
-        stale_names += [f"{name}.md" for name in stale_names if "." not in name]
-        if stale_names:
-            stale_docs = (await self.session.execute(
-                select(DocItem).where(DocItem.wi == task.wi_id, DocItem.name.in_(stale_names))
-            )).scalars().all()
-            for d in stale_docs:
-                await self._delete_doc_object(d)
-                await self.session.delete(d)
+        stale_docs = []
+        regenerate_keys = [f.get("key", "") for f in schema if f.get("type") in ("upload", "file")
+                           and isinstance(values.get(f.get("key", "")), str) and values[f.get("key", "")].strip()]
+        names = [f"{f.get('label', f.get('key', ''))}-{task.id}" for f in schema if f.get("key") in regenerate_keys]
+        names = [name if "." in name else f"{name}.md" for name in names]
+        if names:
+            stale_docs = (await self.session.execute(select(DocItem).where(
+                DocItem.wi == task.wi_id, DocItem.name.in_(names)))).scalars().all()
+        new_doc_ids = set()
         for f in schema:
             key, ftype = f.get("key", ""), f.get("type", "")
             if ftype in ("upload", "file") and isinstance(values.get(key), str) and values[key].strip():
@@ -465,8 +465,19 @@ class WorkflowService:
                 ref = await create_document_from_text(
                     self.session, wi_id=task.wi_id, project=task.project,
                     name=f"{f.get('label', key)}-{task.id}", content=values[key], uploader=actor,
+                    idempotency_key=f"{run.id}:{getattr(run, 'execution_generation', 1)}:{key}",
                 )
-                values[key] = [ref]
+                new_doc_ids.add(ref["id"])
+                values = {**values, key: [ref]}
+        from flowhub_api.models.expert import ExpertObjectCleanup
+        from uuid import uuid4
+        for stale in stale_docs:
+            if stale.id in new_doc_ids:
+                continue
+            if stale.object_name:
+                self.session.add(ExpertObjectCleanup(id=uuid4().hex, object_name=stale.object_name,
+                    created_at=datetime.now(UTC).isoformat()))
+            await self.session.delete(stale)
         return values, warnings
 
     async def _delete_doc_object(self, doc) -> None:
@@ -493,16 +504,14 @@ class WorkflowService:
         若节点开启 ai_auto 拆分且模型输出带 split 数组，则拆分为多条子线（父完成不 advance）。
         采纳前先做 AI 二次格式修正（只调格式不改内容）；修正失败静默降级原解析，不阻塞自动流转。"""
         schema = cfg.get("schema") or []
-        if schema and isinstance(run.parsed, dict) and not run.parsed.get("normalized"):
-            from flowhub_api.services.expert_runtime import normalize_run_output
-
-            try:
-                n_values, n_warnings = await normalize_run_output(self.session, run, schema)
-                run.parsed = {**run.parsed, "values": n_values, "warnings": n_warnings,
-                              "normalized": True, "formattedAt": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")}
-            except Exception:  # noqa: BLE001 — 自动路径修正失败不阻塞流转
-                pass
         values, warnings = await self.fill_task_from_run(task, run, cfg, actor)
+        if not values:
+            # 质量/schema 门失败时绝不能让空表单继续 advance；保留任务供人工复核或重跑。
+            await AuditService(self.session).record(
+                actor=f"Expert({actor.name})", action="task:ai_submit", target=f"{task.id} · {task.node}",
+                result="blocked", after={"runId": run.id, "warnings": warnings[:5]},
+            )
+            return {"blocked": True, "reason": warnings[0] if warnings else "Expert 产出未通过校验"}
         task.acceptance_checks = self.acceptance_checks_ai(cfg)
         split_mode = (cfg.get("split") or {}).get("mode", "off")
         from flowhub_api.services.expert_runtime import extract_split_proposals
@@ -633,48 +642,10 @@ class WorkflowService:
             if is_auto:
                 # 自动节点处理期间禁止人工提交（后台完成后自动采纳流转，失败回退 assigned）
                 new_task.status = "pending_confirmation"
-            expert_user_id = expert_user.id if expert_user is not None else None
-            auto_depth_next = auto_depth + 1
-
-            async def _on_auto_finished(bg_session, bg_run):
-                """自动节点后台 Run 完成回调（独立 Session）：成功 → 采纳流转；失败/校验不过 → 回退人工。"""
-                if not is_auto:
-                    return
-                bg_task = await bg_session.get(TaskItem, new_task.id)
-                if bg_task is None or bg_task.status != "pending_confirmation":
-                    return
-                if bg_run.status == "succeeded" and expert_user_id and auto_depth < 5:
-                    bg_user = await bg_session.get(User, expert_user_id)
-                    if bg_user is not None:
-                        try:
-                            svc = WorkflowService(bg_session)
-                            project_bg, tpl_bg = await svc.resolve_template_for_task(bg_task)
-                            if project_bg is not None and tpl_bg is not None:
-                                bg_instance = (await bg_session.execute(
-                                    select(WorkflowInstance).where(WorkflowInstance.work_item_id == bg_task.wi_id)
-                                )).scalar_one_or_none()
-                                cfg_bg = await svc._node_cfg_of(
-                                    tpl_bg, bg_task.node_id, bg_instance.version if bg_instance else None,
-                                ) or {}
-                                if cfg_bg.get("handler") == "Expert 自动":
-                                    await svc.ai_autosubmit(
-                                        bg_task, project_bg, tpl_bg, cfg_bg, bg_run, bg_user,
-                                        auto_depth=auto_depth_next,
-                                    )
-                                    return
-                        except BizError:
-                            pass  # 产出未通过节点校验（必填缺失等）→ 落到人工兜底
-                # 运行失败 / 深度超限 / 校验不过：回退人工兜底（保持待办可见）
-                refreshed = await bg_session.get(TaskItem, new_task.id)
-                if refreshed is not None and refreshed.status == "pending_confirmation":
-                    refreshed.status = "assigned"
-
-            # Run 后台执行：提交请求不再等待 LLM（此前内联执行导致提交挂起 30s+）；
-            # 协助节点完成后处理人在任务页「采纳」；自动节点由 _on_auto_finished 自动采纳流转
             await schedule_deployment_run(
                 self.session, deployment_id, brief_text,
                 expert_user, task_id=new_task.id,
-                on_finished=_on_auto_finished,
+                completion={"automatic": is_auto, "auto_depth": auto_depth},
             )
         self.session.add(new_task)
         await self.session.flush()
