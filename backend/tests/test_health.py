@@ -1,4 +1,6 @@
 """基础健康检查与元信息（无认证端点）。"""
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -37,8 +39,38 @@ class TestHealth:
         r = client.get("/api/v1/mcp/sse")
         assert r.status_code == 401
 
+    def test_mcp_streamable_http_mount(self, client: TestClient, org_headers: dict):
+        """Zed 使用 POST 初始化远程 MCP；Streamable HTTP 端点必须存在并要求 access key。"""
+        r = client.post("/api/v1/mcp/http/", json={"jsonrpc": "2.0", "id": 1, "method": "initialize"})
+        assert r.status_code == 401
+
+        access_key = client.post("/api/v1/access-keys", headers=org_headers, json={"name": "Zed MCP"}).json()["data"]["key"]["key"]
+        initialized = client.post(
+            "/api/v1/mcp/http/",
+            headers={"Authorization": f"Bearer {access_key}", "Accept": "application/json, text/event-stream"},
+            json={
+                "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "test", "version": "1.0"}},
+            },
+        )
+        assert initialized.status_code == 200
+        payload = json.loads(next(line.removeprefix("data: ") for line in initialized.text.splitlines() if line.startswith("data: ")))
+        assert payload["result"]["serverInfo"]["name"] == "FlowHub"
+
 
 class TestExternalAgentDownloads:
+    def test_download_origin_requires_explicit_public_base_url(self, monkeypatch):
+        from types import SimpleNamespace
+
+        from flowhub_api.core import config
+        from flowhub_api.core.response import BizError
+        from flowhub_api.routes.external_tools import _origin
+
+        monkeypatch.setattr(config, "get_settings", lambda: SimpleNamespace(public_base_url=""))
+        with pytest.raises(BizError) as error:
+            _origin()
+        assert error.value.status_code == 503
+
     def test_downloads_require_authenticated_console_session(self, client: TestClient):
         assert client.get("/api/v1/external-tools/mcp-config").status_code == 401
         assert client.get("/api/v1/external-tools/skill-markdown").status_code == 401
@@ -48,7 +80,7 @@ class TestExternalAgentDownloads:
         assert mcp.status_code == 200
         assert "attachment" in mcp.headers["content-disposition"]
         assert "${FLOWHUB_ACCESS_KEY}" in mcp.text
-        assert "/api/v1/mcp/sse" in mcp.text
+        assert '"url": "http://testserver/api/v1/mcp/http/"' in mcp.text
 
         created = client.post("/api/v1/access-keys", headers=org_headers, json={"name": "MCP Export"}).json()["data"]["key"]
         configured = client.get(f"/api/v1/external-tools/mcp-config?key_id={created['id']}", headers=org_headers)
@@ -60,6 +92,7 @@ class TestExternalAgentDownloads:
         assert skill.status_code == 200
         assert skill.headers["content-type"].startswith("text/markdown")
         assert "FlowHub MCP 操作 Skill" in skill.text
+        assert "http://testserver/api/v1/mcp/http/" in skill.text
 
 
 class TestAccessKeyManagement:

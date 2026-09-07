@@ -123,6 +123,21 @@ class TestConnection:
         items = r.json()["data"]["items"]
         assert [i["fullName"] for i in items] == ["acme/flow-backend"]
 
+    def test_remote_repo_operations_require_resource_manage_perm(self, client: TestClient, org_headers: dict, monkeypatch_session_cls):
+        conn = client.post("/api/v1/repo-connections", json=_conn_payload(_uniq("guard")), headers=org_headers).json()["data"]["item"]
+        token = login(client, "sunlin")
+        headers = auth_headers(token)
+        assert client.get(f"/api/v1/repo-connections/{conn['id']}/remote-repos", headers=headers).status_code == 403
+        assert client.post(f"/api/v1/repo-connections/{conn['id']}/sync", headers=headers).status_code == 403
+
+    def test_sync_populates_all_remote_repos(self, client: TestClient, org_headers: dict, monkeypatch_session_cls):
+        conn = client.post("/api/v1/repo-connections", json=_conn_payload(_uniq("sync")), headers=org_headers).json()["data"]["item"]
+        synced = client.post(f"/api/v1/repo-connections/{conn['id']}/sync", headers=org_headers)
+        assert synced.status_code == 200, synced.text
+        assert synced.json()["data"]["count"] == 3
+        repos = client.get("/api/v1/repos", headers=org_headers).json()["data"]["items"]
+        assert {repo["fullName"] for repo in repos} >= {"acme/flow-frontend", "acme/flow-backend", "acme/docs"}
+
     def test_delete_cascades_bindings(self, client: TestClient, org_headers: dict, monkeypatch_session_cls, project_id: str):
         conn = client.post("/api/v1/repo-connections", json=_conn_payload(_uniq("d")), headers=org_headers).json()["data"]["item"]
         bind_resp = client.post(
@@ -236,9 +251,11 @@ class TestProjectBinding:
     def test_global_repo_list_includes_bindings(self, client: TestClient, org_headers: dict, monkeypatch_session_cls, project_id: str, connection_id: str):
         r = client.get("/api/v1/repos", headers=org_headers)
         assert r.status_code == 200
-        item = next(x for x in r.json()["data"]["items"] if x["fullName"] == "acme/flow-backend")
-        assert len(item["bindings"]) >= 2  # 两个项目各自绑定
-        assert {b["role"] for b in item["bindings"]} >= {"service"}
+        # 同名仓库可以来自不同连接；绑定应仍归属创建绑定时的那条连接快照。
+        items = [item for item in r.json()["data"]["items"] if item["fullName"] == "acme/flow-backend"]
+        bound = next(item for item in items if item["bindings"])
+        assert len(bound["bindings"]) >= 2  # 两个项目各自绑定
+        assert {binding["role"] for binding in bound["bindings"]} >= {"service"}
 
 
 class TestGitlabProjectKey:

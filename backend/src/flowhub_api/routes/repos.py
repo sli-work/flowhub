@@ -69,6 +69,30 @@ async def _load_conn(session: AsyncSession, conn_id: str) -> RepoConnection:
     return c
 
 
+async def _sync_remote_repos(session: AsyncSession, conn: RepoConnection) -> int:
+    """将连接可见的远端仓库完整同步为本地快照，绑定关系按远端 id 保持不变。"""
+    remote_repos = await get_provider(
+        conn.provider, decrypt_secret(conn.token_ciphertext), conn.base_url,
+    ).list_remote_repos(limit=500)
+    existing = {
+        repo.provider_repo_id: repo for repo in (await session.execute(
+            select(Repo).where(Repo.connection_id == conn.id)
+        )).scalars().all()
+    }
+    for remote in remote_repos:
+        repo = existing.get(remote.provider_repo_id)
+        if repo is None:
+            repo = Repo(id=gen_id("rp"), connection_id=conn.id, provider_repo_id=remote.provider_repo_id)
+            session.add(repo)
+        repo.full_name = remote.full_name
+        repo.web_url = remote.web_url
+        repo.description = remote.description
+        repo.default_branch = remote.default_branch
+        repo.visibility = remote.visibility
+        repo.synced_at = now_ts()
+    return len(remote_repos)
+
+
 async def _verify_and_fill(c: RepoConnection, token: str) -> None:
     """调用平台 API 验证 token，回填账号 / 状态 / hint；失败抛业务错误。"""
     try:
@@ -211,26 +235,59 @@ async def delete_connection(
 async def search_remote_repos(
     connection_id: str,
     session: Annotated[AsyncSession, Depends(get_db)],
-    _: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_current_user)],
     q: str = "",
 ):
     """代理搜索远端仓库（添加绑定时浏览 token 可见仓库）。"""
+    build_authorizer(user).require("expert:resource_manage")
     c = await _load_conn(session, connection_id)
     if c.status == "invalid":
         raise BizError(BizCode.VALIDATION, "连接已失效，请先更新 token")
     try:
-        items = await get_provider(c.provider, decrypt_secret(c.token_ciphertext), c.base_url).list_remote_repos(q)
+        items = await get_provider(c.provider, decrypt_secret(c.token_ciphertext), c.base_url).list_remote_repos(q, limit=500)
     except ProviderError as e:
         raise BizError(BizCode.VALIDATION, str(e))
+    bound_rows = (await session.execute(
+        select(Repo, ProjectRepoBinding, Project.name)
+        .join(ProjectRepoBinding, ProjectRepoBinding.repo_id == Repo.id)
+        .join(Project, Project.id == ProjectRepoBinding.project_id)
+        .where(Repo.connection_id == c.id)
+    )).all()
+    bindings_by_remote_id: dict[str, list[dict]] = {}
+    for repo, binding, project_name in bound_rows:
+        bindings_by_remote_id.setdefault(repo.provider_repo_id, []).append({
+            "bindingId": binding.id, "projectId": binding.project_id, "projectName": project_name,
+            "role": binding.role, "defaultBranch": binding.default_branch or repo.default_branch,
+        })
     return ok({
         "items": [
             {
                 "providerRepoId": r.provider_repo_id, "fullName": r.full_name,
                 "webUrl": r.web_url, "description": r.description,
                 "defaultBranch": r.default_branch, "visibility": r.visibility,
+                "bindings": bindings_by_remote_id.get(r.provider_repo_id, []),
             } for r in items
         ]
     })
+
+
+@router.post("/{connection_id}/sync")
+async def sync_connection_repos(
+    connection_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_db)],
+):
+    """刷新连接下全部远端仓库快照；现有项目绑定自动保留并在列表中回显。"""
+    build_authorizer(user).require("expert:resource_manage")
+    conn = await _load_conn(session, connection_id)
+    if conn.status == "invalid":
+        raise BizError(BizCode.VALIDATION, "连接已失效，请先更新 token")
+    try:
+        count = await _sync_remote_repos(session, conn)
+    except ProviderError as e:
+        raise BizError(BizCode.VALIDATION, str(e))
+    await session.commit()
+    return ok({"count": count}, f"已同步 {count} 个远端仓库")
 
 
 # ---------- 项目 ↔ 仓库绑定 ----------

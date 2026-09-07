@@ -25,8 +25,16 @@ class RegisterReq(BaseModel):
     password: str = Field(min_length=8, max_length=64)
 
 
+class RejectRegistrationReq(BaseModel):
+    reason: str = Field(min_length=1, max_length=500)
+
+
 class ChangePwdReq(BaseModel):
     old_password: str
+    new_password: str = Field(min_length=8, max_length=64)
+
+
+class AdminResetPwdReq(BaseModel):
     new_password: str = Field(min_length=8, max_length=64)
 
 
@@ -99,7 +107,13 @@ class CreateWorkItemReq(BaseModel):
     project_id: str
     template_id: str
     start_values: dict
+    # 优先使用独立字段；None 时兼容旧调用方通过 start_values.priority 传值。
+    priority: Literal["P0", "P1", "P2", "P3"] | None = None
     labels: list[str] = []  # 预定义标签（/api/v1/tags 登记后才可绑定）
+
+
+class UpdateWorkItemPriorityReq(BaseModel):
+    priority: Literal["P0", "P1", "P2", "P3"]
 
 
 class TaskActionReq(BaseModel):
@@ -126,6 +140,7 @@ class TaskAdoptRunReq(BaseModel):
 class TaskAiFillReq(BaseModel):
     """Expert 协助填充/重新执行：context 为用户补充的执行上下文（可选，≤2000 字）。"""
     context: str = Field(default="", max_length=2000)
+    reanalyze_code: bool = False
 
 
 class TaskSplitChild(BaseModel):

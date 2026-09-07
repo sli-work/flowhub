@@ -55,6 +55,30 @@ class TestPersonalChannelDelivery:
         assert calls == [("钉钉", "ding-user"), ("企微", "wecom-user")]
         assert results == [{"name": "站内", "ok": True}, {"name": "钉钉", "ok": True}, {"name": "企微", "ok": True}]
 
+    def test_sends_email_to_task_assignee_when_recipient_is_user(self, monkeypatch: pytest.MonkeyPatch):
+        """流程流转传入 User 时，也必须使用该用户的邮箱投递 SMTP。"""
+        settings = SimpleNamespace(
+            dingtalk_app_key="", dingtalk_app_secret="", dingtalk_agent_id="",
+            wecom_corp_id="", wecom_app_secret="", wecom_agent_id="",
+            dingtalk_webhook="", dingtalk_secret="", wecom_webhook="",
+            smtp_host="smtp.example.com", smtp_port=465, smtp_user="bot@example.com",
+            smtp_password="token", smtp_from="bot@example.com", public_base_url="http://testserver",
+        )
+        deliveries: list[str] = []
+
+        async def send_email(*args: object) -> bool:
+            deliveries.append(str(args[5]))
+            return True
+
+        monkeypatch.setattr(notify, "runtime_settings", lambda: settings)
+        monkeypatch.setattr(notify, "_send_email", send_email)
+        recipient = User(id="u-email", name="处理人", account="handler", email="handler@example.com")
+
+        results = asyncio.run(notify.deliver_channels("新待办任务", "请处理", recipient))
+
+        assert deliveries == ["handler@example.com"]
+        assert {"name": "邮件", "ok": True} in results
+
 
 class TestNotificationList:
     def test_list_requires_auth(self, client: TestClient):

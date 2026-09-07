@@ -2,7 +2,7 @@
 
 权限语义与 `GET /tasks` 列表一致（docs/03）：
 - 系统管理员 / 组织管理员：可读任意任务上下文
-- 其他用户：仅可读 assignee == 自己的任务
+- 其他用户：可读自己被节点绑定为共同处理人的任务
 无权限时抛 403（调用方写审计 denied），绝不静默返回部分数据。
 """
 import logging
@@ -22,11 +22,16 @@ _ADMIN_ROLES = ("system_admin", "organization_admin")
 _MAX_DOC_BYTES = 4096
 
 
-def can_read_task(user: User, task: TaskItem) -> bool:
+async def can_read_task(session: AsyncSession, user: User, task: TaskItem) -> bool:
     """当前用户是否有权读取该任务上下文（含其所属工作项的历史节点与文档）。"""
     if any(r.id in _ADMIN_ROLES for r in user.roles):
         return True
-    return task.assignee == user.name
+    if task.assignee in {user.name, user.account, user.id}:
+        return True
+    from flowhub_api.services.workflow import WorkflowService
+
+    recipients = await WorkflowService(session).resolve_task_recipients(task)
+    return any(candidate.id == user.id for candidate in recipients)
 
 
 def _fmt_values(values: dict | None) -> str:
@@ -84,7 +89,7 @@ async def build_task_context(session: AsyncSession, user: User, task: TaskItem, 
 
     raise BizError(403) 当用户无权限读取该任务。
     """
-    if not can_read_task(user, task):
+    if not await can_read_task(session, user, task):
         raise BizError(BizCode.PERM_DENIED, "无权限读取该任务上下文（仅任务处理人或管理员可见）", http_status=403)
 
     wi = await session.get(WorkItem, task.wi_id)
@@ -105,8 +110,12 @@ async def build_task_context(session: AsyncSession, user: User, task: TaskItem, 
             lines.append("")
             lines.append(repo_section)
 
+    from flowhub_api.services.workflow import WorkflowService
+
+    current_recipients = await WorkflowService(session).resolve_task_recipients(task)
+    current_assignees = "、".join(user.name for user in current_recipients) or task.assignee
     lines.append("")
-    lines.append(f"【当前节点任务】{task.id}｜节点「{task.node}」｜状态 {task.status}｜处理人 {task.assignee}｜截止 {task.due}")
+    lines.append(f"【当前节点任务】{task.id}｜节点「{task.node}」｜状态 {task.status}｜处理人 {current_assignees}｜截止 {task.due}")
     lines.append("  当前节点表单值：")
     lines.append(_fmt_values(task.form_values).replace("\n", "\n  "))
 

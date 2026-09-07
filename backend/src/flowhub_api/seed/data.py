@@ -36,6 +36,8 @@ PERM_MATRIX: list[tuple[str, list[bool]]] = [
     ("workflow_instance:create", [1, 1, 1, 1, 1, 1, 1, 1, 1]),
     ("workflow_instance:read", [1, 1, 1, 1, 1, 1, 1, 1, 1]),
     ("workflow_instance:pause", [1, 1, 1, 1, 0, 0, 0, 0, 0]),
+    # 工作项属性调整：管理员、负责人和产品经理可以更新优先级。
+    ("workflow_instance:update", [1, 1, 1, 1, 1, 0, 0, 0, 0]),
     ("workflow_instance:cancel", [1, 1, 1, 0, 0, 0, 0, 0, 0]),
     ("task:claim", [1, 1, 1, 1, 1, 1, 1, 1, 1]),
     ("task:submit", [1, 1, 1, 1, 1, 1, 1, 1, 1]),

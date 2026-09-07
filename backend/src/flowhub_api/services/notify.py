@@ -214,7 +214,9 @@ async def deliver_channels(title: str, body: str, target: User | str | None = No
     out_body = f"{body}\n\n请访问 FlowHub：{site}"
 
     recipient = target if isinstance(target, User) else None
-    email = target if isinstance(target, str) and "@" in target else ""
+    # 任务流转传入的是处理人 User。此前只在 target 为邮箱字符串时发邮件，
+    # 因而所有由任务流转、转办和追加信息触发的个人邮件都会被跳过。
+    email = (recipient.email or "").strip() if recipient else (target.strip() if isinstance(target, str) and "@" in target else "")
     if recipient and settings.dingtalk_app_key and settings.dingtalk_app_secret and settings.dingtalk_agent_id and recipient.ding_talk:
         ok = await _send_dingtalk_app(
             settings.dingtalk_app_key, settings.dingtalk_app_secret, settings.dingtalk_agent_id,

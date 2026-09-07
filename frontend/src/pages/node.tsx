@@ -33,6 +33,37 @@ interface FallbackTarget { id: string; label: string }
 interface SubtaskBrief { id: string; title: string; node: string; status: string; assignee: string; due: string }
 interface SplitRow { title: string; note: string; assignee: string }
 
+/** 画布保存顺序可能随编辑拖拽变化；进度条必须以模板边定义的拓扑顺序展示。 */
+function orderCanvasNodes(nodes: CanvasNodeLite[], edges: unknown): CanvasNodeLite[] {
+  const validEdges = Array.isArray(edges)
+    ? edges.filter((edge): edge is [string, string] => Array.isArray(edge) && typeof edge[0] === 'string' && typeof edge[1] === 'string')
+    : []
+  const nodeIds = new Set(nodes.map((node) => node.id))
+  const outgoing = new Map(nodes.map((node) => [node.id, [] as string[]]))
+  const incoming = new Map(nodes.map((node) => [node.id, 0]))
+  for (const [from, to] of validEdges) {
+    if (!nodeIds.has(from) || !nodeIds.has(to)) continue
+    outgoing.get(from)?.push(to)
+    incoming.set(to, (incoming.get(to) ?? 0) + 1)
+  }
+  const pending = nodes.filter((node) => incoming.get(node.id) === 0)
+  const ordered: CanvasNodeLite[] = []
+  while (pending.length) {
+    const node = pending.shift()!
+    ordered.push(node)
+    for (const target of outgoing.get(node.id) ?? []) {
+      const left = (incoming.get(target) ?? 1) - 1
+      incoming.set(target, left)
+      if (left === 0) {
+        const targetNode = nodes.find((item) => item.id === target)
+        if (targetNode) pending.push(targetNode)
+      }
+    }
+  }
+  // 非法环路不阻塞任务页；尾部保留原始相对顺序，便于用户发现模板问题。
+  return ordered.length === nodes.length ? ordered : [...ordered, ...nodes.filter((node) => !ordered.some((item) => item.id === node.id))]
+}
+
 /* 只读值展示：textarea 类型的长文本按 Markdown 渲染（Expert 产出/人工填写常用）；
    文档引用对象显示为附件名；其余原样 */
 function ReadOnlyValue({ schema, k, v }: { schema?: FormField[]; k: string; v: unknown }) {
@@ -63,6 +94,35 @@ function CollapsibleReadOnlyValue({ schema, k, v }: { schema?: FormField[]; k: s
       </div>
     </details>
   )
+}
+
+function InheritedReadOnlyValue({
+  schema, k, v, onPreviewDocument,
+}: {
+  schema?: FormField[]
+  k: string
+  v: unknown
+  onPreviewDocument: (document: DocumentRef) => void
+}) {
+  const fieldType = schema?.find((field) => field.key === k)?.type
+  const documents = (fieldType === 'upload' || fieldType === 'file') ? documentRefs(v) : []
+  if (documents.length > 0) {
+    return (
+      <span className="flex flex-wrap gap-1.5">
+        {documents.map((document) => (
+          <button
+            key={document.id}
+            type="button"
+            onClick={() => onPreviewDocument(document)}
+            className="rounded bg-blue-100 px-1.5 py-0.5 text-blue-700 hover:bg-blue-200 hover:underline dark:bg-blue-500/20 dark:text-blue-300"
+            aria-label={`预览附件：${document.name}`}>
+            {document.name}
+          </button>
+        ))}
+      </span>
+    )
+  }
+  return <CollapsibleReadOnlyValue schema={schema} k={k} v={v} />
 }
 
 function fieldLabel(schema: FormField[] | undefined, key: string): string {
@@ -159,7 +219,7 @@ export function NodeProcessPage() {
           if (runs?.length) setExpertRuns(runs)
           // Expert 自动节点的 Run 成功后自动采纳；人工协助节点保留产出，等待用户点击「采纳」。
           const top = runs?.[0]
-          if (curCfg.handler === 'Expert 自动' && top && top.status === 'succeeded' && autoFilledRunRef.current !== top.id) {
+          if (curCfg.handler === 'Expert 自动' && top && top.status === 'succeeded' && top.parsed?.valid !== false && top.parsed?.formatStatus !== 'invalid' && autoFilledRunRef.current !== top.id) {
             autoFilledRunRef.current = top.id
             void adoptRunRef.current(top.id)
           }
@@ -194,6 +254,7 @@ export function NodeProcessPage() {
     setLoading(true)
     let curNodeId = ''
     let instRef: typeof instance = null
+    let taskStatuses = new Map<string, string>()
     // 引擎视角配置（nodeCfg）优先；画布链路仅在其缺失时兜底
     let engineCfgApplied = false
     api.get<{
@@ -206,6 +267,9 @@ export function NodeProcessPage() {
     }>(`/api/v1/tasks/${activeTaskId}`)
       .then((td) => {
         setTask(td.task)
+        // 历史已完成节点也应回显已提交的表单；此前仅在 Expert 采纳时写状态，
+        // MCP/人工提交后重新打开任务会被初始空对象覆盖。
+        setFormValues(td.task.formValues ?? {})
         // 顶栏 banner 标题兜底：从通知/工作项进入时 openTask 未携带 title
         if (td.task.title) setActiveTaskTitle(td.task.title)
         curNodeId = td.task.nodeId ?? ''
@@ -227,16 +291,17 @@ export function NodeProcessPage() {
             setAcceptance(Object.fromEntries(accList.map((item) => [item.key, { text: item.text, checked: td.task?.acceptanceChecks?.[item.key]?.checked ?? false }])))
           } else setAcceptance({})
         }
-        return api.get<{ item: WorkItem; instance: typeof instance; startValues: Record<string, unknown>; tasks: { id: string; node: string; status: string; assignee: string; due: string }[] }>(`/api/v1/work-items/${td.task.wiId}`)
+        return api.get<{ item: WorkItem; instance: typeof instance; startValues: Record<string, unknown>; tasks: { id: string; node: string; nodeId: string; status: string; assignee: string; due: string }[] }>(`/api/v1/work-items/${td.task.wiId}`)
       })
       .then((wd) => {
         instRef = wd.instance
+        taskStatuses = new Map(wd.tasks.map((item) => [item.nodeId, item.status]))
         setWi(wd.item); setInstance(wd.instance); setStartValues(wd.startValues ?? {})
         setTimeline(wd.tasks.map((t) => ({
           id: t.id, time: t.due, title: `节点「${t.node}」`, desc: `任务 ${t.id} · 处理人 ${t.assignee} · ${t.status}`, by: t.assignee || '系统', kind: 'user',
         })))
         if (!wd.instance) return null
-        return api.get<{ nodes: CanvasNodeLite[] }>(`/api/v1/templates/${wd.instance.templateId}/versions/${wd.instance.version}/canvas`)
+        return api.get<{ nodes: CanvasNodeLite[]; edges: unknown }>(`/api/v1/templates/${wd.instance.templateId}/versions/${wd.instance.version}/canvas`)
       })
       .then((canvas) => {
         if (canvas) {
@@ -245,10 +310,10 @@ export function NodeProcessPage() {
           // 按实例 current_node 显示，不因归档把进度改成"全部完成"
           const closed = instRef?.state === 'closed'
           const progressId = closed ? '' : (instRef?.currentNode ?? curNodeId)
-          const curIdx = closed ? canvas.nodes.length : canvas.nodes.findIndex((n) => n.id === progressId)
-          setFlowSteps(canvas.nodes.map((n, i) => ({
+          const orderedNodes = orderCanvasNodes(canvas.nodes, canvas.edges)
+          setFlowSteps(orderedNodes.map((n) => ({
             name: n.label,
-            status: closed || i < curIdx ? 'done' : i === curIdx ? 'current' : 'wait',
+            status: closed || taskStatuses.get(n.id) === 'completed' ? 'done' : n.id === progressId ? 'current' : 'wait',
             assignee: '', time: '',
           })))
           // 当前节点表单 Schema（与画布节点一致）；历史任务节点在新版画布中不存在时
@@ -364,6 +429,12 @@ export function NodeProcessPage() {
   /* 重跑只需节点绑定 Expert：无表单 schema 的节点也能重跑（产出存 Run 供查看，只是无字段可回填） */
   const canExpertRerun = isExpertNode && !!activeTaskId && !task?.frozen && task?.status !== 'completed'
   const latestRun = expertRuns[0]
+  const latestRunEvents = latestRun?.events ?? []
+  const latestRunStage = latestRunEvents.at(-1)
+  const latestRunStageElapsedSeconds = latestRunStage && ['queued', 'running'].includes(latestRun.status)
+    ? Math.max(0, Math.floor((Date.now() - new Date(latestRunStage.createdAt).getTime()) / 1000))
+    : null
+  const canAdoptLatestRun = latestRun?.status === 'succeeded' && latestRun.parsed?.valid !== false && latestRun.parsed?.formatStatus !== 'invalid'
 
   const applyExpertValues = (values: Record<string, unknown>, warnings: string[], message: string) => {
     setFormValues((prev) => ({ ...prev, ...values }))
@@ -409,22 +480,24 @@ export function NodeProcessPage() {
   /* Expert Run 重新执行：展开上下文输入面板的 Run id（同时只开一个）+ 输入草稿 */
   const [rerunFor, setRerunFor] = useState<string | null>(null)
   const [rerunText, setRerunText] = useState('')
+  const [rerunCode, setRerunCode] = useState(false)
   const [rerunBusy, setRerunBusy] = useState(false)
 
   const openRerun = (runId: string) => {
     if (rerunBusy) return
     setRerunFor((prev) => (prev === runId ? null : runId))
     setRerunText('')
+    setRerunCode(false)
   }
 
   const submitRerun = async () => {
     if (!activeTaskId || rerunBusy) return
     setRerunBusy(true)
     try {
-      const d = await api.post<{ run: ExpertRunBrief }>(`/api/v1/tasks/${activeTaskId}/ai-fill`, { context: rerunText.trim() })
+      const d = await api.post<{ run: ExpertRunBrief }>(`/api/v1/tasks/${activeTaskId}/ai-fill`, { context: rerunText.trim(), reanalyze_code: rerunCode })
       // 覆盖式重跑：后端复用原 Run 记录（同 id），置顶进入 running 态提升即时反馈
       setExpertRuns((prev) => [d.run, ...prev.filter((r) => r.id !== d.run.id)])
-      setRerunFor(null); setRerunText('')
+      setRerunFor(null); setRerunText(''); setRerunCode(false)
       toast.success(d.run.context ? `Expert 正在覆盖重跑（附带 ${d.run.context.length} 字补充上下文）` : 'Expert 正在覆盖重跑，请稍候')
     } catch (e) {
       toast.error(e instanceof ApiError ? e.message : 'Expert 重新执行失败')
@@ -705,13 +778,13 @@ export function NodeProcessPage() {
                     <Bot className="h-3.5 w-3.5 animate-pulse" />Expert 生成中…
                   </button>
                 )}
-                {canExpert && latestRun?.status === 'succeeded' && (
+                {canExpert && canAdoptLatestRun && (
                   <button className="inline-flex items-center gap-1 rounded-lg bg-violet-600 px-2.5 py-1 text-[11.5px] font-medium text-white transition-colors hover:bg-violet-700 disabled:opacity-50"
                     disabled={adoptBusy === latestRun.id} onClick={() => void adoptRun(latestRun.id)}>
                     <Bot className="h-3.5 w-3.5" />{adoptBusy === latestRun.id ? '采纳中…' : '采纳'}
                   </button>
                 )}
-                {canExpert && (!latestRun || latestRun.status === 'failed') && (
+                {canExpert && (!latestRun || latestRun.status === 'failed' || latestRun.parsed?.formatStatus === 'invalid') && (
                   <button className="inline-flex items-center gap-1 rounded-lg border border-violet-200 px-2.5 py-1 text-[11.5px] font-medium text-violet-600 transition-colors hover:bg-violet-50 disabled:opacity-50 dark:border-violet-500/30 dark:text-violet-300 dark:hover:bg-violet-500/10"
                     disabled={rerunBusy} onClick={() => openRerun(latestRun?.id ?? '__new__')}>
                     <Bot className="h-3.5 w-3.5" />Expert 协助填充
@@ -773,7 +846,7 @@ export function NodeProcessPage() {
                             {Object.entries(seg.values ?? {}).filter(([, v]) => v !== undefined && v !== null && v !== '').map(([k, v]) => (
                               <div key={k} className="min-w-0 rounded-md bg-slate-50/70 px-2.5 py-2 dark:bg-slate-800/40">
                                 <div className="mb-1 text-[11.5px] font-medium text-slate-400">{fieldLabel(seg.schema, k)}</div>
-                                <div className="min-w-0 max-w-full break-words text-[12px] leading-relaxed text-slate-600 dark:text-slate-300"><CollapsibleReadOnlyValue schema={seg.schema} k={k} v={v} /></div>
+                                <div className="min-w-0 max-w-full break-words text-[12px] leading-relaxed text-slate-600 dark:text-slate-300"><InheritedReadOnlyValue schema={seg.schema} k={k} v={v} onPreviewDocument={openDocumentPreview} /></div>
                               </div>
                             ))}
                             {/* 追加记录：原处理人补充的信息，独立留痕 */}
@@ -786,7 +859,7 @@ export function NodeProcessPage() {
                                   {Object.entries(ap.values ?? {}).filter(([, v]) => v !== undefined && v !== null && v !== '').map(([k, v]) => (
                                     <div key={k} className="min-w-0 rounded-md bg-white/60 px-2 py-1.5 dark:bg-slate-900/30">
                                       <div className="mb-1 text-[11px] font-medium text-slate-400">{fieldLabel(seg.schema, k)}</div>
-                                      <div className="min-w-0 max-w-full break-words text-[11.5px] leading-relaxed text-slate-600 dark:text-slate-300"><CollapsibleReadOnlyValue schema={seg.schema} k={k} v={v} /></div>
+                                      <div className="min-w-0 max-w-full break-words text-[11.5px] leading-relaxed text-slate-600 dark:text-slate-300"><InheritedReadOnlyValue schema={seg.schema} k={k} v={v} onPreviewDocument={openDocumentPreview} /></div>
                                     </div>
                                   ))}
                                 </div>
@@ -836,7 +909,7 @@ export function NodeProcessPage() {
                       <Bot className="h-4 w-4" />{latestRun.id}
                     </span>
                     <span className="flex flex-none items-center gap-2">
-                      {canExpert && latestRun.status === 'succeeded' && (
+                      {canExpert && canAdoptLatestRun && (
                         <button className="rounded-md bg-violet-600 px-2.5 py-1 text-[11px] font-medium text-white transition-colors hover:bg-violet-700 disabled:opacity-50"
                           disabled={adoptBusy === latestRun.id} onClick={() => void adoptRun(latestRun.id)}>
                           {adoptBusy === latestRun.id ? '采纳中…' : '采纳'}
@@ -858,6 +931,27 @@ export function NodeProcessPage() {
                       )}
                     </span>
                   </div>
+                  {latestRunEvents.length > 0 && (
+                    <div className="mt-2.5 rounded-md border border-violet-100 bg-white/60 px-2.5 py-2 dark:border-violet-500/20 dark:bg-slate-900/30">
+                      <div className="flex items-center justify-between gap-2 text-[11px]">
+                        <span className="font-medium text-violet-700 dark:text-violet-300">执行轨迹</span>
+                        {['queued', 'running'].includes(latestRun.status) && latestRunStage && (
+                          <span className="animate-pulse text-violet-600 dark:text-violet-300">当前：{latestRunStage.title} · {latestRunStageElapsedSeconds}s</span>
+                        )}
+                      </div>
+                      <ol className="mt-1.5 space-y-1">
+                        {latestRunEvents.slice(-8).map((event) => (
+                          <li key={event.sequence} className="flex min-w-0 items-baseline gap-2 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
+                            <span className={cn('h-1.5 w-1.5 flex-none rounded-full',
+                              event.status === 'failed' ? 'bg-red-500' : ['queued', 'running'].includes(event.status) ? 'bg-violet-500' : 'bg-emerald-500')} />
+                            <span className="flex-none font-medium text-slate-600 dark:text-slate-300">{event.title}</span>
+                            <span className="min-w-0 truncate">{event.summary}</span>
+                            {event.durationMs ? <span className="ml-auto flex-none tabular-nums">{(event.durationMs / 1000).toFixed(event.durationMs >= 10000 ? 1 : 2)}s</span> : null}
+                          </li>
+                        ))}
+                      </ol>
+                    </div>
+                  )}
                   {/* 重新执行上下文面板：在产出卡内展开（提交后覆盖该 Run，完成自动回填表单） */}
                   {rerunFor === latestRun.id && (
                     <div className="mt-2.5 rounded-lg border border-violet-200 bg-white p-2.5 dark:border-violet-500/30 dark:bg-slate-900">
@@ -874,6 +968,10 @@ export function NodeProcessPage() {
                           if (e.key === 'Escape') setRerunFor(null)
                         }}
                       />
+                      <label className="mt-2 flex cursor-pointer items-center gap-2 text-[11.5px] text-slate-600 dark:text-slate-300">
+                        <input type="checkbox" checked={rerunCode} onChange={(e) => setRerunCode(e.target.checked)} className="accent-violet-600" />
+                        重新分析代码仓库（默认复用本工作项、当前 commit 的已有代码证据）
+                      </label>
                       <div className="mt-2 flex items-center justify-between">
                         <span className="text-[11px] text-slate-400">{rerunText.length}/2000 · ⌘/Ctrl+↵ 提交 · Esc 取消</span>
                         <span className="flex gap-2">
@@ -890,6 +988,17 @@ export function NodeProcessPage() {
                   {/* 字段产出预览：按 schema 渲染（采纳后进表单继续编辑）；无 schema 时展示原始全文 */}
                   {latestRun.status === 'failed' ? (
                     <p className="mt-2 whitespace-pre-wrap break-words text-[12.5px] leading-relaxed text-red-500">{latestRun.error || '（无错误信息）'}</p>
+                  ) : latestRun.parsed?.formatStatus === 'invalid' ? (
+                    <div className="mt-2.5 rounded-md border border-amber-200 bg-amber-50/60 px-2.5 py-2 dark:border-amber-500/30 dark:bg-amber-500/10">
+                      <p className="text-[12px] leading-relaxed text-amber-700 dark:text-amber-200">模型未能生成可采纳的 JSON 字段。原始输出已保留；请重新执行，或直接填写表单后提交。</p>
+                      {latestRun.parsed?.formatRepair?.error && <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-300">格式修复：{latestRun.parsed.formatRepair.error}</p>}
+                      <details className="mt-2 min-w-0 max-w-full">
+                        <summary className="cursor-pointer text-[11px] font-medium text-amber-700 dark:text-amber-300">展开查看 Expert 原始输出</summary>
+                        <div className="mt-2 h-80 min-h-48 max-h-[70vh] resize-y overflow-auto rounded-md pr-1 [&_.aui-markdown_table]:max-w-full" title="可拖动右下角调整内容高度">
+                          <MarkdownView text={latestRun.output} className="min-w-0 max-w-full break-words text-[12.5px] leading-relaxed" />
+                        </div>
+                      </details>
+                    </div>
                   ) : curSchema.length > 0 && latestRun.parsed?.values ? (
                     <div className="mt-2.5 space-y-1.5">
                       {curSchema.map((f) => {
@@ -925,6 +1034,7 @@ export function NodeProcessPage() {
                   )}
                   <div className="mt-1.5 text-[11px] text-slate-400">
                     {latestRun.startedAt}
+                    {latestRun.parsed?.codeAnalysis?.mode && <span className="ml-1.5">· 代码分析：{latestRun.parsed.codeAnalysis.mode === 'reused' ? '复用当前 commit 证据' : latestRun.parsed.codeAnalysis.mode === 'fresh' ? '本轮重新分析' : '未绑定可用仓库'}</span>}
                     {!!latestRun.context?.length && (
                       <span className="ml-1.5 inline-flex items-center rounded-full bg-violet-100 px-1.5 py-px text-[10.5px] font-semibold text-violet-700 dark:bg-violet-500/20 dark:text-violet-300" title={latestRun.context}>
                         上下文 {latestRun.context.length} 字

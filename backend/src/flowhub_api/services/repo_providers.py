@@ -77,16 +77,27 @@ class GithubProvider:
             raise ProviderError(f"GitHub 连接失败（HTTP {resp.status_code}）")
         return resp.json().get("login", "")
 
-    async def list_remote_repos(self, query: str = "", limit: int = 30) -> list[RemoteRepo]:
+    async def list_remote_repos(self, query: str = "", limit: int = 500) -> list[RemoteRepo]:
         """列出 token 可见的仓库（owner / collaborator / org member），按关键字本地过滤。"""
-        resp = await self._get(
-            "/user/repos", params={"visibility": "all", "affiliation": "owner,collaborator", "per_page": 100, "sort": "updated"}
-        )
-        if resp.status_code != 200:
-            raise ProviderError(f"仓库列表获取失败（HTTP {resp.status_code}）")
+        items: list[dict] = []
+        page = 1
+        while len(items) < limit:
+            per_page = min(100, limit - len(items))
+            resp = await self._get("/user/repos", params={
+                "visibility": "all", "affiliation": "owner,collaborator", "per_page": per_page,
+                "sort": "updated", "page": page,
+            })
+            if resp.status_code != 200:
+                raise ProviderError(f"仓库列表获取失败（HTTP {resp.status_code}）")
+            batch = resp.json()
+            if not isinstance(batch, list):
+                raise ProviderError("仓库列表响应格式无效")
+            items.extend(batch)
+            if len(batch) < per_page or 'rel="next"' not in resp.headers.get("link", ""):
+                break
+            page += 1
         q = query.strip().lower()
-        items = [r for r in resp.json() if not q or q in (r.get("full_name") or "").lower()]
-        return [self._to_remote(r) for r in items[:limit]]
+        return [self._to_remote(r) for r in items if not q or q in (r.get("full_name") or "").lower()]
 
     async def get_remote_repo(self, full_name: str) -> RemoteRepo:
         resp = await self._get(f"/repos/{full_name}")
@@ -141,14 +152,24 @@ class GitlabProvider:
             raise ProviderError(f"GitLab 连接失败（HTTP {resp.status_code}）")
         return resp.json().get("username", "")
 
-    async def list_remote_repos(self, query: str = "", limit: int = 30) -> list[RemoteRepo]:
-        params: dict = {"membership": "true", "per_page": min(limit, 100), "order_by": "updated_at"}
-        if query.strip():
-            params["search"] = query.strip()
-        resp = await self._get("/projects", params=params)
-        if resp.status_code != 200:
-            raise ProviderError(f"仓库列表获取失败（HTTP {resp.status_code}）")
-        return [self._to_remote(r) for r in resp.json()]
+    async def list_remote_repos(self, query: str = "", limit: int = 500) -> list[RemoteRepo]:
+        items: list[dict] = []
+        page = 1
+        while len(items) < limit:
+            params: dict = {"membership": "true", "per_page": min(100, limit - len(items)), "order_by": "updated_at", "page": page}
+            if query.strip():
+                params["search"] = query.strip()
+            resp = await self._get("/projects", params=params)
+            if resp.status_code != 200:
+                raise ProviderError(f"仓库列表获取失败（HTTP {resp.status_code}）")
+            batch = resp.json()
+            if not isinstance(batch, list):
+                raise ProviderError("仓库列表响应格式无效")
+            items.extend(batch)
+            if not resp.headers.get("x-next-page") or not batch:
+                break
+            page += 1
+        return [self._to_remote(r) for r in items]
 
     async def get_remote_repo(self, full_name: str) -> RemoteRepo:
         resp = await self._get(f"/projects/{_gitlab_project_key(full_name)}")

@@ -126,6 +126,42 @@ class TestWorkItemCreate:
         assert r2.status_code == 200, r2.text
         assert r2.json()["data"]["item"]["priority"] == "P2"
 
+    def test_create_explicit_priority_overrides_legacy_form_value(self, client: TestClient, leader_headers: dict, _created_project: str):
+        """专用优先级参数优先于旧版 start_values.priority，避免外部表单字段覆盖用户选择。"""
+        r = client.post("/api/v1/work-items", headers=leader_headers, json={
+            "project_id": _created_project, "template_id": "tpl-req", "priority": "P0",
+            "start_values": {**_start_values(_uniq("专用优先级")), "priority": "P3"},
+        })
+        assert r.status_code == 200, r.text
+        assert r.json()["data"]["item"]["priority"] == "P0"
+
+    def test_update_priority_syncs_open_tasks(self, client: TestClient, leader_headers: dict, _created_project: str):
+        created = client.post("/api/v1/work-items", headers=leader_headers, json={
+            "project_id": _created_project, "template_id": "tpl-req", "priority": "P3",
+            "start_values": _start_values(_uniq("修改优先级")),
+        })
+        assert created.status_code == 200, created.text
+        wi_id = created.json()["data"]["item"]["id"]
+        updated = client.patch(f"/api/v1/work-items/{wi_id}/priority", headers=leader_headers, json={"priority": "P0"})
+        assert updated.status_code == 200, updated.text
+        assert updated.json()["data"]["item"]["priority"] == "P0"
+        assert updated.json()["data"]["updatedOpenTaskCount"] >= 1
+        detail = client.get(f"/api/v1/work-items/{wi_id}", headers=leader_headers).json()["data"]
+        assert detail["startValues"]["priority"] == "P0"
+        assert all(task["priority"] == "P0" for task in detail["tasks"] if task["status"] not in ("completed", "cancelled"))
+        assert any(task["priority"] == "P3" for task in detail["tasks"] if task["status"] == "completed")
+
+    def test_list_returns_all_current_node_assignees(self, client: TestClient, leader_headers: dict, _created_project: str):
+        created = client.post("/api/v1/work-items", headers=leader_headers, json={
+            "project_id": _created_project, "template_id": "tpl-req",
+            "start_values": _start_values(_uniq("处理人展示")),
+        })
+        assert created.status_code == 200, created.text
+        item = next(row for row in client.get("/api/v1/work-items?page_size=100", headers=leader_headers).json()["data"]["items"]
+                    if row["id"] == created.json()["data"]["item"]["id"])
+        assert item["assignees"], "列表应返回当前节点完整处理人"
+        assert item["assignee"] in item["assignees"], "兼容主处理人必须属于完整名单"
+
     def test_create_without_title(self, client: TestClient, leader_headers: dict, _created_project: str):
         r = client.post("/api/v1/work-items", headers=leader_headers, json={
             "project_id": _created_project, "template_id": "tpl-req", "start_values": {"description": "no title"},

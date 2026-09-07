@@ -215,6 +215,7 @@ function BindRepoDialog({ presetProjectId, onClose, onSaved }: { presetProjectId
             {remote.length === 0 && <p className="p-3 text-center text-[12px] text-slate-400">该连接下暂无可见仓库</p>}
             {remote.map((r) => {
               const on = picked.some((x) => x.providerRepoId === r.providerRepoId)
+              const boundHere = r.bindings?.some((binding) => binding.projectId === projectId) ?? false
               return (
                 <button
                   key={r.providerRepoId}
@@ -222,6 +223,8 @@ function BindRepoDialog({ presetProjectId, onClose, onSaved }: { presetProjectId
                     on
                       ? 'border-blue-300 bg-blue-50 dark:border-blue-500/40 dark:bg-blue-500/10'
                       : 'border-transparent hover:bg-slate-50 dark:hover:bg-slate-800/60'}`}
+                  disabled={boundHere}
+                  title={boundHere ? '该仓库已绑定到当前项目' : undefined}
                   onClick={() => togglePick(r)}>
                   <span className={`flex h-4 w-4 flex-none items-center justify-center rounded border ${on ? 'border-blue-500 bg-blue-500' : 'border-slate-300 dark:border-slate-600'}`}>
                     {on && (
@@ -234,6 +237,7 @@ function BindRepoDialog({ presetProjectId, onClose, onSaved }: { presetProjectId
                     <div className="truncate text-[11px] text-slate-400">{r.description || '无描述'} · 默认分支 {r.defaultBranch}</div>
                   </div>
                   <Badge tone={r.visibility === 'public' ? 'gry' : 'blk'} className="!px-1.5 !text-[10px]">{r.visibility === 'public' ? '公开' : '私有'}</Badge>
+                  {boundHere && <Badge tone="suc" className="!px-1.5 !text-[10px]">当前项目已绑定</Badge>}
                 </button>
               )
             })}
@@ -272,12 +276,28 @@ export function ReposPage() {
   const [keyword, setKeyword] = useState('')
   const [connEditor, setConnEditor] = useState<{ open: boolean; conn?: RepoConnection }>({ open: false })
   const [bindOpen, setBindOpen] = useState<{ projectId?: string } | null>(null)
+  const [syncing, setSyncing] = useState(false)
 
-  const load = () => {
-    api.get<{ items: RepoConnection[] }>('/api/v1/repo-connections').then((d) => setConns(d.items)).catch(() => toast.error('连接加载失败'))
-    api.get<{ items: RepoItem[] }>('/api/v1/repos').then((d) => setRepos(d.items)).catch(() => toast.error('仓库加载失败'))
+  const load = async (sync = true) => {
+    try {
+      const connections = await api.get<{ items: RepoConnection[] }>('/api/v1/repo-connections')
+      setConns(connections.items)
+      if (sync) {
+        setSyncing(true)
+        await Promise.all(connections.items.filter((connection) => connection.status === 'ok').map(async (connection) => {
+          try { await api.post(`/api/v1/repo-connections/${connection.id}/sync`) }
+          catch (e) { toast.warning(`「${connection.name}」同步失败：${e instanceof ApiError ? e.message : '未知错误'}`) }
+        }))
+      }
+      const repoList = await api.get<{ items: RepoItem[] }>('/api/v1/repos')
+      setRepos(repoList.items)
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : '仓库加载失败')
+    } finally {
+      setSyncing(false)
+    }
   }
-  useEffect(() => { load() }, [])
+  useEffect(() => { void load() }, [])
 
   const verifyConn = async (c: RepoConnection) => {
     try {
@@ -346,6 +366,12 @@ export function ReposPage() {
         sub="项目可绑定多个代码仓库（GitHub / GitLab / 自建 GitLab）；连接凭证加密存储、跨项目共享"
         actions={
           <>
+            <button
+              className="rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-[13px] font-medium text-slate-600 transition-colors hover:border-blue-400 hover:text-blue-600 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300"
+              disabled={syncing}
+              onClick={() => void load()}>
+              <RefreshCw className={cn('mr-1 inline h-4 w-4', syncing && 'animate-spin')} />{syncing ? '同步中…' : '同步仓库'}
+            </button>
             <button
               className="rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-[13px] font-medium text-slate-600 transition-colors hover:border-blue-400 hover:text-blue-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300"
               onClick={() => setConnEditor({ open: true })}>

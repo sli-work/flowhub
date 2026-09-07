@@ -7,7 +7,7 @@ import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
 import { Textarea } from '../components/ui/textarea'
 import { useApp, toast } from '../store/app-store'
-import { api, ApiError } from '../lib/api'
+import { api, ApiError, getStoredUser, setStoredUser } from '../lib/api'
 import { Avatar, Badge, RiskTip } from './common'
 import { SchemaForm, validateSchema, type SchemaValues } from './schema-form'
 import { cn } from '../lib/utils'
@@ -644,6 +644,7 @@ export function CreateWorkItemDialog({ onClose }: { onClose: () => void }) {
   const [projId, setProjId] = useState('')
   const [templateId, setTemplateId] = useState('')
   const [values, setValues] = useState<SchemaValues>({})
+  const [priority, setPriority] = useState<'P0' | 'P1' | 'P2' | 'P3'>('P2')
   const [busy, setBusy] = useState(false)
   const [projects, setProjects] = useState<{ id: string; name: string; code: string; status: string; templateBindings: { templateId: string; name: string; type: string; version: string; status: string }[] }[]>([])
   const [tplPool, setTplPool] = useState<{ id: string; name: string; type: string; versions: string[]; startSchema: unknown[] }[]>([])
@@ -709,7 +710,7 @@ export function CreateWorkItemDialog({ onClose }: { onClose: () => void }) {
     setBusy(true)
     try {
       // 真实创建：POST /work-items（标题去重、发起流程实例）
-      await api.post('/api/v1/work-items', { project_id: projId, template_id: templateId, start_values: values, labels: selLabels })
+      await api.post('/api/v1/work-items', { project_id: projId, template_id: templateId, start_values: values, priority, labels: selLabels })
       toast.success(`已创建${tpl!.type === 'requirement' ? '需求' : tpl!.type === 'issue' ? '问题' : '变更'}并启动「${bind.templateId} ${bind.status}」：${String(values.title || '未命名')}`)
       bumpTask()  // 触发「我的任务」列表刷新（起始节点任务 + 下一节点待办可见）
       onClose()
@@ -764,7 +765,18 @@ export function CreateWorkItemDialog({ onClose }: { onClose: () => void }) {
               </div>
 
               {tpl && (
-                <div className="rounded-xl border border-slate-200 p-4 dark:border-slate-700">
+                <>
+                  <div className="space-y-1.5">
+                    <label className="text-[13px] font-medium text-slate-600 dark:text-slate-300">优先级</label>
+                    <select className="h-9 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm outline-none focus:border-blue-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                      value={priority} onChange={(e) => setPriority(e.target.value as 'P0' | 'P1' | 'P2' | 'P3')}>
+                      <option value="P0">P0 · 紧急</option>
+                      <option value="P1">P1 · 高</option>
+                      <option value="P2">P2 · 普通</option>
+                      <option value="P3">P3 · 低</option>
+                    </select>
+                  </div>
+                  <div className="rounded-xl border border-slate-200 p-4 dark:border-slate-700">
                   <div className="mb-3 flex items-center gap-2">
                     <span className="text-[13px] font-semibold text-slate-700 dark:text-slate-200">硬性要求表单</span>
                     <Badge tone={typeTone}>{typeLabel}</Badge>
@@ -773,7 +785,8 @@ export function CreateWorkItemDialog({ onClose }: { onClose: () => void }) {
                     </span>
                   </div>
                   <SchemaForm fields={fields} values={values} onChange={setValues} project={project.name} />
-                </div>
+                  </div>
+                </>
               )}
             </>
           )}
@@ -1148,6 +1161,68 @@ function RegisterApproveDialog() {
   )
 }
 
+/* ============ 强制修改密码 ============ */
+function ChangePasswordDialog() {
+  const { closeDialog } = useApp()
+  const [oldPassword, setOldPassword] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const submit = async () => {
+    if (!oldPassword || newPassword.length < 8) {
+      toast.error('请输入当前密码和至少 8 位的新密码')
+      return
+    }
+    if (newPassword !== confirmPassword) {
+      toast.error('两次输入的新密码不一致')
+      return
+    }
+
+    setBusy(true)
+    try {
+      await api.post('/api/v1/auth/change-password', {
+        old_password: oldPassword,
+        new_password: newPassword,
+      })
+      const storedUser = getStoredUser()
+      if (storedUser) setStoredUser({ ...storedUser, mustChangePassword: false })
+      toast.success('密码已修改')
+      closeDialog()
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : '修改密码失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={() => undefined}>
+      <DialogContent showCloseButton={false} className="sm:max-w-[420px]">
+        <DialogHeader><DialogTitle className="text-[15px]">请修改密码</DialogTitle></DialogHeader>
+        <div className="space-y-3">
+          <p className="rounded-lg border border-amber-200 bg-amber-50 p-2.5 text-[12px] leading-relaxed text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300">
+            为保护账号安全，请先设置新的密码后再继续使用系统。
+          </p>
+          <label className="block space-y-1.5 text-[12px] font-medium text-slate-600 dark:text-slate-300">
+            当前密码
+            <Input type="password" autoFocus value={oldPassword} onChange={(e) => setOldPassword(e.target.value)} />
+          </label>
+          <label className="block space-y-1.5 text-[12px] font-medium text-slate-600 dark:text-slate-300">
+            新密码（至少 8 位）
+            <Input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} />
+          </label>
+          <label className="block space-y-1.5 text-[12px] font-medium text-slate-600 dark:text-slate-300">
+            确认新密码
+            <Input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} />
+          </label>
+        </div>
+        <DialogFooter><Button disabled={busy} onClick={() => void submit()}>{busy ? '保存中…' : '保存新密码'}</Button></DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 /* ============ 注册表 ============ */
 const DIALOGS: Record<string, () => React.ReactElement> = {
   submit: SubmitDialog,
@@ -1156,6 +1231,7 @@ const DIALOGS: Record<string, () => React.ReactElement> = {
   expertApproval: ExpertApprovalDialog,
   validate: ValidateDialog,
   createUser: CreateUserDialog,
+  changePwd: ChangePasswordDialog,
   registerAccount: RegisterAccountDialog,
   registerApprove: RegisterApproveDialog,
 }

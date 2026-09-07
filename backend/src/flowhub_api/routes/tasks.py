@@ -4,13 +4,13 @@ from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import case, func, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from flowhub_api.authz.authorizer import build_authorizer, get_current_user
 from flowhub_api.core.response import BizCode, BizError, ok
 from flowhub_api.db.session import get_db
-from flowhub_api.models import GlobalTemplate, Project, TaskItem, User, WorkflowInstance
+from flowhub_api.models import GlobalTemplate, NodeAssignment, Project, ProjectTemplateBinding, TaskItem, User, WorkflowInstance
 from flowhub_api.schemas.api import TaskActionReq, TaskAdoptRunReq, TaskAiFillReq, TaskSplitReq
 from flowhub_api.services.audit import AuditService
 from flowhub_api.services.task_lineage import historical_split_parent_ids_for_tasks
@@ -35,6 +35,36 @@ _PRIORITY_ORDER = case(
 )
 
 
+async def _shared_node_task_ids(session: AsyncSession, user: User) -> set[str]:
+    """返回当前用户作为节点共同处理人时可见的任务 ID。
+
+    TaskItem.assignee 是旧的单字符串字段，创建任务时只会展示多个绑定人中的首位。
+    节点绑定本身支持多用户/角色，所以列表必须同时按绑定关系补充可见范围。
+    """
+    role_tags = {role.id for role in user.roles} | set(user.skills or [])
+    binding_rows = (await session.execute(
+        select(NodeAssignment, ProjectTemplateBinding.template_id, Project.name)
+        .join(ProjectTemplateBinding, NodeAssignment.binding_id == ProjectTemplateBinding.id)
+        .join(Project, ProjectTemplateBinding.project_id == Project.id)
+        .where(ProjectTemplateBinding.status == "active")
+    )).all()
+    shared_nodes = {
+        (project_name, template_id, assignment.node_id)
+        for assignment, template_id, project_name in binding_rows
+        if user.id in (assignment.users or []) or role_tags.intersection(assignment.roles or [])
+    }
+    if not shared_nodes:
+        return set()
+    task_rows = (await session.execute(
+        select(TaskItem.id, TaskItem.project, TaskItem.node_id, WorkflowInstance.template_id)
+        .join(WorkflowInstance, WorkflowInstance.work_item_id == TaskItem.wi_id)
+    )).all()
+    return {
+        task_id for task_id, project_name, node_id, template_id in task_rows
+        if (project_name, template_id, node_id) in shared_nodes
+    }
+
+
 def _brief(t: TaskItem) -> dict:
     return {
         "id": t.id, "title": t.title, "wiId": t.wi_id, "project": t.project,
@@ -55,6 +85,7 @@ async def list_tasks(
     page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100),
 ):
     conds = []
+    visibility = None
     if status:
         conds.append(TaskItem.status == status)
     if status_group in STATUS_GROUPS:
@@ -66,8 +97,10 @@ async def list_tasks(
     if assignee:
         conds.append(TaskItem.assignee == assignee)
     elif user.name != "系统管理员":
-        # 普通用户仅见自己名下的任务；系统管理员可查看全部任务（全局视角）
-        conds.append(TaskItem.assignee == user.name)
+        # 单人任务仍按 assignee 过滤；多人节点则按项目模板绑定补齐共同处理人的可见范围。
+        shared_ids = await _shared_node_task_ids(session, user)
+        visibility = or_(TaskItem.assignee.in_([user.name, user.account, user.id]), TaskItem.id.in_(shared_ids))
+        conds.append(visibility)
     if priority:
         conds.append(TaskItem.priority == priority)
     if q:
@@ -104,8 +137,8 @@ async def list_tasks(
         stats_where.append(TaskItem.project.contains(project))
     if assignee:
         stats_where.append(TaskItem.assignee == assignee)
-    elif user.name != "系统管理员":
-        stats_where.append(TaskItem.assignee == user.name)
+    elif visibility is not None:
+        stats_where.append(visibility)
     if priority:
         stats_where.append(TaskItem.priority == priority)
     all_count, todo, doing, submitted, done, overdue_n, expert_n = (await session.execute(
@@ -253,11 +286,22 @@ async def get_task(
         select(TaskItem).where(TaskItem.parent_task_id == t.id).order_by(TaskItem.id)
     )).scalars().all()
     # 关联的 Expert Run（Expert 自动/协助填充产生）
-    from flowhub_api.models import ExpertRun
+    from flowhub_api.models import ExpertRun, ExpertRunEvent
 
     linked_runs = (await session.execute(
         select(ExpertRun).where(ExpertRun.task_id == t.id).order_by(ExpertRun.started_at.desc(), ExpertRun.id.desc()).limit(3)
     )).scalars().all()
+    run_ids = [run.id for run in linked_runs]
+    event_rows = (await session.execute(
+        select(ExpertRunEvent).where(ExpertRunEvent.run_id.in_(run_ids)).order_by(ExpertRunEvent.run_id, ExpertRunEvent.sequence)
+    )).scalars().all() if run_ids else []
+    events_by_run: dict[str, list[dict]] = {run_id: [] for run_id in run_ids}
+    for event in event_rows:
+        events_by_run[event.run_id].append({
+            "sequence": event.sequence, "kind": event.kind, "status": event.status, "title": event.title,
+            "summary": (event.payload or {}).get("summary", ""), "durationMs": event.duration_ms,
+            "createdAt": event.created_at,
+        })
     # 本任务提交/自动流转后的下一任务（同工作项、创建于本任务之后的第一个未完成任务）：
     # 前端在 Expert 自动节点完成后直达下一任务，不再手动回工作项找
     next_task_id = ""
@@ -271,7 +315,12 @@ async def get_task(
         if nt is not None:
             next_task_id = nt.id
     return ok({
-        "task": {**_brief(t), "parentTaskId": effective_parent_id, "frozen": frozen, "acceptanceChecks": t.acceptance_checks or {}},
+        # 详情必须回传本节点已保存的表单快照。列表接口刻意不带该大字段，
+        # 但任务处理页打开历史已完成节点时需要据此只读回显。
+        "task": {
+            **_brief(t), "parentTaskId": effective_parent_id, "frozen": frozen,
+            "formValues": t.form_values or {}, "acceptanceChecks": t.acceptance_checks or {},
+        },
         "upstream": upstream,
         "parent": _brief(parent_task) if parent_task else None,
         "subtasks": [
@@ -291,7 +340,8 @@ async def get_task(
         "fallbackTargets": fallback_targets,
         "nextTaskId": next_task_id,
         "expertRuns": [
-            {"id": r.id, "status": r.status, "output": r.output or "", "error": r.error, "startedAt": r.started_at, "context": r.context or "", "parsed": r.parsed}
+            {"id": r.id, "status": r.status, "output": r.output or "", "error": r.error, "startedAt": r.started_at, "context": r.context or "", "parsed": r.parsed,
+             "events": events_by_run.get(r.id, [])}
             for r in linked_runs
         ],
     })
@@ -355,32 +405,37 @@ async def append_task_info(
             TaskItem.status.not_in(["completed", "cancelled"]),
         ).order_by(TaskItem.id).limit(1)
     )).scalar_one_or_none()
-    notification: NotificationItem | None = None
+    notifications: list[NotificationItem] = []
     if current is not None:
-        # target_user 按 account 存储（与通知列表过滤一致：assignee 存的是 name，需换算）
-        cur_user = (await session.execute(select(User).where(User.name == current.assignee))).scalar_one_or_none()
-        target = cur_user.account if cur_user else current.assignee
-        notification = NotificationItem(
-            id=gen_id("ntf"), title="节点信息已补充",
-            body=f"节点「{t.node}」由 {user.name} 补充了信息，处理前请查看（当前节点「{current.node}」）",
-            time=datetime.now(UTC).strftime("%m-%d %H:%M"), channels=[],
-            kind="info", unread=True, failed=False,
-            target_user=target, wi_id=t.wi_id, task_id=current.id,
-        )
-        session.add(notification)
-        channels = await deliver_channels(
-            "节点信息已补充", f"「{t.title}」节点「{t.node}」有补充信息，当前节点「{current.node}」请留意", cur_user,
-        )
-        notification.channels = channels
-        notification.failed = any(not channel["ok"] for channel in channels)
+        # target_user 按 account 存储（与通知列表过滤一致：assignee 存的是 name，需换算）。
+        # 追加信息同样通知该节点全部绑定处理人（多人节点每个共同处理人都收到通知/邮件）。
+        from flowhub_api.services.workflow import WorkflowService as _WFS
+
+        recipients = await _WFS(session).resolve_task_recipients(current)
+        for cur_user in recipients:
+            notification = NotificationItem(
+                id=gen_id("ntf"), title="节点信息已补充",
+                body=f"节点「{t.node}」由 {user.name} 补充了信息，处理前请查看（当前节点「{current.node}」）",
+                time=datetime.now(UTC).strftime("%m-%d %H:%M"), channels=[],
+                kind="info", unread=True, failed=False,
+                target_user=cur_user.account, wi_id=t.wi_id, task_id=current.id,
+            )
+            session.add(notification)
+            channels = await deliver_channels(
+                "节点信息已补充", f"「{t.title}」节点「{t.node}」有补充信息，当前节点「{current.node}」请留意", cur_user,
+            )
+            notification.channels = channels
+            notification.failed = any(not channel["ok"] for channel in channels)
+            notifications.append(notification)
     await AuditService(session).record(
         actor=user.name, action="task:append", target=f"{t.id} · {t.node}", result="success",
     )
     await session.commit()
-    if notification is not None:
+    if notifications:
         from flowhub_api.routes.notifications import publish_notification
 
-        await publish_notification(notification)
+        for notification in notifications:
+            await publish_notification(notification)
     return ok({"taskId": t.id, "node": t.node, "values": values}, f"已补充节点「{t.node}」信息（原提交不变，追加留痕）")
 
 
@@ -458,7 +513,20 @@ async def task_action(
         await AuditService(session).record(
             actor=user.name, action="task:transfer", target=f"{t.id} → {target.name}", result="success",
         )
+        from flowhub_api.models import NotificationItem
+        from flowhub_api.seed.init import gen_id
+        from flowhub_api.services.notify import deliver_channels
+
+        channels = await deliver_channels("任务已转办", f"「{t.title}」节点「{t.node}」已由 {user.name} 转办给你", target)
+        notification = NotificationItem(
+            id=gen_id("ntf"), title="任务已转办", body=f"「{t.title}」节点「{t.node}」已转办给你",
+            time=datetime.now(UTC).strftime("%m-%d %H:%M"), channels=channels, kind="transfer", unread=True,
+            failed=any(not channel["ok"] for channel in channels), target_user=target.account, wi_id=t.wi_id, task_id=t.id,
+        )
+        session.add(notification)
         await session.commit()
+        from flowhub_api.routes.notifications import publish_notification
+        await publish_notification(notification)
         return ok({"task": _brief(t)}, f"任务已转办给 {target.name}")
 
     if body.action == "return":
@@ -522,7 +590,41 @@ async def task_action(
                         wi.title = title
                         t.title = title
         result = await service.submit_and_advance(t, body.form_values, body.acceptance_checks, user)
+        # Every newly-arrived human task gets a durable notification.  This is
+        # deliberately handled here (after advance has selected all branches)
+        # so normal, conditional and parallel paths share the same delivery.
+        from flowhub_api.models import NotificationItem
+        from flowhub_api.seed.init import gen_id
+        from flowhub_api.services.notify import deliver_channels
+
+        arrival_notifications: list[NotificationItem] = []
+        seen_task_ids: set[str] = set()
+        for next_task in result.get("tasks") or ([result.get("task")] if result.get("task") else []):
+            if next_task is None or next_task.id in seen_task_ids or next_task.status in {"completed", "cancelled", "pending_confirmation"}:
+                continue
+            seen_task_ids.add(next_task.id)
+            # 通知该节点全部绑定处理人（多人节点每个共同处理人都收到通知/邮件），
+            # 而非只通知 TaskItem.assignee（单字符串只存绑定首位）。
+            for recipient in await service.resolve_task_recipients(next_task):
+                channels = await deliver_channels(
+                    "新待办任务",
+                    f"工作项「{next_task.title}」已流转至节点「{next_task.node}」，请处理任务 {next_task.id}",
+                    recipient,
+                )
+                notification = NotificationItem(
+                    id=gen_id("ntf"), title="新待办任务",
+                    body=f"工作项「{next_task.title}」已流转至节点「{next_task.node}」",
+                    time=datetime.now(UTC).strftime("%m-%d %H:%M"), channels=channels, kind="arrive",
+                    unread=True, failed=any(not channel["ok"] for channel in channels),
+                    target_user=recipient.account, wi_id=next_task.wi_id, task_id=next_task.id,
+                )
+                session.add(notification)
+                arrival_notifications.append(notification)
         await session.commit()
+        if arrival_notifications:
+            from flowhub_api.routes.notifications import publish_notification
+            for notification in arrival_notifications:
+                await publish_notification(notification)
         nxt_task = result.get("task") or (result.get("tasks") or [None])[0]
         next_tasks = [
             {"id": x.id, "node": x.node, "status": x.status, "assignee": x.assignee}
@@ -676,9 +778,10 @@ async def ai_fill_task(
         session, deployment_id, prompt, user, task_id=t.id, context=context,
         replace_run_id=latest.id if latest is not None else None,
     )
+    run.config_snapshot = {**run.config_snapshot, "forceCodeReanalysis": body.reanalyze_code}
     await AuditService(session).record(
         actor=user.name, action="task:ai_fill", target=f"{t.id} · {t.node}", result="success",
-        after={"runId": run.id, "replaced": latest.id if latest is not None else "", "contextLen": len(context), "reRun": True},
+        after={"runId": run.id, "replaced": latest.id if latest is not None else "", "contextLen": len(context), "reRun": True, "reanalyzeCode": body.reanalyze_code},
     )
     await session.commit()
     return ok(
@@ -738,6 +841,7 @@ async def adopt_run(
             run.parsed = {**(snapshot or {}), "values": edited_values,
                           "warnings": list(snapshot.get("warnings") or []) if isinstance(snapshot, dict) else [],
                           "valid": not validation_issues, "validationIssues": validation_issues,
+                          "formatStatus": "manual",
                           "originalValues": before, "manualEdited": True,
                           "editedKeys": edited_keys,
                           "editedAt": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")}
@@ -762,7 +866,7 @@ async def adopt_run(
             diff_fields = edited_keys
     # AI 二次格式修正：把产出按节点 schema 契约规范后写回 parsed 快照（normalized 标记保证幂等）。
     # 任何失败都降级为原快照采纳——采纳动作永不因格式修正而失败；人工编辑过时跳过（编辑值即最终格式）
-    if body.normalize and not manual_edited and snapshot is not None:
+    if body.normalize and not manual_edited and snapshot is not None and snapshot.get("formatStatus") != "invalid":
         if snapshot.get("normalized"):
             normalized = True  # 已规范化快照直接复用（幂等，不再调模型）
         else:
@@ -777,6 +881,7 @@ async def adopt_run(
                 validation_issues = schema_validation_issues(schema, n_values)
                 run.parsed = {**snapshot, "values": n_values, "warnings": n_warnings, "originalValues": before,
                               "valid": not validation_issues, "validationIssues": validation_issues,
+                              "formatStatus": "valid",
                               "qualityStatus": run.quality_result.get("status", "needs_human_review"),
                               "qualityIssues": list(run.quality_result.get("issues") or []),
                               "contentHash": run.quality_result.get("contentHash", ""),

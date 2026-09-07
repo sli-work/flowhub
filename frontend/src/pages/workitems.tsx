@@ -126,7 +126,7 @@ export function WorkItemsPage() {
                 <th className="px-4 py-3 font-medium">状态</th>
                 <th className="px-4 py-3 font-medium">优先级</th>
                 <th className="px-4 py-3 font-medium">标签</th>
-                <th className="px-4 py-3 font-medium">负责人</th>
+                <th className="px-4 py-3 font-medium">当前处理人</th>
                 <th className="px-4 py-3 font-medium">截止</th>
                 <th className="px-4 py-3 font-medium">当前节点</th>
               </tr>
@@ -147,7 +147,13 @@ export function WorkItemsPage() {
                       {!(w.labels ?? []).length && <span className="text-slate-300 dark:text-slate-600">—</span>}
                     </div>
                   </td>
-                  <td className="px-4 py-3 text-slate-500 dark:text-slate-400">{w.assignee || '—'}</td>
+                  <td className="px-4 py-3 text-slate-500 dark:text-slate-400">
+                    {w.assignees?.length ? (
+                      <span title={w.assignees.join('、')}>
+                        {w.assignees[0]}{w.assignees.length > 1 ? ` 等 ${w.assignees.length} 人` : ''}
+                      </span>
+                    ) : (w.assignee || '—')}
+                  </td>
                   <td className="px-4 py-3 text-slate-400">{w.due || '—'}</td>
                   <td className="px-4 py-3 text-slate-500 dark:text-slate-400">{w.progress || '—'}</td>
                 </tr>

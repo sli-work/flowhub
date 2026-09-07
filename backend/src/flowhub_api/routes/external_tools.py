@@ -18,8 +18,17 @@ router = APIRouter(prefix="/api/v1/external-tools", tags=["external-tools"])
 
 def _origin() -> str:
     from flowhub_api.core.config import get_settings
+    from urllib.parse import urlsplit
 
-    return get_settings().public_base_url.rstrip("/") or "http://127.0.0.1:8000"
+    origin = get_settings().public_base_url.rstrip("/")
+    parsed = urlsplit(origin)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.path:
+        raise BizError(
+            BizCode.VALIDATION,
+            "服务未配置有效的 PUBLIC_BASE_URL，无法生成可连接的 MCP 配置",
+            http_status=503,
+        )
+    return origin
 
 
 @router.get("/mcp-config")
@@ -34,7 +43,7 @@ async def download_mcp_config(_: Annotated[User, Depends(get_current_user)], key
         "{\n"
         "  \"mcpServers\": {\n"
         "    \"flowhub\": {\n"
-        f"      \"url\": \"{_origin()}/api/v1/mcp/sse\",\n"
+        f"      \"url\": \"{_origin()}/api/v1/mcp/http/\",\n"
         "      \"headers\": {\n"
         f"        \"Authorization\": \"Bearer {access_key}\"\n"
         "      }\n"
@@ -53,7 +62,8 @@ async def download_skill_markdown(_: Annotated[User, Depends(get_current_user)])
 
 ## Connection
 
-- MCP SSE endpoint: `{_origin()}/api/v1/mcp/sse`
+- MCP endpoint (Streamable HTTP, recommended): `{_origin()}/api/v1/mcp/http/`
+- Legacy MCP SSE endpoint (for existing compatible clients): `{_origin()}/api/v1/mcp/sse`
 - Authentication: `Authorization: Bearer ${{FLOWHUB_ACCESS_KEY}}`
 - Create and rotate access keys in FlowHub's Access Key management page. Do not put an access key into this file.
 
@@ -88,8 +98,8 @@ async def download_skill_markdown(_: Annotated[User, Depends(get_current_user)])
 ## Work Item Creation（创建工作项）
 
 1. 只有具有 `workflow_instance:create` 权限、且是起始节点处理人（或管理员）的调用者可创建；
-2. 调用 `create_work_item(project_id, template_id, start_values, labels)`；项目必须启用且已绑定模板；
-3. `start_values.title` 必填，其余字段应遵循模板起始节点的表单 Schema；
+2. 调用 `create_work_item(project_id, template_id, start_values, priority?, labels)`；项目必须启用且已绑定模板；
+3. `start_values.title` 必填，其余字段应遵循模板起始节点的表单 Schema；`priority` 可选 `P0`（紧急）至 `P3`（低），不传则兼容读取 `start_values.priority`；
 4. 这是会创建真实流程、任务和通知的写入操作。项目、模板或表单信息不明确时，先向用户确认，勿猜测默认值。
 
 ## Safety Rules

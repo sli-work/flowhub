@@ -4,7 +4,7 @@ import { useApp, toast } from '../store/app-store'
 import { api, ApiError, getToken } from '../lib/api'
 import { cn } from '../lib/utils'
 import {
-  Badge, DocRow, SectionCard, Timeline, wiStatusBadge, priorityBadge, taskStatusBadge, EmptyState, type Tone,
+  Badge, DocRow, SectionCard, Timeline, wiStatusBadge, taskStatusBadge, EmptyState, type Tone,
 } from '../components/common'
 import { DocumentViewerDrawer } from '../components/document-viewer-drawer'
 import type { WorkItem } from '../types'
@@ -68,6 +68,17 @@ export function WorkItemPage() {
   const stoppable = !!wi && !['closed', 'cancelled', 'archived'].includes(wi.status)
   /* 删除工作项：仅取消态可删（后端强校验），硬删工作项+实例+全部任务 */
   const deletable = wi?.status === 'cancelled'
+  const updatePriority = async (priority: WorkItem['priority']) => {
+    if (!wi || priority === wi.priority) return
+    try {
+      await api.patch(`/api/v1/work-items/${wi.id}/priority`, { priority })
+      toast.success(`优先级已调整为 ${priority}`)
+      setReload((v) => v + 1)
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : '修改优先级失败')
+    }
+  }
+
   const deleteWi = async () => {
     if (!wi) return
     if (!confirm(`确认删除工作项「${wi.title}」？工作项、流程实例及全部任务将被删除且不可恢复。`)) return
@@ -128,13 +139,22 @@ export function WorkItemPage() {
             <div className="flex flex-wrap items-center gap-2.5">
               <Badge tone="info">需求</Badge>
               <span className="font-mono text-[12px] text-slate-400">{wi?.id ?? '加载中…'}</span>
-              {wi && priorityBadge(wi.priority)}
+              {wi && (
+                <select aria-label="修改优先级" value={wi.priority}
+                  className="h-7 rounded-md border border-slate-300 bg-white px-2 text-[12px] font-medium text-slate-700 outline-none focus:border-blue-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                  onChange={(e) => void updatePriority(e.target.value as WorkItem['priority'])}>
+                  <option value="P0">P0 · 紧急</option>
+                  <option value="P1">P1 · 高</option>
+                  <option value="P2">P2 · 普通</option>
+                  <option value="P3">P3 · 低</option>
+                </select>
+              )}
               {wi && wiStatusBadge(wi.status)}
               <span className="text-[12px] text-slate-400">· 流程实例 {instance ? `v${instance.version.replace(/\D/g, '') ?? instance.version}` : '—'} · {instance?.state ?? '—'}</span>
             </div>
             <h1 className="mt-2.5 text-[20px] font-semibold leading-snug text-slate-900 dark:text-slate-100">{wi?.title ?? '加载中…'}</h1>
             <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 text-[12.5px] text-slate-500 dark:text-slate-400">
-              <span className="inline-flex items-center gap-1.5"><User className="h-3.5 w-3.5" />负责人：{wi?.assignee ?? '—'}</span>
+              <span className="inline-flex items-center gap-1.5"><User className="h-3.5 w-3.5" />当前处理人：{wi?.assignees?.join('、') || wi?.assignee || '—'}</span>
               <span className="inline-flex items-center gap-1.5"><Inbox className="h-3.5 w-3.5" />项目：{wi?.project ?? '—'}</span>
               <span className="inline-flex items-center gap-1.5"><Calendar className="h-3.5 w-3.5" />截止：{wi?.due ?? '—'}</span>
               <span className="inline-flex items-center gap-1.5"><Tag className="h-3.5 w-3.5" />

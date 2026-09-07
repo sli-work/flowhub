@@ -11,7 +11,7 @@ from flowhub_api.core.config import get_settings
 from flowhub_api.core.response import BizCode, BizError, ok
 from flowhub_api.db.session import get_db
 from flowhub_api.models import NotificationItem, User
-from flowhub_api.schemas.api import ChangePwdReq, LoginReq, RegisterReq, SsoVerifyReq, ThemePreferenceReq
+from flowhub_api.schemas.api import ChangePwdReq, LoginReq, RegisterReq, RejectRegistrationReq, SsoVerifyReq, ThemePreferenceReq
 from flowhub_api.seed.init import gen_id
 from flowhub_api.services.audit import AuditService
 from flowhub_api.services.auth import AuthService
@@ -146,6 +146,49 @@ async def approve_registration(
     ))
     await session.commit()
     return ok({"channels": results}, message=f"审批通过：{target.name} 已激活，欢迎通知已发送")
+
+
+@router.post("/approvals/{user_id}/reject")
+async def reject_registration(
+    user_id: str,
+    body: RejectRegistrationReq,
+    user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_db)],
+):
+    """拒绝注册申请：记录原因、通知申请人，并保留审计以便其修正资料后重新提交。"""
+    from flowhub_api.authz.authorizer import build_authorizer
+    from flowhub_api.services.notify import deliver_channels
+
+    build_authorizer(user).require("organization:user_manage")
+    target = await session.get(User, user_id)
+    if target is None:
+        raise BizError(BizCode.NOT_FOUND, "申请不存在")
+    if target.status != "invited" or target.deleted:
+        raise BizError(BizCode.DUPLICATE_OPERATION, "该申请已处理")
+
+    reason = body.reason.strip()
+    if not reason:
+        raise BizError(BizCode.VALIDATION, "拒绝原因不能为空")
+    results = await deliver_channels("FlowHub 注册申请未通过", f"你的注册申请未通过。原因：{reason}\n\n你可修正资料后重新提交申请。", target.email or None)
+    target.status = "disabled"
+    target.deleted = True
+    await AuditService(session).record(
+        actor=user.name, action="auth:registration_reject",
+        target=f"{target.name}（{target.account}）", result="success",
+        after={"reason": reason},
+    )
+    notification = NotificationItem(
+        id=gen_id("n"), title="注册申请未通过",
+        body=f"管理员拒绝了你的注册申请。原因：{reason}。你可修正资料后重新提交。",
+        time=datetime.now(UTC).strftime("%m-%d %H:%M"), channels=results, unread=True,
+        kind="fail", target_user=target.account,
+    )
+    session.add(notification)
+    await session.commit()
+    from flowhub_api.routes.notifications import publish_notification
+
+    await publish_notification(notification)
+    return ok({"channels": results}, message=f"已拒绝 {target.name} 的注册申请，并已通知申请人")
 
 
 @router.post("/change-password")

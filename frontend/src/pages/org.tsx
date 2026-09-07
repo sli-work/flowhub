@@ -27,6 +27,8 @@ export function OrgPage() {
   const { openDialog, openApproval, dialog, orgUsers: users, updateUser, refreshOrgUsers } = useApp()
   const [tab, setTab] = useState<'users' | 'approve' | 'sync'>('users')
   const [editing, setEditing] = useState<User | null>(null)
+  const [resettingPassword, setResettingPassword] = useState<User | null>(null)
+  const [rejecting, setRejecting] = useState<{ id: string; name: string; email: string } | null>(null)
   /* 概览/部门树/待审批：来自后端聚合接口 */
   const [overview, setOverview] = useState({ departments: 0, users: 0, syncedDing: 0, syncedWecom: 0, pendingApprove: 0 })
   /* 部门树：由用户部门聚合（数据来自后端 /org/users） */
@@ -213,6 +215,7 @@ export function OrgPage() {
                           ) : (
                             <button className="rounded-md border border-slate-300 px-2.5 py-1 text-[11.5px] font-medium text-slate-500 hover:border-blue-400 hover:text-blue-600 dark:border-slate-700 dark:text-slate-400" onClick={() => setEditing(u)}>编辑</button>
                           )}
+                          <button className="rounded-md border border-violet-300 px-2.5 py-1 text-[11.5px] font-medium text-violet-600 hover:bg-violet-50 dark:border-violet-500/40 dark:text-violet-300 dark:hover:bg-violet-500/10" onClick={() => setResettingPassword(u)}>重置密码</button>
                           {u.status !== 'disabled' && u.status !== 'locked' && (
                             <button className="rounded-md border border-slate-300 px-2.5 py-1 text-[11.5px] font-medium text-slate-500 hover:border-amber-400 hover:text-amber-600 dark:border-slate-700 dark:text-slate-400" onClick={() => disableUser(u)}>停用</button>
                           )}
@@ -243,7 +246,7 @@ export function OrgPage() {
                   <div className="mt-0.5 text-[12px] text-slate-400">{r.dept} · <Badge tone="info" className="!px-1.5 !text-[10.5px]">{r.role}</Badge> · 申请于 {r.applied}</div>
                 </div>
                 <button className="rounded-lg bg-blue-600 px-3 py-1.5 text-[12.5px] font-medium text-white hover:bg-blue-700" onClick={() => openApproval(r.id)}>通过</button>
-                <button className="rounded-lg border border-slate-300 px-3 py-1.5 text-[12.5px] font-medium text-slate-500 hover:border-red-300 hover:text-red-500 dark:border-slate-700 dark:text-slate-400" onClick={() => toast('拒绝需填写原因，并通知申请者（R-152）')}>拒绝</button>
+                <button className="rounded-lg border border-slate-300 px-3 py-1.5 text-[12.5px] font-medium text-slate-500 hover:border-red-300 hover:text-red-500 dark:border-slate-700 dark:text-slate-400" onClick={() => setRejecting(r)}>拒绝</button>
               </div>
             ))}
           </div>
@@ -287,7 +290,93 @@ export function OrgPage() {
           onClose={() => setEditing(null)}
         />
       )}
+      {resettingPassword && <ResetPasswordDialog user={resettingPassword} onClose={() => setResettingPassword(null)} />}
+      {rejecting && <RejectRegistrationDialog
+        user={rejecting}
+        onClose={() => setRejecting(null)}
+        onRejected={() => {
+          setRejecting(null)
+          setApprovals((current) => current.filter((item) => item.id !== rejecting.id))
+          setOverview((current) => ({ ...current, pendingApprove: Math.max(0, current.pendingApprove - 1) }))
+          refreshOrgUsers()
+        }}
+      />}
     </div>
+  )
+}
+
+function RejectRegistrationDialog({
+  user, onClose, onRejected,
+}: {
+  user: { id: string; name: string; email: string }
+  onClose: () => void
+  onRejected: () => void
+}) {
+  const [reason, setReason] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const submit = async () => {
+    if (!reason.trim()) {
+      toast.error('请填写拒绝原因')
+      return
+    }
+    setBusy(true)
+    try {
+      await api.post(`/api/v1/auth/approvals/${user.id}/reject`, { reason: reason.trim() })
+      toast.success(`已拒绝「${user.name}」的注册申请，并已通知申请人`)
+      onRejected()
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : '拒绝注册申请失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
+      <DialogContent className="sm:max-w-[440px]">
+        <DialogHeader><DialogTitle className="text-[15px]">拒绝注册申请 · {user.name}</DialogTitle></DialogHeader>
+        <div className="space-y-3">
+          <p className="text-[12px] leading-relaxed text-slate-500 dark:text-slate-400">拒绝后会结束本次申请，并将原因发送至 {user.email || '申请人'}。申请人可修正资料后重新提交。</p>
+          <label className="block space-y-1.5 text-[12px] font-medium text-slate-600 dark:text-slate-300">
+            拒绝原因
+            <textarea value={reason} autoFocus rows={4} maxLength={500} onChange={(event) => setReason(event.target.value)} placeholder="请说明需要补充或修改的内容" className="w-full resize-none rounded-lg border border-slate-300 bg-white p-2.5 text-sm font-normal outline-none focus:border-red-400 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100" />
+          </label>
+        </div>
+        <DialogFooter className="gap-2"><Button variant="outline" onClick={onClose}>取消</Button><Button variant="destructive" disabled={busy} onClick={() => void submit()}>{busy ? '处理中…' : '确认拒绝'}</Button></DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function ResetPasswordDialog({ user, onClose }: { user: User; onClose: () => void }) {
+  const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [busy, setBusy] = useState(false)
+  const submit = async () => {
+    if (password.length < 8) return toast.error('临时密码至少 8 位')
+    if (password !== confirmPassword) return toast.error('两次输入的密码不一致')
+    setBusy(true)
+    try {
+      await api.post(`/api/v1/org/users/${user.id}/reset-password`, { new_password: password })
+      toast.success(`已重置「${user.name}」的密码；其下次登录必须修改密码`)
+      onClose()
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : '重置密码失败')
+    } finally { setBusy(false) }
+  }
+  return (
+    <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
+      <DialogContent className="sm:max-w-[420px]">
+        <DialogHeader><DialogTitle className="text-[15px]">重置密码 · {user.name}</DialogTitle></DialogHeader>
+        <div className="space-y-3">
+          <p className="rounded-lg border border-amber-200 bg-amber-50 p-2.5 text-[12px] leading-relaxed text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300">设置临时密码后，请通过安全渠道告知用户。用户下次登录会被要求立即修改密码。</p>
+          <label className="block space-y-1.5 text-[12px] font-medium text-slate-600 dark:text-slate-300">临时密码<input type="password" autoFocus value={password} onChange={(e) => setPassword(e.target.value)} className="h-9 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm outline-none focus:border-violet-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100" /></label>
+          <label className="block space-y-1.5 text-[12px] font-medium text-slate-600 dark:text-slate-300">确认临时密码<input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} className="h-9 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm outline-none focus:border-violet-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100" /></label>
+        </div>
+        <DialogFooter className="gap-2"><Button variant="outline" onClick={onClose}>取消</Button><Button disabled={busy} onClick={() => void submit()}>{busy ? '重置中…' : '确认重置'}</Button></DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 

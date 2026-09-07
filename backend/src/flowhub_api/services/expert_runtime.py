@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import tarfile
+import time
 import zipfile
 from datetime import UTC, datetime, timedelta
 from collections.abc import Awaitable, Callable
@@ -332,6 +333,11 @@ class GraphState(TypedDict, total=False):
     quality_status: str
     judge_attempt: int
     retry_judge: bool
+    format_status: str
+    format_repair_attempted: bool
+    format_repair_required: bool
+    format_repair_error: str
+    code_evidence: list[str]
 
 
 def checkpoint_dsn() -> str:
@@ -463,7 +469,8 @@ async def flowhub_read_snapshot(session: AsyncSession, user: User, prompt: str, 
 
 
 def build_graph(provider: LlmProvider, model: LlmProviderModel, system_prompt: str, flowhub_snapshot=None, emitter=None,
-                quality_mode: str = "accurate", repo_tools_factory=None, output_schema=None):
+                quality_mode: str = "accurate", repo_tools_factory=None, output_schema=None, cached_code_evidence=None,
+                force_code_reanalysis: bool = False):
     """构建 LangGraph 运行图。
 
     flowhub_snapshot：async (prompt) -> {context, trace, pre_answer}，FlowHub 基础能力钩子。
@@ -482,6 +489,8 @@ def build_graph(provider: LlmProvider, model: LlmProviderModel, system_prompt: s
             logger.debug("expert run emitter 发送失败", exc_info=True)
 
     async def context_node(state: GraphState) -> dict:
+        started = time.monotonic()
+        await _emit("trace", {"kind": "context", "tool": "任务上下文", "status": "running", "summary": "正在汇集任务、表单与项目上下文"})
         update: dict = {"prompt": state["prompt"]}
         if flowhub_snapshot is not None:
             try:
@@ -494,6 +503,8 @@ def build_graph(provider: LlmProvider, model: LlmProviderModel, system_prompt: s
                 update["flowhub_context"] = ""
                 update["tool_trace"] = [{"tool": "flowhub.context", "status": "failed", "summary": f"FlowHub 上下文获取失败：{exc}"}]
                 await _emit("trace", {"kind": "tool", "tool": "flowhub.context", "status": "failed", "summary": f"FlowHub 上下文获取失败：{exc}"})
+        await _emit("trace", {"kind": "context", "tool": "任务上下文", "status": "succeeded", "summary": "任务上下文已就绪",
+                              "durationMs": round((time.monotonic() - started) * 1000)})
         return update
 
     async def approval_node(state: GraphState) -> dict:
@@ -506,7 +517,8 @@ def build_graph(provider: LlmProvider, model: LlmProviderModel, system_prompt: s
         llm = make_model(ChatOpenAI, model, provider, decrypt_secret(provider.api_key), retries=2)
         history = state.get("history") or []
         attempt_id = int(state.get("attempt", 0)) + 1
-        await _emit("draft_start", {"attemptId": attempt_id})
+        started = time.monotonic()
+        await _emit("draft_start", {"attemptId": attempt_id, "summary": f"正在调用模型生成第 {attempt_id} 轮草稿"})
         deliverable_rule = "产出约定：仅当本次回答是用户明确要求的完整交付物（文档/方案/用例等）时，在回答最后另起一行写「【交付文件】文档标题」声明交付（系统会据此生成可下载文档）；普通问答不要声明。"
         if output_schema:
             deliverable_rule = build_schema_output_instruction(output_schema)
@@ -515,6 +527,9 @@ def build_graph(provider: LlmProvider, model: LlmProviderModel, system_prompt: s
         flowhub_context = (state.get("flowhub_context") or "").strip()
         if flowhub_context:
             messages.append(("system", "以下是 FlowHub 实时上下文（按操作者权限只读获取，可直接引用其中的任务/工作项/项目信息）：\n" + flowhub_context))
+        code_evidence = list(state.get("code_evidence") or cached_code_evidence or [])
+        if code_evidence:
+            messages.append(("system", "以下是同一工作项在当前代码提交上已验证的代码证据；优先复用，只有证据不足时才调用仓库工具补充：\n" + "\n\n".join(code_evidence)))
         if repo_tools_factory is not None:
             messages.append(("system", "代码分析顺序必须是：先使用系统注入的 Graphify 预分析证据；仅在证据不足时依次使用 repo_find_symbol/repo_trace_symbol、repo_read_file、定向 repo_search，最后才可对已知目录使用 repo_list_files。不得从仓库根目录泛搜，也不得猜测源码。工具结果是唯一可用于代码结论的补充证据。"))
         issues = state.get("validation_issues") or []
@@ -531,11 +546,12 @@ def build_graph(provider: LlmProvider, model: LlmProviderModel, system_prompt: s
         # tool loop here multiplied calls by the number of quality attempts.
         if repo_tools_factory is not None and int(state.get("attempt", 0)) == 0:
             try:
-                bundle = await repo_tools_factory(state["prompt"])
+                bundle = await repo_tools_factory(state["prompt"], include_preflight=not bool(code_evidence) or force_code_reanalysis)
                 for item in bundle.traces:
                     await _emit("trace", {"kind": "tool", **item})
                 if bundle.tools:
                     if bundle.evidence_context:
+                        code_evidence.extend(bundle.evidence_context)
                         messages.append(("system", "以下是已完成的 Graphify 预分析；先基于它回答或决定最小的补充读取：\n"
                                          + "\n\n".join(bundle.evidence_context)[:MAX_REPO_TOOL_CONTEXT_CHARS]))
                     output, _ = await run_repo_tool_loop(
@@ -547,9 +563,11 @@ def build_graph(provider: LlmProvider, model: LlmProviderModel, system_prompt: s
                     tool_evidence = "\n\n".join(bundle.evidence_context)[:MAX_REPO_TOOL_CONTEXT_CHARS]
                     if emitter is not None and output:
                         await _emit("token", {"text": output, "attemptId": attempt_id})
+                    await _emit("trace", {"kind": "model", "tool": "模型生成", "status": "succeeded", "summary": f"第 {attempt_id} 轮草稿生成完成",
+                                          "durationMs": round((time.monotonic() - started) * 1000)})
                     return {"output": output, "tool_trace": trace,
                             "flowhub_context": f"{state.get('flowhub_context', '')}\n\n{tool_evidence}".strip(),
-                            "attempt": int(state.get("attempt", 0)) + 1}
+                            "attempt": int(state.get("attempt", 0)) + 1, "code_evidence": code_evidence}
             except RepoToolLoopUnavailable as exc:
                 trace.append({"tool": "flowhub.repo.tools", "status": "unavailable",
                               "summary": f"模型不支持仓库工具调用，已回退静态代码上下文：{str(exc)[:160]}"})
@@ -558,7 +576,7 @@ def build_graph(provider: LlmProvider, model: LlmProviderModel, system_prompt: s
                 trace.append({"tool": "flowhub.repo.tools", "status": "failed",
                               "summary": f"仓库工具循环失败，已回退静态代码上下文：{type(exc).__name__}"})
                 await _emit("trace", {"kind": "tool", **trace[-1]})
-        if emitter is not None:
+        if emitter is not None and hasattr(getattr(llm, "inner", llm), "astream"):
             chunks: list[str] = []
             stream = llm.astream(messages)
             try:
@@ -575,7 +593,10 @@ def build_graph(provider: LlmProvider, model: LlmProviderModel, system_prompt: s
         else:
             response = await llm.ainvoke(messages)
             output = str(response.content)
-        return {"output": output, "tool_trace": trace, "attempt": int(state.get("attempt", 0)) + 1}
+        await _emit("trace", {"kind": "model", "tool": "模型生成", "status": "succeeded", "summary": f"第 {attempt_id} 轮草稿生成完成",
+                              "durationMs": round((time.monotonic() - started) * 1000)})
+        return {"output": output, "tool_trace": trace, "attempt": int(state.get("attempt", 0)) + 1,
+                "code_evidence": code_evidence}
 
     async def validate_node(state: GraphState) -> dict:
         output = str(state.get("output") or "")
@@ -588,8 +609,24 @@ def build_graph(provider: LlmProvider, model: LlmProviderModel, system_prompt: s
         if output_schema:
             values, warnings = parse_schema_output(output_schema, output)
             issues += schema_validation_issues(output_schema, values)
-            if any("不是 JSON" in w or "无法解析" in w for w in warnings):
-                issues.append("模型未按 JSON 输出契约生成")
+            format_invalid = any("不是 JSON" in warning or "无法解析" in warning for warning in warnings)
+            if format_invalid:
+                issue = "模型未按 JSON 输出契约生成"
+                if not state.get("format_repair_attempted"):
+                    return {
+                        "validation_issues": [issue],
+                        "quality_status": "needs_revision",
+                        "format_repair_required": True,
+                    }
+                return {
+                    "validation_issues": [issue, state.get("format_repair_error") or "JSON 格式修复失败"],
+                    "quality_status": "needs_human_review",
+                    "format_status": "invalid",
+                    "format_repair_required": False,
+                }
+            format_status = state.get("format_status") or "valid"
+        else:
+            format_status = state.get("format_status")
         llm = make_model(ChatOpenAI, model, provider, decrypt_secret(provider.api_key), retries=0)
         async def invoke(question, evidence, answer):
             response = await llm.ainvoke([("human", evidence_review_prompt(question, evidence, answer))])
@@ -599,12 +636,36 @@ def build_graph(provider: LlmProvider, model: LlmProviderModel, system_prompt: s
             answer=output, policy=policy, attempt=int(state.get("attempt", 0)),
             deterministic_issues=issues, invoke_review=invoke, parse_review=parse_quality_review)
         await _emit("trace", {"kind": "quality", "tool": "flowhub.answer.quality_check", "status": result["quality_status"], "summary": "；".join(result["validation_issues"]) or result["quality_status"]})
-        return result
+        return {**result, **({"format_status": format_status} if format_status else {})}
+
+    async def format_repair_node(state: GraphState) -> dict:
+        """One bounded, content-preserving repair for a malformed schema response."""
+        llm = make_model(ChatOpenAI, model, provider, decrypt_secret(provider.api_key), retries=0)
+        original = str(state.get("output") or "")
+        await _emit("trace", {"kind": "format", "tool": "flowhub.output.format_repair", "status": "running",
+                              "summary": "正在将模型产出归位为节点 JSON"})
+        try:
+            response = await llm.ainvoke([("human", build_json_format_repair_prompt(output_schema or [], original))])
+            repaired = str(getattr(response, "content", "") or "")
+            _values, warnings = parse_schema_output(output_schema or [], repaired)
+            if any("不是 JSON" in warning or "无法解析" in warning for warning in warnings):
+                raise ValueError("格式修复模型仍未输出有效 JSON")
+        except Exception as exc:  # malformed output is a reviewable result, never a second repair loop
+            message = str(exc)[:200] or "JSON 格式修复失败"
+            await _emit("trace", {"kind": "format", "tool": "flowhub.output.format_repair", "status": "failed", "summary": message})
+            return {"format_repair_attempted": True, "format_repair_required": False,
+                    "format_repair_error": message, "format_status": "invalid"}
+        await _emit("trace", {"kind": "format", "tool": "flowhub.output.format_repair", "status": "succeeded",
+                              "summary": "已生成可解析的节点 JSON"})
+        return {"output": repaired, "format_repair_attempted": True, "format_repair_required": False,
+                "format_status": "repaired", "format_repair_error": ""}
 
     def route_after_context(state: GraphState) -> str:
         return "approval" if state.get("write_intent") else "model"
 
     def route_after_validation(state: GraphState) -> str:
+        if state.get("format_repair_required"):
+            return "format_repair"
         if state.get("quality_status") != "needs_revision":
             return END
         return "model" if should_refine_answer(int(state.get("attempt", 0)), state.get("validation_issues") or [], int(policy["max_attempts"])) else END
@@ -614,12 +675,14 @@ def build_graph(provider: LlmProvider, model: LlmProviderModel, system_prompt: s
     graph.add_node("approval", approval_node)
     graph.add_node("model", model_node)
     graph.add_node("validate", validate_node)
+    graph.add_node("format_repair", format_repair_node)
     graph.add_edge(START, "context")
     graph.add_conditional_edges("context", route_after_context, {"approval": "approval", "model": "model"})
     # 受治理写入：审批通过后继续调用模型生成产出（此前 approval → END 导致 write_intent 运行永远没有模型输出）
     graph.add_conditional_edges("approval", lambda state: "model" if state.get("approved") else END, {"model": "model", END: END})
     graph.add_edge("model", "validate")
-    graph.add_conditional_edges("validate", route_after_validation, {"model": "model", "validate": "validate", END: END})
+    graph.add_conditional_edges("validate", route_after_validation, {"model": "model", "format_repair": "format_repair", "validate": "validate", END: END})
+    graph.add_edge("format_repair", "validate")
     return graph
 
 
@@ -684,6 +747,30 @@ async def prepare_run_snapshot(session, run, version, user, history='', provider
     return run.config_snapshot
 
 
+async def _work_item_code_cache(session: AsyncSession, run: ExpertRun, user: User, project_name: str | None) -> tuple[list[dict], list[str], str]:
+    if not run.task_id or not project_name:
+        return [], [], "not_applicable"
+    from flowhub_api.services.repo_mirror import project_repo_fingerprint
+
+    fingerprint = await project_repo_fingerprint(session, project_name, user=user)
+    if not fingerprint:
+        return [], [], "not_applicable"
+    task = await session.get(TaskItem, run.task_id)
+    if task is None:
+        return fingerprint, [], "fresh"
+    previous = (await session.execute(
+        select(ExpertRun).join(TaskItem, ExpertRun.task_id == TaskItem.id)
+        .where(TaskItem.wi_id == task.wi_id, ExpertRun.id != run.id, ExpertRun.status == "succeeded")
+        .order_by(ExpertRun.finished_at.desc())
+    )).scalars().all()
+    for candidate in previous:
+        analysis = (candidate.config_snapshot or {}).get("codeAnalysis") or {}
+        evidence = analysis.get("evidence") or []
+        if analysis.get("fingerprint") == fingerprint and evidence:
+            return fingerprint, [str(item) for item in evidence], "reused"
+    return fingerprint, [], "fresh"
+
+
 async def execute_run(session: AsyncSession, run: ExpertRun, version: ExpertVersion, user: User,
     history: str | list = '', provider_model_id: str | None = None, emitter=None,
     project_name: str | None = None, quality_mode: str = 'accurate', lease_guard=None,
@@ -717,8 +804,13 @@ async def execute_run(session: AsyncSession, run: ExpertRun, version: ExpertVers
             if lease_guard:
                 await session.commit()
             return result
-        async def repo_tools(prompt):
-            bundle = await create_repo_tool_bundle(session, project_name, user=user, query=prompt, allow_clone=False)
+        fingerprint, cached_code_evidence, analysis_mode = await _work_item_code_cache(session, run, user, project_name)
+        force_code_reanalysis = bool(config.get('forceCodeReanalysis'))
+        if force_code_reanalysis and fingerprint:
+            cached_code_evidence, analysis_mode = [], 'fresh'
+        async def repo_tools(prompt, *, include_preflight=True):
+            bundle = await create_repo_tool_bundle(session, project_name, user=user, query=prompt, allow_clone=False,
+                                                   include_preflight=include_preflight)
             if lease_guard:
                 await session.commit()
             return bundle
@@ -729,7 +821,8 @@ async def execute_run(session: AsyncSession, run: ExpertRun, version: ExpertVers
             async with AsyncPostgresSaver.from_conn_string(checkpoint_dsn()) as checkpointer:
                 graph = build_graph(provider, model, config['system_prompt'], flowhub_snapshot=snapshot,
                     emitter=emitter, quality_mode=config['quality_mode'], output_schema=config.get('schema'),
-                    repo_tools_factory=repo_tools if project_name else None).compile(checkpointer=checkpointer)
+                    repo_tools_factory=repo_tools if fingerprint else None, cached_code_evidence=cached_code_evidence,
+                    force_code_reanalysis=force_code_reanalysis).compile(checkpointer=checkpointer)
                 graph_config = {'configurable': {'thread_id': run.trace_id}}
                 graph_input = {'run_id': run.id, 'prompt': run.input, 'write_intent': run.status == 'interrupted', 'history': config.get('history', '')}
                 if resume_approval:
@@ -750,17 +843,26 @@ async def execute_run(session: AsyncSession, run: ExpertRun, version: ExpertVers
             await add_event(session, run.id, 1, 'approval', 'pending', '等待审批后继续生成', {})
             return
         run.output = str(result.get('output') or '')
+        evidence = [str(item) for item in (result.get('code_evidence') or cached_code_evidence)]
+        run.config_snapshot = {**config, 'codeAnalysis': {'mode': analysis_mode, 'fingerprint': fingerprint, 'evidence': evidence}}
         quality = str(result.get('quality_status') or 'needs_human_review')
         run.quality_result = {'status': quality, 'issues': list(result.get('validation_issues') or []), 'contentHash': content_hash(run.output)}
         run.status = 'succeeded' if run.output else 'failed'
         if not run.output:
             run.error = '模型未生成有效内容'
-        await _snapshot_parsed_for_task(session, run)
+        await _snapshot_parsed_for_task(session, run, result)
         run.parsed = {**(run.parsed or {}), 'qualityStatus': quality,
             'qualityIssues': run.quality_result['issues'], 'contentHash': run.quality_result['contentHash']}
-        for item in result.get('tool_trace') or []:
-            await add_event(session, run.id, 1, 'tool', item.get('status', 'succeeded'), item.get('tool', 'tool'), {'summary': item.get('summary', '')})
-        await add_event(session, run.id, 1, 'quality', quality, '产出校验完成', run.quality_result)
+        if emitter:
+            for item in result.get('tool_trace') or []:
+                await emitter('trace', {'kind': 'tool', 'tool': item.get('tool', 'tool'),
+                                        'status': item.get('status', 'succeeded'), 'summary': item.get('summary', '')})
+            await emitter('trace', {'kind': 'quality', 'tool': '产出校验完成', 'status': quality,
+                                    'summary': '；'.join(run.quality_result['issues']) or quality})
+        else:
+            for item in result.get('tool_trace') or []:
+                await add_event(session, run.id, 1, 'tool', item.get('status', 'succeeded'), item.get('tool', 'tool'), {'summary': item.get('summary', '')})
+            await add_event(session, run.id, 1, 'quality', quality, '产出校验完成', run.quality_result)
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -768,15 +870,16 @@ async def execute_run(session: AsyncSession, run: ExpertRun, version: ExpertVers
             await lease_guard()  # Lost owners must not persist even a failure.
         logger.exception('Expert Run %s 执行失败', run.id)
         run.status, run.error = 'failed', '运行未完成，请检查模型配置、上下文预算或重新生成。' if not isinstance(exc, ValueError) else str(exc)
-        await add_event(session, run.id, 1, 'model', 'failed', '执行失败', {'errorType': type(exc).__name__})
         if emitter:
             await emitter('trace', {'kind': 'model', 'tool': '模型调用', 'status': 'failed', 'summary': run.error})
+        else:
+            await add_event(session, run.id, 1, 'model', 'failed', '执行失败', {'errorType': type(exc).__name__})
     finally:
         if run.status != 'interrupted':
             run.finished_at = now_iso()
 
 
-async def _snapshot_parsed_for_task(session: AsyncSession, run: ExpertRun) -> None:
+async def _snapshot_parsed_for_task(session: AsyncSession, run: ExpertRun, graph_result: dict | None = None) -> None:
     schema = (getattr(run, 'config_snapshot', None) or {}).get('schema')
     if schema is None:
         schema = await task_output_schema(session, run)
@@ -784,7 +887,15 @@ async def _snapshot_parsed_for_task(session: AsyncSession, run: ExpertRun) -> No
     issues = schema_validation_issues(schema, values)
     if any('不是 JSON' in w or '无法解析' in w for w in warnings):
         issues.append('模型未按 JSON 输出契约生成，不能自动采纳')
-    run.parsed = {'values': values, 'warnings': warnings, 'valid': not issues, 'validationIssues': issues}
+    graph_result = graph_result or {}
+    format_status = str(graph_result.get('format_status') or '')
+    if not format_status:
+        format_status = 'invalid' if schema and any('不是 JSON' in w or '无法解析' in w for w in warnings) else 'valid'
+    run.parsed = {'values': values, 'warnings': warnings, 'valid': not issues, 'validationIssues': issues,
+                  'formatStatus': format_status,
+                  'formatRepair': {'attempted': bool(graph_result.get('format_repair_attempted')),
+                                   'error': str(graph_result.get('format_repair_error') or '')},
+                  'codeAnalysis': ((run.config_snapshot or {}).get('codeAnalysis') or {})}
 
 
 async def resume_approved_run(session: AsyncSession, approval: ExpertApproval, user: User) -> ExpertRun:
@@ -854,6 +965,7 @@ async def schedule_deployment_run(session: AsyncSession, deployment_id: str, pro
         session.add(run)
     await session.flush()
     await prepare_run_snapshot(session, run, version, user)
+    await add_event(session, run.id, 1, "queue", "queued", "已进入执行队列", {"summary": "等待 Worker 领取执行"})
     session.add(ExpertJob(id=new_id("ejb"), run_id=run.id, generation=run.execution_generation,
                           completion=dict(completion or {}), status="queued", created_at=now_iso()))
     await session.flush()
@@ -984,31 +1096,10 @@ def _coerce_text(raw_value, depth: int = 0) -> str:
     return str(raw_value)
 
 
-def _plain_text_fallback(schema: list[dict], text: str) -> dict:
-    """非 JSON 产出的全文回填：首个必填 textarea 优先，其次任一 textarea/input；
-    upload/file 字段同回全文（调用方转文档）。无可回填字段返回 {}。"""
-    if not text:
-        return {}
-    targets = [f for f in schema if f.get("type") in ("textarea", "input", "upload", "file")]
-    primary = next((f for f in targets if f.get("required") and f.get("type") == "textarea"), None)
-    if primary is None:
-        primary = next((f for f in targets if f.get("type") == "textarea"), None)
-    if primary is None:
-        primary = next((f for f in targets if f.get("required")), None)
-    if primary is None:
-        return {}
-    values: dict = {}
-    values[primary["key"]] = text
-    for f in schema:
-        if f.get("type") in ("upload", "file") and f["key"] not in values:
-            values[f["key"]] = text
-    return values
-
-
 def parse_schema_output(schema: list[dict], raw: str) -> tuple[dict, list[str]]:
     """解析模型输出为表单值：容错提取 JSON（围栏块优先、单引号兼容），按字段类型矫正
     （选项约束/数值/数组），嵌套 dict/list 拍平为可读文本。
-    upload/file 字段的字符串视为文档正文，由调用方转成文档引用。解析失败返回 ({}, warnings)。"""
+    upload/file 字段的字符串视为文档正文，由调用方转成文档引用。解析失败绝不猜测字段值。"""
     warnings: list[str] = []
     if not raw or not raw.strip():
         return {}, ["模型无输出"]
@@ -1028,12 +1119,7 @@ def parse_schema_output(schema: list[dict], raw: str) -> tuple[dict, list[str]]:
             break
     parsed = best[1]
     if parsed is None:
-        # 兜底：模型输出为纯文本/Markdown 评审报告（无任何 JSON 结构）时，
-        # 把全文回填到首个必填长文本字段、upload 字段转文档，保证产出仍可采纳（由人工审核）
-        fallback = _plain_text_fallback(schema, raw.strip())
-        if fallback:
-            return fallback, ["模型输出不是 JSON，已按全文回填，请人工核对字段内容"]
-        return {}, ["模型输出无法解析为 JSON"]
+        return {}, ["模型输出不是 JSON，无法自动回填字段"]
     values: dict = {}
     for f in schema:
         key, ftype = f.get("key", ""), f.get("type", "input")
@@ -1099,6 +1185,18 @@ def build_normalize_prompt(schema: list[dict], raw: str) -> str:
         "- input 字段保持单行纯文本，不加入 Markdown 标记。\n"
         "- 输出仍须严格遵守输出契约（只输出一个 JSON 对象）。\n\n"
         f"{instruction}\n\n## 原始产出\n{raw}"
+    )
+
+
+def build_json_format_repair_prompt(schema: list[dict], raw: str) -> str:
+    """Repair output shape once; the original text remains the factual authority."""
+    return (
+        "## 任务：JSON 格式修复\n"
+        "把下方原始产出归位为节点输出契约要求的一个 JSON 对象。\n"
+        "- 只可搬运、拆分或重排原文已有内容；不得新增、删减、推断或改写事实。\n"
+        "- 无法从原文确定的字段保留为空值；不得猜测 select、number、date 或多选值。\n"
+        "- 只输出 JSON 对象，不要代码围栏、说明或前后缀。\n\n"
+        f"{build_schema_output_instruction(schema)}\n\n## 原始产出\n{raw}"
     )
 
 

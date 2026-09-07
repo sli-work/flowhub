@@ -39,6 +39,8 @@ export interface WorkItem {
   priority: 'P0' | 'P1' | 'P2' | 'P3'
   status: WorkItemStatus
   assignee: string
+  /** 当前节点完整处理人；assignee 为兼容字段中的主处理人。 */
+  assignees?: string[]
   creator: string
   due: string
   labels: string[]
@@ -70,6 +72,9 @@ export interface TaskItem {
   /** 子任务拆分：父任务 id / 子任务携带的需求说明 */
   parentTaskId?: string | null
   brief?: string
+  /** 任务详情返回的节点表单快照；列表接口不携带该字段。 */
+  formValues?: Record<string, unknown>
+  acceptanceChecks?: Record<string, unknown>
   /** 创建时间（ISO 字符串，「最新创建」排序用；seed 存量数据可能为空） */
   createdAt?: string
   /** 项目归档冻结：任务仅可查看，不可流转 */
@@ -149,6 +154,8 @@ export interface RemoteRepoInfo {
   description: string
   defaultBranch: string
   visibility: string
+  /** 已存在的项目绑定；用于避免在选择器中重复绑定。 */
+  bindings?: RepoBindingSummary[]
 }
 
 export interface RepoBindingSummary {
@@ -482,12 +489,28 @@ export interface ExpertRunBrief {
   startedAt: string
   /** 用户重新执行时补充的执行上下文（空串=按任务书原样生成） */
   context?: string
+  /** 后台 Worker 持久化的阶段事件；任务详情轮询时增量可见。 */
+  events?: Array<{
+    sequence: number
+    kind: string
+    status: string
+    title: string
+    summary?: string
+    durationMs?: number
+    createdAt: string
+  }>
   /** 解析快照：后端按节点 schema 预解析的 {values, warnings}，供字段预览渲染。
       normalized=true 表示采纳时做过 AI 格式修正（originalValues 为修正前值，供 diff 展示）；
       manualEdited=true 表示用户在抽屉中编辑后按编辑值采纳（editedKeys 为人工调整的字段） */
   parsed?: {
     values: Record<string, unknown>
     warnings: string[]
+    valid?: boolean
+    validationIssues?: string[]
+    /** valid=模型原始 JSON 合法；repaired=已自动修复一次；invalid=仅保留原文，不能采纳。 */
+    formatStatus?: 'valid' | 'repaired' | 'invalid' | 'manual'
+    formatRepair?: { attempted: boolean; error?: string }
+    codeAnalysis?: { mode?: 'fresh' | 'reused' | 'not_applicable'; fingerprint?: { repo: string; role: string; commit: string }[] }
     originalValues?: Record<string, unknown>
     normalized?: boolean
     formattedAt?: string

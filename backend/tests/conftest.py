@@ -15,6 +15,7 @@ os.environ.setdefault("FLOWHUB_SEED_DEMO", "1")
 os.environ.setdefault("SECRET_KEY", "test-secret-key-please-change")
 os.environ.setdefault("DEBUG", "false")
 os.environ.setdefault("APP_ENV", "test")
+os.environ.setdefault("PUBLIC_BASE_URL", "http://testserver")
 
 import psycopg  # noqa: E402
 import pytest  # noqa: E402

@@ -2,6 +2,7 @@
 
 所有测试使用函数级项目创建，避免 session 级状态冲突。
 """
+import asyncio
 import uuid
 
 import pytest
@@ -262,6 +263,53 @@ class TestNotificationGeneration:
         relevant = [n for n in ntf if title in n.get("body", "")]
         assert len(relevant) >= 1, "创建工作项应生成站内通知"
         assert all(n.get("wiId") == wi_id for n in relevant)
+
+
+class TestMultiAssigneeVisibility:
+    def test_all_users_bound_to_a_node_can_see_its_shared_task(self, client: TestClient, leader_token: str, org_admin_token: str, dev_token: str):
+        """同一节点绑定多人时，不能只让绑定列表第一个人看到待办。"""
+        project_id = _make_project(client, auth_headers(org_admin_token), "tpl-req", "v3", [
+            {"node_id": "n2", "node_label": "需求分析", "users": ["u2", "u3"], "roles": []},
+        ])
+        title = _uniq("多人节点待办")
+        _create_wi(client, auth_headers(leader_token), project_id, "tpl-req", title)
+
+        mine = client.get("/api/v1/tasks", headers=auth_headers(dev_token), params={"q": title}).json()["data"]["items"]
+        assert len(mine) == 1
+        assert mine[0]["node"] == "需求分析"
+
+    def test_mcp_summary_returns_all_node_assignees(self, client: TestClient, leader_token: str, org_admin_token: str):
+        """MCP 不能只回传 TaskItem.assignee 中的首位处理人。"""
+        project_id = _make_project(client, auth_headers(org_admin_token), "tpl-req", "v3", [
+            {"node_id": "n2", "node_label": "需求分析", "users": ["u2", "u3"], "roles": []},
+        ])
+        wi_id = _create_wi(client, auth_headers(leader_token), project_id, "tpl-req", _uniq("MCP多人处理人"))
+        task_id = _get_open_tasks(client, auth_headers(org_admin_token), wi_id)[0]["id"]
+
+        async def load_summary():
+            from flowhub_api.db.session import SessionFactory
+            from flowhub_api.models import TaskItem
+            from flowhub_api.services.mcp_server import _task_summary
+
+            async with SessionFactory() as session:
+                task = await session.get(TaskItem, task_id)
+                return await _task_summary(session, task)
+
+        summary = asyncio.run(load_summary())
+        assert {person["id"] for person in summary["assignees"]} == {"u2", "u3"}
+
+    def test_all_users_bound_to_a_node_get_notification(self, client: TestClient, leader_token: str, org_admin_token: str, dev_token: str):
+        """同一节点绑定多人时，每个绑定处理人都收到「新待办任务」通知（而非只通知 assignee）。"""
+        project_id = _make_project(client, auth_headers(org_admin_token), "tpl-req", "v3", [
+            {"node_id": "n2", "node_label": "需求分析", "users": ["u2", "u3"], "roles": []},
+        ])
+        title = _uniq("多人节点通知")
+        wi_id = _create_wi(client, auth_headers(leader_token), project_id, "tpl-req", title)
+
+        for token in (org_admin_token, dev_token):
+            items = client.get("/api/v1/notifications?page_size=100", headers=auth_headers(token)).json()["data"]["items"]
+            relevant = [n for n in items if n.get("title") == "新待办任务" and n.get("wiId") == wi_id]
+            assert len(relevant) >= 1, f"用户应收到新待办任务通知: {[n.get('body') for n in items]}"
 
 
 # ==================== 7. 问题流程（不同模板） ====================

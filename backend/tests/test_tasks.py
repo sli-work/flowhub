@@ -165,6 +165,7 @@ class TestTaskDetail:
         assert r.status_code == 200
         data = r.json()["data"]
         assert data["task"]["node"] == "测试"
+        assert isinstance(data["task"]["formValues"], dict)
         assert "expertRuns" in data
 
     def test_detail_not_found(self, client: TestClient, leader_headers: dict):

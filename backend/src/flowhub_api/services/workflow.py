@@ -137,22 +137,20 @@ class WorkflowService:
         self.session.add(creator_notification)
         created_notifications.append(creator_notification)
         if next_task is not None:
-            assignee = (await self.session.execute(
-                select(User).where(User.name == next_task.assignee)
-            )).scalar_one_or_none()
-            ch2 = await deliver_channels(
-                "新待办任务", f"节点「{next_task.node}」有你的新任务 {next_task.id}（SLA 48h）", assignee,
-            )
-            assignee_notification = NotificationItem(
-                id=gen_id("ntf"), title="新待办任务",
-                body=f"节点「{next_task.node}」有你的新任务 {next_task.id}（SLA 48h）",
-                time=now, channels=ch2, kind="arrive",
-                unread=True, failed=any(not c["ok"] for c in ch2),
-                target_user=assignee.account if assignee else next_task.assignee,
-                wi_id=wi.id, task_id=next_task.id,
-            )
-            self.session.add(assignee_notification)
-            created_notifications.append(assignee_notification)
+            recipients = await self.resolve_task_recipients(next_task)
+            for recipient in recipients:
+                ch2 = await deliver_channels(
+                    "新待办任务", f"节点「{next_task.node}」有你的新任务 {next_task.id}（SLA 48h）", recipient,
+                )
+                assignee_notification = NotificationItem(
+                    id=gen_id("ntf"), title="新待办任务",
+                    body=f"节点「{next_task.node}」有你的新任务 {next_task.id}（SLA 48h）",
+                    time=now, channels=ch2, kind="arrive",
+                    unread=True, failed=any(not c["ok"] for c in ch2),
+                    target_user=recipient.account, wi_id=wi.id, task_id=next_task.id,
+                )
+                self.session.add(assignee_notification)
+                created_notifications.append(assignee_notification)
         await self.session.flush()
         return {"item": wi, "instance": instance, "next_node": next_node, "start_task": start_task, "next_task": next_task, "closed": closed, "notifications": created_notifications}
 
@@ -178,6 +176,20 @@ class WorkflowService:
                 if u.status == "active" and (role in [r.id for r in u.roles] or role in u.skills):
                     candidates[u.id] = u
         return list(candidates.values())
+
+    async def resolve_task_recipients(self, task: TaskItem) -> list[User]:
+        """任务接收人全量：节点绑定处理人（多人节点全部成员）；无绑定时回退 assignee 单人。
+
+        TaskItem.assignee 是旧单字符串字段（创建任务只存绑定首位），通知/邮件必须按
+        节点绑定补齐全部共同处理人，保证多人节点每个绑定用户都收到。
+        """
+        project, tpl = await self.resolve_template_for_task(task)
+        if project and tpl:
+            users = await self.resolve_node_assignees(project.id, tpl.id, task.node_id or task.node)
+            if users:
+                return users
+        u = (await self.session.execute(select(User).where(User.name == task.assignee))).scalar_one_or_none()
+        return [u] if u is not None else []
 
     # ---------- 产出契约 ----------
     @staticmethod
@@ -434,12 +446,22 @@ class WorkflowService:
         快照缺失（存量 Run/无 schema 节点）时回退现场解析。
         同任务同字段的上一轮 AI 文档会被替换（覆盖式重跑后再采纳时，旧产出不入库堆积）。"""
         from flowhub_api.models import DocItem
-        from flowhub_api.services.expert_runtime import parse_schema_output
+        from flowhub_api.services.expert_runtime import parse_schema_output, schema_validation_issues
 
         schema = cfg.get("schema") or []
         snapshot = run.parsed if isinstance(run.parsed, dict) else None
         if snapshot is not None:
             values, warnings = dict(snapshot.get("values") or {}), list(snapshot.get("warnings") or [])
+            format_status = snapshot.get("formatStatus")
+            # Older Runs did not record formatStatus. Re-parse them strictly so a
+            # historic full-text fallback can never become a document/form value.
+            if format_status is None:
+                values, warnings = parse_schema_output(schema, getattr(run, "output", "") or "")
+                legacy_issues = schema_validation_issues(schema, values)
+                if any("不是 JSON" in warning or "无法解析" in warning for warning in warnings) or legacy_issues:
+                    return {}, warnings + legacy_issues + ["Expert 原始产出不是有效 JSON 或未通过字段校验，请重新生成或手工填写表单"]
+            elif format_status == "invalid":
+                return {}, warnings + ["Expert 原始产出未通过 JSON 格式修复，请重新生成或手工填写表单"]
             quality_status = snapshot.get("qualityStatus")
             if quality_status and quality_status != "passed":
                 return {}, warnings + list(snapshot.get("qualityIssues") or []) + ["Expert 事实质量校验未通过，请人工复核后重新生成"]

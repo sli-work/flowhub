@@ -11,7 +11,7 @@ from flowhub_api.authz.authorizer import build_authorizer, get_current_user
 from flowhub_api.core.response import BizError, BizCode, ok
 from flowhub_api.db.session import get_db
 from flowhub_api.models import NotificationItem, TaskItem, User, WorkItem
-from flowhub_api.schemas.api import CreateWorkItemReq
+from flowhub_api.schemas.api import CreateWorkItemReq, UpdateWorkItemPriorityReq
 from flowhub_api.seed.init import gen_id
 from flowhub_api.services.audit import AuditService
 from flowhub_api.services.work_item_creation import create_work_item as create_work_item_service
@@ -21,12 +21,31 @@ from flowhub_api.services.workflow import WorkflowService
 router = APIRouter(prefix="/api/v1/work-items", tags=["work-items"])
 
 
-def _brief(wi: WorkItem) -> dict:
+def _brief(wi: WorkItem, assignees: list[str] | None = None) -> dict:
+    # assignee 保留给旧客户端；assignees 是当前节点的全量共同处理人。
     return {
         "id": wi.id, "type": wi.type, "title": wi.title, "project": wi.project,
         "priority": wi.priority, "status": wi.status, "assignee": wi.assignee,
+        "assignees": assignees if assignees is not None else ([wi.assignee] if wi.assignee and wi.assignee != "待分配" else []),
         "creator": wi.creator, "due": wi.due, "labels": wi.labels, "progress": wi.progress,
     }
+
+
+async def _current_assignee_names(session: AsyncSession, wi: WorkItem, tasks: list[TaskItem]) -> list[str]:
+    """返回所有活跃节点的共同处理人；并行节点会合并为一个去重名单。"""
+    open_tasks = [task for task in tasks if task.status not in ("completed", "cancelled")]
+    if not open_tasks:
+        return [wi.assignee] if wi.assignee and wi.assignee != "待分配" else []
+    workflow = WorkflowService(session)
+    names: list[str] = []
+    for task in open_tasks:
+        recipients = await workflow.resolve_task_recipients(task)
+        for recipient in recipients:
+            if recipient.name not in names:
+                names.append(recipient.name)
+    if names:
+        return names
+    return [wi.assignee] if wi.assignee and wi.assignee != "待分配" else []
 
 
 @router.get("")
@@ -53,7 +72,17 @@ async def list_work_items(
         stmt = stmt.where(WorkItem.labels.cast(Text).contains(f'"{label}"'))
     total = len((await session.execute(stmt)).scalars().all())
     rows = (await session.execute(stmt.order_by(WorkItem.id.collate("C").desc()).offset((page - 1) * page_size).limit(page_size))).scalars().all()
-    return ok({"items": [_brief(w) for w in rows], "total": total, "page": page, "page_size": page_size})
+    task_rows = (await session.execute(
+        select(TaskItem).where(TaskItem.wi_id.in_([row.id for row in rows]))
+    )).scalars().all() if rows else []
+    tasks_by_wi: dict[str, list[TaskItem]] = {row.id: [] for row in rows}
+    for task in task_rows:
+        tasks_by_wi.setdefault(task.wi_id, []).append(task)
+    items = [
+        _brief(row, await _current_assignee_names(session, row, tasks_by_wi[row.id]))
+        for row in rows
+    ]
+    return ok({"items": items, "total": total, "page": page, "page_size": page_size})
 
 
 @router.get("/{wi_id}")
@@ -89,13 +118,13 @@ async def get_work_item(
                 display_current_node = child.node_id
                 break
     return ok({
-        "item": _brief(wi),
+        "item": _brief(wi, await _current_assignee_names(session, wi, tasks)),
         "startValues": wi.start_values or {},
         "instance": None if inst is None else {
             "id": inst.id, "templateId": inst.template_id, "version": inst.version,
             "currentNode": display_current_node, "state": inst.state,
         },
-        "tasks": [{"id": t.id, "node": t.node, "nodeId": t.node_id, "status": t.status, "assignee": t.assignee, "due": t.due, "expertPending": t.expert_pending, "title": t.title, "parentTaskId": parent_by_task.get(t.id), "lineageRootId": t.lineage_root_id} for t in tasks],
+        "tasks": [{"id": t.id, "node": t.node, "nodeId": t.node_id, "status": t.status, "assignee": t.assignee, "due": t.due, "expertPending": t.expert_pending, "priority": t.priority, "title": t.title, "parentTaskId": parent_by_task.get(t.id), "lineageRootId": t.lineage_root_id} for t in tasks],
     })
 
 
@@ -107,7 +136,7 @@ async def create_work_item(
 ):
     result = await create_work_item_service(
         session, user=user, project_id=body.project_id, template_id=body.template_id,
-        start_values=body.start_values, labels=body.labels,
+        start_values=body.start_values, priority=body.priority, labels=body.labels,
     )
     wi = result["item"]
     from flowhub_api.routes.notifications import publish_notification
@@ -117,6 +146,46 @@ async def create_work_item(
     return ok(
         {"item": _brief(wi), "instance": {"id": result["instance"].id, "current_node": result["next_node"]}},
         "工作项已创建，流程实例已发起",
+    )
+
+
+@router.patch("/{wi_id}/priority")
+async def update_work_item_priority(
+    wi_id: str,
+    body: UpdateWorkItemPriorityReq,
+    user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_db)],
+):
+    """修改历史或进行中工作项优先级，并同步所有未终结任务。"""
+    build_authorizer(user).require("workflow_instance:update")
+    wi = await session.get(WorkItem, wi_id)
+    if wi is None:
+        raise BizError(BizCode.NOT_FOUND, "工作项不存在")
+
+    previous_priority = wi.priority
+    open_tasks = (await session.execute(
+        select(TaskItem).where(
+            TaskItem.wi_id == wi_id,
+            TaskItem.status.not_in(["completed", "cancelled"]),
+        )
+    )).scalars().all()
+    wi.priority = body.priority
+    # 起始表单是工作项事实快照的一部分，优先级变更后应避免详情中仍展示旧值。
+    wi.start_values = {**(wi.start_values or {}), "priority": body.priority}
+    for task in open_tasks:
+        task.priority = body.priority
+    await AuditService(session).record(
+        actor=user.name,
+        action="workflow_instance:update_priority",
+        target=f"{wi.id} · {wi.title}",
+        result="success",
+        before={"priority": previous_priority},
+        after={"priority": body.priority, "updatedOpenTaskCount": len(open_tasks)},
+    )
+    await session.commit()
+    return ok(
+        {"item": _brief(wi), "updatedOpenTaskCount": len(open_tasks)},
+        "工作项优先级已更新",
     )
 
 

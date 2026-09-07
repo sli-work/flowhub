@@ -28,6 +28,7 @@ async def create_work_item(
     project_id: str,
     template_id: str,
     start_values: dict,
+    priority: str | None = None,
     labels: list[str] | None = None,
 ) -> dict:
     """Create and start a work item using the same policy for every entry point.
@@ -36,8 +37,12 @@ async def create_work_item(
     function commits, so transports do not need to depend on HTTP routes.
     """
     build_authorizer(user).require("workflow_instance:create")
+    # 独立参数仅在明确传入时覆盖旧版表单字段，避免破坏已有 HTTP/MCP 调用。
+    effective_start_values = dict(start_values or {})
+    if priority is not None:
+        effective_start_values["priority"] = priority
     result = await WorkflowService(session).create_instance(
-        project_id, template_id, start_values or {}, user,
+        project_id, template_id, effective_start_values, user,
     )
     wi = result["item"]
     requested_labels = labels or []

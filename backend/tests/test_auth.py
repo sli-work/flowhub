@@ -185,8 +185,45 @@ class TestApprovals:
         assert r.status_code == 404
         assert r.json()["code"] == 40401
 
+    def test_reject_registration_removes_pending_application_and_allows_resubmission(self, client: TestClient, org_headers: dict):
+        """拒绝必须记录原因、结束申请，并允许申请人用同一账号重新提交。"""
+        account = _uniq("reject")
+        payload = {
+            "account": account, "name": "被拒绝用户", "email": f"{account}@x.dev",
+            "dept": "测试部", "role_id": "developer", "password": "NewPass@123",
+        }
+        registered = client.post("/api/v1/auth/register", json=payload)
+        user_id = registered.json()["data"]["user"]["id"]
+
+        rejected = client.post(
+            f"/api/v1/auth/approvals/{user_id}/reject", headers=org_headers,
+            json={"reason": "请补充所属部门后重新提交"},
+        )
+        assert rejected.status_code == 200, rejected.text
+        pending = client.get("/api/v1/auth/approvals", headers=org_headers).json()["data"]["items"]
+        assert user_id not in [item["id"] for item in pending]
+        assert client.post("/api/v1/auth/login", json={"account": account, "password": payload["password"]}).status_code == 401
+
+        resubmitted = client.post("/api/v1/auth/register", json={**payload, "dept": "研发部"})
+        assert resubmitted.status_code == 200, resubmitted.text
+        assert resubmitted.json()["data"]["user"]["id"] == user_id
+
 
 class TestChangePassword:
+    def test_admin_reset_password_forces_target_to_change_it(self, client: TestClient, org_headers: dict):
+        """管理员可重置本地账号；目标用临时密码登录后必须自行改密。"""
+        temporary = "Reset@1234"
+        reset = client.post("/api/v1/org/users/u1/reset-password", headers=org_headers,
+                            json={"new_password": temporary})
+        assert reset.status_code == 200, reset.text
+        login_response = client.post("/api/v1/auth/login", json={"account": "zhang.wei", "password": temporary})
+        assert login_response.status_code == 200
+        assert login_response.json()["data"]["user"]["mustChangePassword"] is True
+        assert client.post("/api/v1/auth/login", json={"account": "zhang.wei", "password": "Demo@1234"}).status_code == 401
+        # 恢复固定演示密码，避免污染其他用例。
+        client.post("/api/v1/org/users/u1/reset-password", headers=org_headers,
+                    json={"new_password": "Demo@1234"})
+
     def test_change_password_flow(self, client: TestClient, org_admin_token: str):
         """org_admin 改密：旧密码校验 + 新密码生效。"""
         headers = auth_headers(org_admin_token)

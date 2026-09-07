@@ -108,7 +108,26 @@ async def complete_workflow(session, run: ExpertRun, completion: dict) -> None:
 
 
 async def execute_claim(claim: Claim) -> None:
-    from flowhub_api.services.expert_runtime import execute_run
+    from flowhub_api.services.expert_runtime import add_event, execute_run
+
+    async def publish_progress(event: str, payload: dict) -> None:
+        """Persist graph progress in a separate short transaction for task polling."""
+        if event == "token":
+            return
+        if event == "draft_start":
+            kind, status = "model", "running"
+            title = str(payload.get("summary") or "正在调用模型生成草稿")
+        else:
+            kind = str(payload.get("kind") or "runtime")
+            status = str(payload.get("status") or "running")
+            title = str(payload.get("tool") or payload.get("summary") or "Expert 正在执行")
+        details = {key: value for key, value in payload.items() if key not in {"kind", "status", "tool", "durationMs"}}
+        async with SessionFactory.begin() as event_session:
+            current = await event_session.get(ExpertRun, claim.run_id)
+            if current is None or current.execution_generation != claim.generation:
+                return
+            await add_event(event_session, claim.run_id, 1, kind, status, title, details,
+                            duration_ms=int(payload.get("durationMs") or 0))
     async with SessionFactory() as session:
         run = await session.get(ExpertRun, claim.run_id)
         if run is None or run.execution_generation != claim.generation:
@@ -121,8 +140,9 @@ async def execute_claim(claim: Claim) -> None:
             run.status, run.error = "failed", "历史运行缺少可靠配置快照，请人工重新生成"
         elif run.status not in {"succeeded", "failed", "interrupted"}:
             run.status = "running"
+            await publish_progress("trace", {"kind": "queue", "tool": "Worker 已领取任务", "status": "running", "summary": "正在准备运行环境"})
             await execute_run(session, run, version, actor,
-                              lease_guard=lambda: check_lease(claim), resume_checkpoint=claim.attempts > 1)
+                              emitter=publish_progress, lease_guard=lambda: check_lease(claim), resume_checkpoint=claim.attempts > 1)
         # Lock only during final database writes. A stale worker cannot commit.
         with session.no_autoflush:
             job = (await session.execute(select(ExpertJob).where(owned(claim)).with_for_update())).scalar_one_or_none()

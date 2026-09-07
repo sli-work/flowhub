@@ -1,4 +1,5 @@
 """组织路由（docs/02 §二）：用户 CRUD / 角色技能分配 / 组织同步 / 注册审批。"""
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
@@ -8,8 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from flowhub_api.authz.authorizer import build_authorizer, get_current_user
 from flowhub_api.core.response import BizError, BizCode, ok
 from flowhub_api.db.session import get_db
-from flowhub_api.models import Role, User, UserRole
-from flowhub_api.schemas.api import CreateUserReq, UserUpdateReq
+from flowhub_api.models import NotificationItem, Role, User, UserRole
+from flowhub_api.schemas.api import AdminResetPwdReq, CreateUserReq, UserUpdateReq
 from flowhub_api.seed.init import gen_id
 from flowhub_api.services.audit import AuditService
 from flowhub_api.services.auth import AuthService
@@ -186,6 +187,37 @@ async def unlock_user(
     )
     await session.commit()
     return ok(message=f"已解锁 {target.name}：解锁人 {user.name} 已记录审计")
+
+
+@router.post("/users/{user_id}/reset-password")
+async def reset_user_password(
+    user_id: str,
+    body: AdminResetPwdReq,
+    user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_db)],
+):
+    """管理员设置临时密码；不返回或记录明文，目标用户下次登录必须自行改密。"""
+    build_authorizer(user).require("organization:user_manage")
+    target = await session.get(User, user_id)
+    if target is None or target.deleted:
+        raise BizError(BizCode.NOT_FOUND, "用户不存在")
+    if any(role.id == "system_admin" for role in target.roles) and not any(role.id == "system_admin" for role in user.roles):
+        raise BizError(BizCode.PERM_DENIED, "仅系统管理员可重置系统管理员密码", http_status=403)
+    target.password_hash = AuthService.hash_password(body.new_password)
+    target.must_change_password = True
+    await AuditService(session).record(
+        actor=user.name, action="organization:user_reset_password",
+        target=f"{target.name}（{target.account}）", result="success",
+        after={"mustChangePassword": True},
+    )
+    session.add(NotificationItem(
+        id=gen_id("n"), title="密码已被管理员重置",
+        body=f"管理员 {user.name} 已重置你的本地账号密码。请使用收到的临时密码登录，并立即修改密码。",
+        time=datetime.now(UTC).strftime("%m-%d %H:%M"), channels=[{"name": "站内", "ok": True}],
+        unread=True, kind="info", target_user=target.account,
+    ))
+    await session.commit()
+    return ok({"user": _brief(target)}, f"已重置 {target.name} 的密码；其下次登录必须修改密码")
 
 
 @router.get("/users/by-role")

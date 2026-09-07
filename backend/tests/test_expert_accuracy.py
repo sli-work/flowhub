@@ -175,7 +175,7 @@ async def test_quality_failure_blocks_the_shared_auto_fill_path():
     """ai_autosubmit and manual adoption share this gate; normalize must not erase it."""
     from flowhub_api.services.workflow import WorkflowService
 
-    run = SimpleNamespace(parsed={
+    run = SimpleNamespace(output='{"conclusion":"字段格式正确"}', parsed={
         "values": {"conclusion": "字段格式正确"},
         "warnings": [],
         "valid": True,
@@ -191,6 +191,25 @@ async def test_quality_failure_blocks_the_shared_auto_fill_path():
 
     assert values == {}
     assert "无证据支撑结论" in warnings
+
+
+@pytest.mark.asyncio
+async def test_legacy_full_text_snapshot_is_revalidated_before_adoption():
+    """Old parsed snapshots may contain the removed full-text fallback and must be rejected."""
+    from flowhub_api.services.workflow import WorkflowService
+
+    run = SimpleNamespace(
+        output="## 原始 Markdown\n不是 JSON",
+        parsed={"values": {"conclusion": "## 原始 Markdown\n不是 JSON"}, "warnings": [], "valid": True},
+    )
+    values, warnings = await WorkflowService(None).fill_task_from_run(
+        SimpleNamespace(), run,
+        {"schema": [{"key": "conclusion", "label": "结论", "type": "textarea", "required": True}]},
+        SimpleNamespace(),
+    )
+
+    assert values == {}
+    assert any("不是有效 JSON" in warning for warning in warnings)
 
 
 def test_schema_validation_rejects_missing_required_values_and_invalid_date():

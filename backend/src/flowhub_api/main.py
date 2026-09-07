@@ -50,7 +50,11 @@ async def lifespan(_: FastAPI):
             "数据库连接失败（%s）——请将 PostgreSQL 连接信息填入 backend/.env 后重启。"
             "Redis / MinIO 为惰性连接，不影响启动。", exc,
         )
-    yield
+    # Starlette 不会自动运行 mounted 子应用的 lifespan。Streamable HTTP 的会话
+    # 管理器必须在这里启动，否则 Zed 的 initialize POST 会一直失败。
+    from flowhub_api.services.mcp_server import mcp_streamable_http_lifespan
+    async with mcp_streamable_http_lifespan():
+        yield
     if worker_state is not None:
         from flowhub_api.services.expert_scheduler import stop_workers
         await stop_workers(worker_state)
@@ -108,6 +112,8 @@ app.include_router(repos.router)
 app.include_router(repos.repos_router)
 app.include_router(repos.project_router)
 
-# 外部 Agent 接入：MCP SSE server（/api/v1/mcp/sse，access key 认证）
-from flowhub_api.services.mcp_server import mcp_starlette_app
+# 外部 Agent 接入：兼容 SSE 与 Streamable HTTP，均使用 access key 认证。
+from flowhub_api.services.mcp_server import mcp_starlette_app, mcp_streamable_http_app
+# Starlette 按注册顺序匹配 Mount；更具体的 HTTP 路径必须先于 SSE 根路径注册。
+app.mount("/api/v1/mcp/http", mcp_streamable_http_app())
 app.mount("/api/v1/mcp", mcp_starlette_app())

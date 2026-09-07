@@ -51,6 +51,7 @@ curl -X POST http://localhost:8001/api/v1/auth/login \
 | `SECRET_KEY` | JWT 签名密钥 | change-me（生产必改） |
 | `AGENT_KEY_ENCRYPT_SECRET` | Agent API Key 加密密钥（Fernet 派生）；**变更后旧 Key 无法解密** | 空（回退 SECRET_KEY） |
 | `CORS_ORIGINS` | 允许的前端来源 | http://localhost:5273,http://localhost:5173 |
+| `PUBLIC_BASE_URL` | 用户及 MCP 客户端可访问的 FlowHub 根地址；用于 MCP JSON / Skill 下载，生产环境必须显式配置 | https://flowhub.example.com |
 | `POSTGRES_*` | PostgreSQL 连接（compose 内指向服务名 postgres） | flowhub/flowhub@postgres:5432/flowhub |
 | `REDIS_*` | Redis 连接 | redis:6379 |
 | `MINIO_*` | MinIO 连接 | minio:9000 / flowhub / flowhub-minio |

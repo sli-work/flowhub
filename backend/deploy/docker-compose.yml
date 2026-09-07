@@ -45,6 +45,9 @@ services:
       APP_ENV: prod
       DEBUG: "false"
       SECRET_KEY: ${SECRET_KEY:-change-me}
+      # MCP JSON / Skill 下载中使用的浏览器可访问地址。生产环境请在
+      # deploy/.env 中显式覆盖为正式域名或网关地址。
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
       # Agent API Key 加密密钥（建议设置固定值；变更会导致已存 Key 无法解密）
       AGENT_KEY_ENCRYPT_SECRET: ${AGENT_KEY_ENCRYPT_SECRET:-}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5273,http://localhost:5173}

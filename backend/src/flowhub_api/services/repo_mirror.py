@@ -399,7 +399,27 @@ async def can_user_read_project(session: AsyncSession, user: User, project_name:
     return bool(assigned_task or visible_work_item)
 
 
-async def create_repo_tool_bundle(session: AsyncSession, project_name: str, *, user: User, query: str = "", allow_clone: bool = False) -> RepoToolBundle:
+async def project_repo_fingerprint(session: AsyncSession, project_name: str, *, user: User) -> list[dict]:
+    """Return the current, readable repository revision vector for cache validity."""
+    if not await can_user_read_project(session, user, project_name):
+        return []
+    rows = (await session.execute(
+        select(ProjectRepoBinding, Repo)
+        .join(Project, ProjectRepoBinding.project_id == Project.id)
+        .join(Repo, ProjectRepoBinding.repo_id == Repo.id)
+        .where(Project.name == project_name).order_by(ProjectRepoBinding.id)
+    )).all()
+    result: list[dict] = []
+    for binding, repo in rows:
+        mirror = mirror_dir(repo.id)
+        commit = await asyncio.to_thread(_mirror_commit, mirror) if mirror.is_dir() else ""
+        if commit:
+            result.append({"repo": repo.full_name, "role": binding.role, "commit": commit})
+    return result
+
+
+async def create_repo_tool_bundle(session: AsyncSession, project_name: str, *, user: User, query: str = "", allow_clone: bool = False,
+                                  include_preflight: bool = True) -> RepoToolBundle:
     """Build Pi-style, project-scoped read-only tools for one LangGraph turn.
 
     The repository selection is closed over by this function.  The model can
@@ -440,7 +460,7 @@ async def create_repo_tool_bundle(session: AsyncSession, project_name: str, *, u
     # Graphify is a deterministic preflight, not a tool the model may forget
     # to choose.  Its evidence is immediately available to the first model
     # invocation and does not consume the interactive tool-call budget.
-    if query.strip():
+    if include_preflight and query.strip():
         remaining_graph_chars = GRAPHIFY_PREFLIGHT_MAX_CHARS
         for repo, binding, mirror, _, _ in available.values():
             graph_dir = await ready_graphify_map(repo, mirror)

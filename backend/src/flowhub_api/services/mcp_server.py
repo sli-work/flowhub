@@ -1,6 +1,7 @@
 """FlowHub MCP Server（外部客户端接入）。
 
-- FastMCP（SSE 传输），挂载到 FastAPI：`app.mount("/api/v1/mcp", mcp_starlette_app())`
+- FastMCP 同时提供旧 SSE 和 Streamable HTTP：前者保持既有客户端兼容，后者供
+  Zed 等远程 MCP 客户端使用。
 - 认证：纯 ASGI 中间件解析 `Authorization: Bearer <access_key>` → get_current_user_by_key
   → ContextVar 注入 User（FastAPI `Depends` 在 mounted app 内不可达；不用 BaseHTTPMiddleware
   避免缓冲破坏 SSE 长连接）。
@@ -9,16 +10,20 @@
 """
 import contextvars
 import json
+from contextlib import asynccontextmanager
+from typing import Literal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 from flowhub_api.db.session import SessionFactory
 from flowhub_api.models import DocItem, TaskItem, User, WorkItem
 from flowhub_api.services.time import now_iso
 
 _current_user: contextvars.ContextVar[User] = contextvars.ContextVar("flowhub_mcp_user")
+_streamable_http_asgi_app: "_AuthASGI | None" = None
 
 _ADMIN_ROLES = ("system_admin", "organization_admin")
 
@@ -38,7 +43,18 @@ _INSTRUCTIONS = """FlowHub 流程协同平台外部接入服务。
 6. create_work_item —— 在有创建权限的项目中启动一个新的工作项流程。
 """
 
-mcp = FastMCP("FlowHub", instructions=_INSTRUCTIONS)
+mcp = FastMCP(
+    "FlowHub",
+    instructions=_INSTRUCTIONS,
+    # FastMCP 默认 host=127.0.0.1 会自动启用 DNS rebinding 保护，allowed_hosts 仅放行
+    # 127.0.0.1/localhost；部署经 nginx 反向代理时 Host 为实际访问地址（如
+    # 192.168.21.195:8088），会被中间件以 421 "Invalid Host header" 拒绝。
+    # FlowHub 已有 nginx 层 + access key Bearer 认证，显式关闭该额外防护。
+    transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+    # 挂载到 /api/v1/mcp/http 后以根路径提供 Streamable HTTP，最终地址为
+    # /api/v1/mcp/http/；避免与兼容保留的 /api/v1/mcp/sse 发生路由冲突。
+    streamable_http_path="/",
+)
 
 
 # ---------- 工具（全部以 access key → User 认证，权限复用 can_read_task） ----------
@@ -47,31 +63,35 @@ def _is_admin(user: User) -> bool:
     return any(r.id in _ADMIN_ROLES for r in user.roles)
 
 
-def _task_summary(t: TaskItem) -> dict:
+async def _task_summary(session: AsyncSession, t: TaskItem) -> dict:
+    """任务摘要同时输出旧主处理人与节点完整处理人，避免多人绑定被单值字段遮蔽。"""
+    from flowhub_api.services.workflow import WorkflowService
+
+    recipients = await WorkflowService(session).resolve_task_recipients(t)
     return {
         "id": t.id, "title": t.title, "project": t.project, "node": t.node,
         "node_id": t.node_id, "status": t.status, "assignee": t.assignee,
+        "assignees": [{"id": user.id, "name": user.name, "account": user.account, "dept": user.dept} for user in recipients],
         "due": t.due, "priority": t.priority, "expertPending": t.expert_pending,
     }
 
 
 async def _can_read_task(session: AsyncSession, user: User, task: TaskItem) -> bool:
     from flowhub_api.services.agent_context import can_read_task
-    return can_read_task(user, task)
+    return await can_read_task(session, user, task)
 
 
 @mcp.tool()
 async def list_my_tasks(status: str = "") -> list[dict]:
-    """列出当前用户可见的任务（管理员全量；普通用户仅自己负责的）。status 可选：assigned/accepted/in_progress/pending_confirmation/submitted/completed 等。"""
+    """列出当前用户可见的任务（含所在多人节点的共同待办）。assignees 返回节点完整处理人；assignee 是兼容旧客户端的主处理人。"""
     user = _current_user.get()
     async with SessionFactory() as session:
         stmt = select(TaskItem)
-        if not _is_admin(user):
-            stmt = stmt.where(TaskItem.assignee == user.name)
         if status:
             stmt = stmt.where(TaskItem.status == status)
         rows = (await session.execute(stmt.order_by(TaskItem.id.desc()).limit(100))).scalars().all()
-        return [_task_summary(t) for t in rows]
+        visible = rows if _is_admin(user) else [task for task in rows if await _can_read_task(session, user, task)]
+        return [await _task_summary(session, task) for task in visible]
 
 
 @mcp.tool()
@@ -93,7 +113,7 @@ async def get_task(task_id: str) -> dict:
         if project is not None and tpl is not None:
             cfg = await svc._node_cfg_of(tpl, task.node_id) or {}
         return {
-            **_task_summary(task),
+            **await _task_summary(session, task),
             "formValues": task.form_values or {},
             "formSchema": cfg.get("schema") or [],
             "acceptance": (cfg.get("deliverable") or {}).get("acceptance") or [],
@@ -126,13 +146,15 @@ async def create_work_item(
     project_id: str,
     template_id: str,
     start_values: dict,
+    priority: Literal["P0", "P1", "P2", "P3"] | None = None,
     labels: list[str] | None = None,
 ) -> dict:
     """创建并启动工作项流程（会产生真实写入）。
 
     调用者必须具有 workflow_instance:create 权限，并且是起始节点处理人或管理员。
     project_id 和 template_id 必须是已启用项目中的有效模板绑定；start_values 必须至少含
-    title，且应按起始节点的表单 schema 填写。失败时不会创建任何工作项。
+    title，且应按起始节点的表单 schema 填写。priority 可选为 P0、P1、P2、P3；
+    未传入时兼容从 start_values.priority 读取。失败时不会创建任何工作项。
     """
     user = _current_user.get()
     from flowhub_api.routes.notifications import publish_notification
@@ -142,7 +164,7 @@ async def create_work_item(
         try:
             result = await create_work_item_service(
                 session, user=user, project_id=project_id, template_id=template_id,
-                start_values=start_values or {}, labels=labels or [],
+                start_values=start_values or {}, priority=priority, labels=labels or [],
             )
         except Exception as exc:  # noqa: BLE001
             detail = getattr(exc, "detail", None) or str(exc)
@@ -160,8 +182,8 @@ async def create_work_item(
                 "status": wi.status, "priority": wi.priority, "labels": wi.labels,
             },
             "instance": {"id": result["instance"].id, "currentNode": next_node},
-            "startTask": _task_summary(result["start_task"]),
-            "nextTasks": [_task_summary(task) for task in next_tasks],
+            "startTask": await _task_summary(session, result["start_task"]),
+            "nextTasks": [await _task_summary(session, task) for task in next_tasks],
             "closed": bool(result.get("closed")),
         }
 
@@ -174,7 +196,7 @@ async def claim_task(task_id: str) -> dict:
         task = await session.get(TaskItem, task_id)
         if task is None:
             return {"error": f"任务 {task_id} 不存在"}
-        if not (_is_admin(user) or task.assignee == user.name):
+        if not await _can_read_task(session, user, task):
             return {"error": "无权限认领该任务（仅任务处理人或系统/组织管理员）"}
         if task.status not in ("assigned", "transferred"):
             return {"error": f"任务状态为 {task.status}，无需认领"}
@@ -184,7 +206,7 @@ async def claim_task(task_id: str) -> dict:
 
         await AuditService(session).record(actor=user.name, action="task:claim", target=f"{task.id} · {task.node}", result="success")
         await session.commit()
-        return {"claimed": True, "task": _task_summary(task)}
+        return {"claimed": True, "task": await _task_summary(session, task)}
 
 
 @mcp.tool()
@@ -199,7 +221,7 @@ async def submit_task(task_id: str, form_values: dict, acceptance_checks: dict |
         task = await session.get(TaskItem, task_id)
         if task is None:
             return {"error": f"任务 {task_id} 不存在"}
-        if not (_is_admin(user) or task.assignee == user.name):
+        if not await _can_read_task(session, user, task):
             return {"error": "无权限提交该任务（仅任务处理人或系统/组织管理员）"}
         if task.status in ("completed", "cancelled"):
             return {"error": "任务已处理，不可重复提交（幂等保护）"}
@@ -215,10 +237,10 @@ async def submit_task(task_id: str, form_values: dict, acceptance_checks: dict |
             return {"error": f"提交失败：{detail}", "code": getattr(exc, "biz_code", 0)}
         return {
             "submitted": True,
-            "task": _task_summary(task),
+            "task": await _task_summary(session, task),
             "nextNode": result.get("next_node"),
             "nextAssignees": result.get("next_assignees") or [],
-            "nextTasks": [_task_summary(x) for x in (result.get("tasks") or [])],
+            "nextTasks": [await _task_summary(session, task) for task in (result.get("tasks") or [])],
             "waitingJoin": bool(result.get("waiting_join")),
             "closed": bool(result.get("closed")),
         }
@@ -250,14 +272,14 @@ async def get_work_item(wi_id: str) -> dict:
         tasks = (await session.execute(
             select(TaskItem).where(TaskItem.wi_id == wi_id).order_by(TaskItem.id.asc())
         )).scalars().all()
-        if not _is_admin(user) and not any(t.assignee == user.name for t in tasks):
+        if not _is_admin(user) and not any([await _can_read_task(session, user, task) for task in tasks]):
             return {"error": "无权限读取该工作项（仅涉及的任务处理人或系统/组织管理员可读）"}
         return {
             "id": wi.id, "title": wi.title, "type": wi.type, "project": wi.project,
             "status": wi.status, "priority": wi.priority, "assignee": wi.assignee,
             "creator": wi.creator, "due": wi.due, "labels": wi.labels,
             "startValues": wi.start_values or {},
-            "tasks": [_task_summary(t) for t in tasks],
+            "tasks": [await _task_summary(session, task) for task in tasks],
         }
 
 
@@ -270,9 +292,9 @@ async def list_documents(wi_id: str) -> list[dict]:
         if wi is None:
             return [{"error": f"工作项 {wi_id} 不存在"}]
         tasks = (await session.execute(
-            select(TaskItem).where(TaskItem.wi_id == wi_id).limit(1)
+            select(TaskItem).where(TaskItem.wi_id == wi_id)
         )).scalars().all()
-        if not _is_admin(user) and not any(t.assignee == user.name for t in tasks):
+        if not _is_admin(user) and not any([await _can_read_task(session, user, task) for task in tasks]):
             return [{"error": "无权限读取该工作项文档"}]
         docs = (await session.execute(
             select(DocItem).where(DocItem.wi == wi_id, DocItem.deleted == False)  # noqa: E712
@@ -298,7 +320,7 @@ async def get_downstream_summary(task_id: str) -> list[dict]:
                 TaskItem.wi_id == task.wi_id, TaskItem.id > task.id,
             ).order_by(TaskItem.id.asc())
         )).scalars().all()
-        return [_task_summary(t) for t in rows]
+        return [await _task_summary(session, task) for task in rows]
 
 
 # ---------- ASGI 认证中间件 + Starlette app ----------
@@ -336,3 +358,19 @@ class _AuthASGI:
 def mcp_starlette_app():
     """返回带认证中间件的 Starlette app（SSE 端点：{origin}/api/v1/mcp/sse）。"""
     return _AuthASGI(mcp.sse_app())
+
+
+def mcp_streamable_http_app():
+    """返回带认证的 Streamable HTTP app（供 Zed：{origin}/api/v1/mcp/http/）。"""
+    global _streamable_http_asgi_app
+    if _streamable_http_asgi_app is None:
+        _streamable_http_asgi_app = _AuthASGI(mcp.streamable_http_app())
+    return _streamable_http_asgi_app
+
+
+@asynccontextmanager
+async def mcp_streamable_http_lifespan():
+    """把 mounted Streamable HTTP 子应用的生命周期纳入主 FastAPI 应用。"""
+    app = mcp_streamable_http_app().app
+    async with app.router.lifespan_context(app):
+        yield

@@ -68,14 +68,30 @@ class AuthService:
         cond = User.account == account
         if email.strip():
             cond = or_(cond, User.email == email.strip())
+        role = await self.session.get(Role, role_id)
+        if role is None:
+            raise BizError(BizCode.VALIDATION, "角色不存在")
         exists = (await self.session.execute(
             select(User).where(cond, User.deleted == False)  # noqa: E712
         )).scalar_one_or_none()
         if exists:
             raise BizError(BizCode.DUPLICATE_OPERATION, "账号或邮箱已存在")
-        role = await self.session.get(Role, role_id)
-        if role is None:
-            raise BizError(BizCode.VALIDATION, "角色不存在")
+        rejected = (await self.session.execute(
+            select(User).where(User.account == account, User.deleted == True)  # noqa: E712
+        )).scalar_one_or_none()
+        if rejected:
+            # 被拒绝的申请采用软删保留审计；重新申请时复用原账号，避免唯一索引阻止修正后提交。
+            rejected.name = name
+            rejected.email = email
+            rejected.dept = dept
+            rejected.password_hash = self.hash_password(password)
+            rejected.roles = [role]
+            rejected.skills = []
+            rejected.status = "invited"
+            rejected.deleted = False
+            rejected.must_change_password = True
+            await self.session.flush()
+            return rejected
         user = User(
             id=gen_id("u"), name=name, account=account, email=email,
             password_hash=self.hash_password(password), dept=dept,

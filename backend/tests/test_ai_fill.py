@@ -44,17 +44,14 @@ def test_parse_schema_output_rejects_invalid_option():
     assert values["report"] == "x"
 
 
-def test_parse_schema_output_plain_text_fallback():
-    """非 JSON 产出（纯 Markdown 评审报告）→ 全文回填必填 textarea + upload 字段，可采纳由人审核。"""
+def test_parse_schema_output_rejects_plain_text_without_field_fallback():
+    """非 JSON 产出必须保留原文供查看，但不能猜测并回填任何字段。"""
     from flowhub_api.services.expert_runtime import parse_schema_output
 
     raw = "### 一、需求合理性结论\n**结论：有条件可行。**\n\n### 二、影响范围分析\n| 后端模块 | drcc-backend |\n"
     values, warnings = parse_schema_output(SCHEMA, raw)
-    assert values["conclusion"] == raw.strip(), "全文应回填到首个必填 textarea（conclusion）"
-    assert values["report"] == raw.strip(), "upload 字段应回填全文并转文档"
-    assert warnings and "不是 JSON" in warnings[0]
-    # select/number/multiselect 不做猜测，保持为空
-    assert "verdict" not in values and "score" not in values and "tags" not in values
+    assert values == {}
+    assert warnings == ["模型输出不是 JSON，无法自动回填字段"]
 
 
 def test_parse_schema_output_unwraps_markdown_fences_for_textarea():
@@ -214,6 +211,26 @@ def _wait_run_succeeded(client, headers, task_id, timeout=8.0):
     return runs
 
 
+def test_task_expert_run_exposes_observable_stage_events(client, org_headers, fake_model):
+    """任务页应能看到 Run 从排队到生成、校验和完成的阶段，定位慢点无需查日志。"""
+    headers = org_headers
+    _model_id, dep_id = _publish_expert_with_deployment(client, headers, "fill-dep-observability")
+    tpl_id = _publish_flow_template(client, headers, dep_id)
+    pid = _make_project(client, headers, tpl_id, "v1", [])
+    FakeChatOpenAI.payload = json.dumps({"conclusion": "可观测", "verdict": "通过", "report": "# 报告"})
+    wi_id = _create_wi(client, headers, pid, tpl_id, "Expert 可观测性")
+    task_id = _get_open_tasks(client, headers, wi_id)[0]["id"]
+
+    runs = _wait_run_succeeded(client, headers, task_id)
+    events = runs[0]["events"]
+
+    assert [event["sequence"] for event in events] == sorted(event["sequence"] for event in events)
+    assert any(event["kind"] == "queue" and event["status"] == "queued" for event in events)
+    assert any(event["kind"] == "model" and event["status"] == "running" for event in events)
+    assert any(event["kind"] == "quality" for event in events)
+    assert all("createdAt" in event and "title" in event for event in events)
+
+
 def test_ai_fill_generates_values_and_document(client, org_headers, fake_model):
     headers = org_headers
     model_id, dep_id = _publish_expert_with_deployment(client, headers, "fill-dep-1")
@@ -255,6 +272,31 @@ def test_ai_fill_generates_values_and_document(client, org_headers, fake_model):
     detail = client.get(f"/api/v1/work-items/{wi_id}", headers=headers).json()["data"]
     docs = client.get(f"/api/v1/documents?wi={wi_id}", headers=headers).json()["data"]["items"]
     assert any(d["id"] == ref["id"] for d in docs), "生成的文档应出现在工作项文档列表"
+
+
+def test_non_json_run_is_retained_but_cannot_be_adopted(client, org_headers, fake_model):
+    """格式修复一次后仍非 JSON：保留原文供复核，但不得回填、生成文档或采纳。"""
+    headers = org_headers
+    _model_id, dep_id = _publish_expert_with_deployment(client, headers, "fill-dep-invalid-json")
+    tpl_id = _publish_flow_template(client, headers, dep_id)
+    pid = _make_project(client, headers, tpl_id, "v1", [])
+    FakeChatOpenAI.payload = "### 分析结论\n原始 Markdown 正文，不是 JSON"
+    wi_id = _create_wi(client, headers, pid, tpl_id, "AI非JSON-E2E")
+    task_id = _get_open_tasks(client, headers, wi_id)[0]["id"]
+
+    runs = _wait_run_succeeded(client, headers, task_id)
+    assert runs and runs[0]["status"] == "succeeded"
+    run = runs[0]
+    assert run["output"] == FakeChatOpenAI.payload
+    assert run["parsed"]["formatStatus"] == "invalid"
+    assert run["parsed"]["values"] == {}
+    assert run["parsed"]["formatRepair"]["attempted"] is True
+
+    adopted = client.post(f"/api/v1/tasks/{task_id}/adopt-run", headers=headers, json={"run_id": run["id"]})
+    assert adopted.status_code == 422
+    assert "JSON" in adopted.json()["message"]
+    docs = client.get(f"/api/v1/documents?wi={wi_id}", headers=headers).json()["data"]["items"]
+    assert docs == []
 
 
 def test_ai_fill_rerun_with_context(client, org_headers, fake_model):

@@ -62,7 +62,7 @@ function PageRouter() {
 export default function App() {
   const { authed } = useApp()
 
-  if (!authed) return <LoginPage />
+  if (!authed) return <><LoginPage /><DialogHost /></>
 
   return (
     <div className="flex h-screen overflow-hidden">
