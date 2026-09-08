@@ -80,3 +80,41 @@ async def test_attachment_tool_bundle_permission_denied_403(seeded):
     with pytest.raises(Exception) as exc:
         await attachment_tools.create_attachment_tool_bundle(session, task, outsider)
     assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_mcp_retrieve_attachment_evidence(seeded, monkeypatch):
+    from io import BytesIO
+
+    from openpyxl import Workbook
+
+    from flowhub_api.services import mcp_server
+    from flowhub_api.services import attachment_evidence as svc
+
+    session, task, admin, docs = seeded
+
+    # 备件清单.xlsx 是 query="备件" 唯一命中的文档，须给真实 xlsx 字节才能 index 进缓存
+    def xlsx_bytes() -> bytes:
+        wb = Workbook()
+        ws = wb.active
+        ws.append(["备件缺货 120 单"])
+        buf = BytesIO()
+        wb.save(buf)
+        return buf.getvalue()
+
+    monkeypatch.setattr(svc, "_load_bytes", lambda doc: xlsx_bytes())
+
+    # 先构建一次，填充缓存
+    await svc.build_attachment_evidence(session, task, admin, "备件")
+
+    async def call(query, depth=1):
+        token = mcp_server._current_user.set(admin)
+        try:
+            return await mcp_server.retrieve_attachment_evidence(task.id, query, "", depth)
+        finally:
+            mcp_server._current_user.reset(token)
+
+    out = await call("备件")
+    assert "[附件@" in out
+    out_deep = await call("备件", depth=99)
+    assert "深度超限" in out_deep

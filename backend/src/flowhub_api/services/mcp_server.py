@@ -347,6 +347,29 @@ async def get_task_context(task_id: str) -> str:
 
 
 @mcp.tool()
+async def retrieve_attachment_evidence(task_id: str, query: str, exclude_chunk_seq: str = "", depth: int = 1) -> str:
+    """按需检索任务附件证据片段（只读二次检索）。task_id: 任务 ID；query: 检索问题；exclude_chunk_seq: 已引用片段序号，逗号分隔；depth: 递归深度 1-3。返回带 [附件@文档:位置:片段号] 标注的证据片段。"""
+    user = _current_user.get()
+    from flowhub_api.services.attachment_evidence import retrieve_more_evidence
+
+    async with SessionFactory() as session:
+        task = await session.get(TaskItem, task_id)
+        if task is None:
+            return "任务不存在"
+        try:
+            exclude = {int(part) for part in exclude_chunk_seq.split(",") if part.strip().isdigit()}
+            result = await retrieve_more_evidence(session, task, user, query, exclude, depth)
+        except Exception as exc:  # noqa: BLE001
+            return f"检索失败：{exc}"
+        if not result.injected:
+            return "未检索到更多附件证据片段。"
+        return "\n".join(
+            f"[{c.seq}] [附件@{c.doc_name}:{c.location}:{c.seq}] {c.text[:300]}"
+            for c in result.injected
+        )
+
+
+@mcp.tool()
 async def get_work_item(wi_id: str) -> dict:
     """获取工作项信息与全部任务概览（不含表单明细）。"""
     user = _current_user.get()
