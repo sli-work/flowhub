@@ -11,6 +11,7 @@ import { SchemaForm, validateSchema, type SchemaValues } from '../components/sch
 import { MarkdownView } from '../components/markdown'
 import { api, ApiError } from '../lib/api'
 import { DocumentViewerDrawer, type ViewerDoc } from '../components/document-viewer-drawer'
+import { AttachmentEvidencePanel } from '../components/attachment-evidence-panel'
 import { cn } from '../lib/utils'
 import type { AcceptanceChecks, ExpertRunBrief, FormField, IssueSummary, NodeDeliverable, TaskItem, WorkItem, WorkflowIssue } from '../types'
 
@@ -1079,6 +1080,9 @@ export function NodeProcessPage() {
                     <div className="mt-1.5 space-y-0.5">
                       {latestRun.parsed.warnings.map((w, i) => <p key={i} className="text-[11.5px] text-amber-600 dark:text-amber-300">⚠ {w}</p>)}
                     </div>
+                  )}
+                  {latestRun.parsed?.attachmentEvidence && (
+                    <AttachmentEvidencePanel taskId={activeTaskId ?? ''} evidence={latestRun.parsed.attachmentEvidence} />
                   )}
                   <div className="mt-1.5 text-[11px] text-slate-400">
                     {latestRun.startedAt}

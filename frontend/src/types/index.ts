@@ -498,6 +498,15 @@ export interface TimelineEvent {
   kind: 'user' | 'agent' | 'system' | 'action'
 }
 
+/** 附件证据：本轮送入模型的证据片段与来源定位（任务附件证据服务产出）。 */
+export interface AttachmentEvidence {
+  candidates: Array<{ id: string; name: string; selected?: boolean; reason?: string; score?: number }>
+  parsed: Array<{ id: string; status: string; parser: string; cacheHit: boolean; durationMs: number; entriesOrPages: number; error: string }>
+  injected: Array<{ docId: string; docName: string; location: string; seq: number; kind: string; text: string }>
+  totalChars: number
+  durationMs: number
+}
+
 /** 任务详情内联展示的 Expert Run 摘要（GET /tasks/{id} 的 expertRuns 项） */
 export interface ExpertRunBrief {
   id: string
@@ -528,6 +537,7 @@ export interface ExpertRunBrief {
     /** valid=模型原始 JSON 合法；repaired=已自动修复一次；invalid=仅保留原文，不能采纳。 */
     formatStatus?: 'valid' | 'repaired' | 'invalid' | 'manual'
     formatRepair?: { attempted: boolean; error?: string }
+    attachmentEvidence?: AttachmentEvidence
     codeAnalysis?: { mode?: 'fresh' | 'reused' | 'not_applicable'; fingerprint?: { repo: string; role: string; commit: string }[] }
     originalValues?: Record<string, unknown>
     normalized?: boolean
