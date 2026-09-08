@@ -145,6 +145,20 @@ def check_attachment_citations(output: str, tool_trace: list | None) -> list[str
     return ["产出提到附件但本轮未调用 flowhub_attachment.* 工具检索证据，需人工核对"]
 
 
+def _attachment_state_from_bundle(ab) -> dict:
+    """由附件工具 bundle（search 调用后）构建 run.parsed.attachmentEvidence 摘要。"""
+    return {
+        "candidates": list(getattr(ab, "candidates", []) or []),
+        "parsed": [{"id": p.doc_id, "status": p.status, "parser": p.parser,
+                    "cacheHit": p.cache_hit, "durationMs": p.duration_ms,
+                    "entriesOrPages": p.entries_or_pages, "error": p.error} for p in (ab.parsed or [])],
+        "injected": [{"docId": c.doc_id, "docName": c.doc_name, "location": c.location,
+                      "seq": c.seq, "kind": c.kind, "text": c.text[:200]} for c in (ab.injected or [])],
+        "totalChars": sum(len(c.text) for c in (ab.injected or [])),
+        "durationMs": 0,
+    }
+
+
 def quality_policy(mode: str | None) -> dict[str, bool | int]:
     """质量档位：快模式单次生成，平衡模式最多修订一次，准确模式最多修订两次。"""
     return dict(QUALITY_POLICIES.get(mode or "balanced", QUALITY_POLICIES["balanced"]))
@@ -539,7 +553,7 @@ def build_graph(provider: LlmProvider, model: LlmProviderModel, system_prompt: s
         if output_schema:
             deliverable_rule = build_schema_output_instruction(output_schema)
         messages = [("system", f"{system_prompt}\n\n{deliverable_rule}\n事实约束：涉及 FlowHub 数据、任务状态、代码或项目结论时，只能依据提供的上下文；上下文没有依据时必须明确说明不确定，不得编造。代码结论必须紧随使用 [repo@commit:file:L行号 symbol] 格式的【代码证据】引用；未绑定代码仓库时，改为基于任务、表单、文档与项目上下文分析，并明确结论未经过实现验证。")]
-        if attachment_tools_factory is not None:
+        if attachment_tools_factory is not None and int(state.get("attempt", 0)) == 0:
             messages[0] = (messages[0][0],
                 messages[0][1] + "\n当前任务有附件证据工具 flowhub_attachment_list / flowhub_attachment_search；涉及附件结论时自行调用检索，引用格式 [附件@文档名:页码或路径:片段号]（序号与检索结果的 [seq] 对应）；无可用证据时明确说明「附件未解析/需人工核对」，不得编造。")
 
@@ -568,22 +582,14 @@ def build_graph(provider: LlmProvider, model: LlmProviderModel, system_prompt: s
                 from flowhub_api.services.repo_mirror import RepoToolBundle
                 bundle = RepoToolBundle(tools=[], traces=[], evidence_context=[])
                 attachment_state: dict = {}
+                ab = None
                 if attachment_tools_factory is not None:
                     try:
                         ab = await attachment_tools_factory(state["prompt"])
                         bundle.tools += ab.tools
                         bundle.traces += ab.traces
                         bundle.evidence_context += ab.evidence_context
-                        attachment_state = {
-                            "candidates": ab.candidates,
-                            "parsed": [{"id": p.doc_id, "status": p.status, "parser": p.parser,
-                                        "cacheHit": p.cache_hit, "durationMs": p.duration_ms,
-                                        "entriesOrPages": p.entries_or_pages, "error": p.error} for p in ab.parsed],
-                            "injected": [{"docId": c.doc_id, "docName": c.doc_name, "location": c.location,
-                                          "seq": c.seq, "kind": c.kind, "text": c.text[:200]} for c in ab.injected],
-                            "totalChars": sum(len(c.text) for c in ab.injected),
-                            "durationMs": 0,
-                        }
+                        attachment_state = _attachment_state_from_bundle(ab)
                     except Exception as exc:  # noqa: BLE001
                         logger.warning("附件工具构建失败: %s", exc)
                 if repo_tools_factory is not None:
@@ -606,6 +612,12 @@ def build_graph(provider: LlmProvider, model: LlmProviderModel, system_prompt: s
                     )
                     trace.extend({"tool": item["tool"], "status": item["status"], "summary": item["summary"]}
                                  for item in bundle.traces)
+                    # 附件 search 工具在 loop 运行中才把调用记录写入 ab.traces/parsed/injected：
+                    # 必须在 loop 返回后重新构建 attachmentEvidence 摘要，并把调用记录并入持久化 tool_trace
+                    # （否则 check_attachment_citations 看不到「已调用附件工具」而误降级人工核对）。
+                    trace.extend({"tool": item["tool"], "status": item["status"], "summary": item["summary"]}
+                                 for item in (ab.traces if ab is not None else []))
+                    attachment_state = _attachment_state_from_bundle(ab) if ab is not None else {}
                     tool_evidence = "\n\n".join(bundle.evidence_context)[:MAX_REPO_TOOL_CONTEXT_CHARS]
                     if emitter is not None and output:
                         await _emit("token", {"text": output, "attemptId": attempt_id})

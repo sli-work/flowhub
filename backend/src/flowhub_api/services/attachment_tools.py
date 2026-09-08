@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 
 from langchain_core.tools import StructuredTool
 
+from flowhub_api.core.response import BizCode, BizError
 from flowhub_api.services.agent_context import can_read_task
 from flowhub_api.services.attachment_cache import ProcessLRUAttachmentCache, cache_key
 from flowhub_api.services.attachment_evidence import (
@@ -19,6 +20,9 @@ from flowhub_api.services.attachment_parsers import PARSER_VERSION, ParsedAttach
 
 logger = logging.getLogger(__name__)
 
+# 附件工具在 model_node 与仓库工具共用同一合并循环预算（expert_runtime 的
+# MAX_REPO_TOOL_CALLS / MAX_REPO_TOOL_CONTEXT_CHARS），下面两个常量只描述 search
+# 单次调用内的检索上限（search 内部已限 10 片段 / 4000 字符），不直接接线到合并循环。
 MAX_ATTACHMENT_TOOL_CALLS = 6
 MAX_ATTACHMENT_TOOL_CONTEXT_CHARS = 8000
 MAX_SEARCH_DEPTH = 3
@@ -35,7 +39,8 @@ class AttachmentToolBundle:
 
 
 async def create_attachment_tool_bundle(session, task, user) -> AttachmentToolBundle:
-    await can_read_task(session, user, task)
+    if not await can_read_task(session, user, task):
+        raise BizError(BizCode.PERM_DENIED, "无权限读取该任务", http_status=403)
     cache = ProcessLRUAttachmentCache()
     from flowhub_api.services.ocr import get_ocr_adapter
 

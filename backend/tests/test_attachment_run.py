@@ -1,8 +1,10 @@
 """LangGraph 集成：附件证据工具 Bundle + 质量校验。"""
 import pytest
 
+from flowhub_api.models import User
 from flowhub_api.services import attachment_tools
-from flowhub_api.services.expert_runtime import check_attachment_citations
+from flowhub_api.services.attachment_parsers import EvidenceChunk, ParsedAttachment
+from flowhub_api.services.expert_runtime import _attachment_state_from_bundle, check_attachment_citations
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -48,3 +50,33 @@ async def test_attachment_search_depth_limit(seeded):
     bundle = await attachment_tools.create_attachment_tool_bundle(session, task, admin)
     out = await next(t for t in bundle.tools if t.name == "flowhub_attachment_search").ainvoke({"query": "备件", "depth": 99})
     assert "深度超限" in out
+
+
+def test_attachment_state_from_bundle_after_search():
+    """search 调用后（parsed/injected 已由工具回填）→ attachmentEvidence 摘要非空。"""
+    ab = attachment_tools.AttachmentToolBundle(
+        tools=[],
+        candidates=[{"id": "evd1", "name": "Q2复盘.pdf", "ext": "pdf", "kind": ""}],
+        parsed=[ParsedAttachment(doc_id="evd1", status="indexed", parser="pdf_ocr", cache_hit=True,
+                                 duration_ms=120, entries_or_pages=3, error="")],
+        injected=[
+            EvidenceChunk(doc_id="evd1", doc_name="Q2复盘.pdf", location="p2", seq=1,
+                          kind="text", text="备件缺货 120 单"),
+            EvidenceChunk(doc_id="evd2", doc_name="备件清单.xlsx", location="Sheet1!A1", seq=2,
+                          kind="table", text="补货周期 7 天"),
+        ],
+    )
+    state = _attachment_state_from_bundle(ab)
+    assert state["parsed"] and state["injected"] and state["totalChars"] > 0
+    first = state["injected"][0]
+    assert first["docId"] == "evd1" and first["docName"] == "Q2复盘.pdf"
+    assert first["location"] == "p2" and first["seq"] == 1
+
+
+@pytest.mark.asyncio
+async def test_attachment_tool_bundle_permission_denied_403(seeded):
+    session, task, admin, _ = seeded
+    outsider = User(id="u-none", name="局外人", account="outsider", roles=[])
+    with pytest.raises(Exception) as exc:
+        await attachment_tools.create_attachment_tool_bundle(session, task, outsider)
+    assert exc.value.status_code == 403
