@@ -5,7 +5,12 @@
 """
 import io
 import logging
+import re
+import zipfile
 from dataclasses import dataclass, field
+from pathlib import Path
+
+from flowhub_api.core.response import BizCode, BizError
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +56,7 @@ _OCR_TIMEOUT_SEC = 8.0
 
 
 async def parse_attachment(doc, data: bytes, ocr=None) -> ParsedAttachment:
-    """按扩展名派发解析；返回带来源定位的证据块。pdf 走异步 OCR 降级解析，zip 由 Task 4 补齐，暂 skipped。"""
+    """按扩展名派发解析；返回带来源定位的证据块。pdf 走异步 OCR 降级解析，zip 走安全白名单/Axure 页面树解析。"""
     ext = _ext(doc)
     if ext == "pdf":
         try:
@@ -60,7 +65,13 @@ async def parse_attachment(doc, data: bytes, ocr=None) -> ParsedAttachment:
             logger.warning("PDF 解析 %s 失败: %s", doc.name, exc)
             return ParsedAttachment(doc_id=doc.id, status="failed", parser="pdf", error=str(exc)[:200])
     if ext == "zip":
-        return ParsedAttachment(doc_id=doc.id, status="skipped", parser="zip")
+        try:
+            return await _parse_zip(doc, data)
+        except BizError as exc:
+            return ParsedAttachment(doc_id=doc.id, status="failed", parser="zip", error=str(exc.detail)[:200])
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("ZIP 解析 %s 失败: %s", doc.name, exc)
+            return ParsedAttachment(doc_id=doc.id, status="failed", parser="zip", error=str(exc)[:200])
     fn = _SYNC_PARSERS.get(ext)
     if fn is None:
         return ParsedAttachment(doc_id=doc.id, status="skipped", parser="unknown")
@@ -191,3 +202,124 @@ async def _parse_pdf(doc, data: bytes, ocr=None) -> ParsedAttachment:
     status = "indexed" if has_text else "needs_ocr"
     return ParsedAttachment(doc_id=doc.id, status=status, parser="pdf",
                             chunks=chunks, entries_or_pages=len(chunks))
+
+
+_ZIP_MAX_TOTAL = 200 * 1024 * 1024
+_ZIP_MAX_ENTRIES = 2000
+_ZIP_TEXT_EXT = TEXT_EXT
+_ZIP_NESTED_EXT = {"zip", "gz", "tar", "7z", "rar"}
+
+
+def _zip_name_decode(info) -> str:
+    """zip 条目名编码修复，与 routes/documents.py 一致：UTF-8 标志 → 原名；否则 CP437 还原后按 UTF-8/GBK 解码。"""
+    if info.flag_bits & 0x800:
+        return info.filename
+    try:
+        raw = info.filename.encode("cp437")
+    except UnicodeEncodeError:
+        return info.filename
+    for encoding in ("utf-8", "gbk"):
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return info.filename
+
+
+def _zip_safe_entries(data: bytes) -> list[tuple[str, int]]:
+    """只读安全校验：总量 ≤200MB、条目 ≤2000、防路径穿越、忽略 __MACOSX/.DS_Store；返回 [(name, size)]。"""
+    total = 0
+    entry_count = 0
+    entries = []
+    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        for info in zf.infolist():
+            name = _zip_name_decode(info).replace("\\", "/")
+            parts = Path(name).parts
+            if "__MACOSX" in parts or parts[-1:] == (".DS_Store",):
+                continue
+            entry_count += 1
+            if entry_count > _ZIP_MAX_ENTRIES:
+                raise BizError(BizCode.VALIDATION, "压缩包条目过多，拒绝浏览")
+            if not name or name.startswith("/") or any(part in {"", ".", ".."} for part in parts):
+                raise BizError(BizCode.VALIDATION, "压缩包包含非法路径，拒绝浏览")
+            total += info.file_size
+            if total > _ZIP_MAX_TOTAL:
+                raise BizError(BizCode.VALIDATION, "解压后体积超限（上限 200MB），疑似压缩炸弹")
+            if not info.is_dir():
+                entries.append((name, info.file_size))
+    return entries
+
+
+def _is_axure(entries: list[tuple[str, int]]) -> bool:
+    paths = {name.lower() for name, _ in entries}
+    if "index.html" in paths:
+        return True
+    if paths:
+        root = next(iter(paths)).split("/", 1)[0]
+        return f"{root}/index.html" in paths and all(name.startswith(f"{root}/") for name in paths)
+
+
+async def _parse_zip(doc, data: bytes) -> ParsedAttachment:
+    entries = _zip_safe_entries(data)
+    chunks = []
+    indexed = 0
+    if _is_axure(entries):
+        return _parse_axure(doc, data, entries)
+    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        for name, _size in entries:
+            ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+            if ext in _ZIP_NESTED_EXT:
+                chunks.append(_chunk(doc, name, len(chunks) + 1, "text",
+                                     "[嵌套压缩包，不递归解压，请在任务页下载后查看]"))
+                continue
+            if ext not in _ZIP_TEXT_EXT:
+                continue
+            try:
+                content = zf.read(name)
+            except Exception:  # noqa: BLE001
+                continue
+            text = content.decode("utf-8", errors="replace")
+            lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+            if lines:
+                indexed += 1
+                chunks.append(_chunk(doc, name, len(chunks) + 1, "text", "\n".join(lines)[:4000]))
+    return ParsedAttachment(doc_id=doc.id, status="indexed" if chunks else "needs_ocr",
+                            parser="zip", chunks=chunks, entries_or_pages=indexed)
+
+
+def _parse_axure(doc, data: bytes, entries: list[tuple[str, int]]) -> ParsedAttachment:
+    import re as _re
+
+    chunks = []
+    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        names = {name.lower() for name, _ in entries}
+        for target in ("index.html",):
+            if target not in names:
+                continue
+            name = next(n for n, _ in entries if n.lower() == target)
+            html = zf.read(name).decode("utf-8", errors="replace")
+            m = _re.search(r"<title[^>]*>(.*?)</title>", html, _re.S | _re.I)
+            if m and m.group(1).strip():
+                chunks.append(_chunk(doc, name, len(chunks) + 1, "title",
+                                     f"[Axure 原型] {m.group(1).strip()[:200]}"))
+        for name, _ in entries:
+            ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+            if ext not in _ZIP_TEXT_EXT and not (ext == "js" and name.startswith("data/")):
+                continue
+            try:
+                content = zf.read(name)
+            except Exception:  # noqa: BLE001
+                continue
+            text = content.decode("utf-8", errors="replace")
+            if ext == "js" and "pages:" in text:
+                # 仅静态提取页面名/页面树文本，绝不执行脚本
+                page_names = _re.findall(r'"name"\s*:\s*"([^"]{1,80})"', text)
+                if page_names:
+                    chunks.append(_chunk(doc, name, len(chunks) + 1, "text",
+                                         f"[Axure 页面树] {' / '.join(page_names[:50])}"))
+                continue
+            lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+            if lines:
+                chunks.append(_chunk(doc, name, len(chunks) + 1, "text", "\n".join(lines)[:4000]))
+    return ParsedAttachment(doc_id=doc.id, status="indexed" if chunks else "needs_ocr",
+                            parser="axure", chunks=chunks, entries_or_pages=len(entries))

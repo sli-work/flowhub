@@ -123,3 +123,73 @@ async def test_pdf_no_text_with_ocr_extracts_text():
     parsed = await parse_attachment(_doc("scan.pdf"), data, ocr=FakeOcr())
     assert parsed.status == "indexed"
     assert any("OCR 识别内容" in c.text for c in parsed.chunks)
+
+
+import zipfile
+
+
+def _zip_bytes(entries: dict[str, bytes]) -> bytes:
+    buf = BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        for name, content in entries.items():
+            zf.writestr(name, content)
+    return buf.getvalue()
+
+
+async def test_zip_indexes_whitelist_text_only():
+    data = _zip_bytes({
+        "readme.txt": "说明：Q2 备件盘点",
+        "data/items.json": '{"sku": "A-1", "qty": 42}',
+        "app.js": "var x = 1;",            # 脚本正文不进模型
+        "bin.dat": b"\x00\x01\x02",         # 二进制不进模型
+    })
+    parsed = await parse_attachment(_doc("pkg.zip"), data)
+    assert parsed.status == "indexed"
+    assert parsed.parser == "zip"
+    texts = "\n".join(c.text for c in parsed.chunks)
+    assert "Q2 备件盘点" in texts
+    assert "A-1" in texts
+    assert "var x = 1" not in texts
+    locations = {c.location for c in parsed.chunks}
+    assert "readme.txt" in locations and "data/items.json" in locations
+
+
+async def test_zip_nested_archive_skipped():
+    inner = _zip_bytes({"inner.txt": "内部内容"})
+    data = _zip_bytes({"outer.zip": inner, "top.txt": "顶层内容"})
+    parsed = await parse_attachment(_doc("nested.zip"), data)
+    assert parsed.status == "indexed"
+    texts = "\n".join(c.text for c in parsed.chunks)
+    assert "顶层内容" in texts
+    assert "内部内容" not in texts
+
+
+async def test_zip_axure_extracts_pages_and_title():
+    data = _zip_bytes({
+        "index.html": "<html><head><title>订单系统原型</title></head><body></body></html>",
+        "data/document.js": 'var document = {"pages": [{"name": "首页", "id": "p1"}, {"name": "订单详情", "id": "p2"}]};',
+        "data/document.css": "body { color: red; }",
+        "js/script.js": "console.log('not for model');",
+    })
+    parsed = await parse_attachment(_doc("axure.zip"), data)
+    assert parsed.status == "indexed"
+    assert parsed.parser == "axure"
+    texts = "\n".join(c.text for c in parsed.chunks)
+    assert "订单系统原型" in texts
+    assert "首页" in texts and "订单详情" in texts
+    assert "console.log" not in texts
+
+
+async def test_zip_path_traversal_rejected():
+    data = _zip_bytes({"../evil.txt": "越权内容", "ok.txt": "正常"})
+    parsed = await parse_attachment(_doc("bad.zip"), data)
+    assert parsed.status == "failed"
+    assert "路径" in parsed.error or "非法" in parsed.error
+
+
+async def test_zip_compression_bomb_rejected():
+    # 2000 个条目正好触顶，2001 个应拒绝
+    entries = {f"f{i}.txt": b"x" * 100 for i in range(2001)}
+    data = _zip_bytes(entries)
+    parsed = await parse_attachment(_doc("bomb.zip"), data)
+    assert parsed.status == "failed"
