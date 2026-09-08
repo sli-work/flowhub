@@ -33,7 +33,13 @@ export function AttachmentEvidencePanel({ taskId, evidence }: { taskId: string; 
       const d = await api.post<{ attachments: AttachmentEvidence['parsed']; injected: AttachmentEvidence['injected']; durationMs: number }>(
         `/api/v1/tasks/${taskId}/reparse-attachments`,
       )
-      setState((prev) => ({ ...(prev ?? { candidates: [], totalChars: 0, durationMs: 0 }), parsed: d.attachments, injected: d.injected, durationMs: d.durationMs }))
+      setState((prev) => ({
+        ...(prev ?? { candidates: [], totalChars: 0, durationMs: 0 }),
+        parsed: d.attachments,
+        injected: d.injected,
+        durationMs: d.durationMs,
+        totalChars: d.injected.reduce((sum, c) => sum + c.text.length, 0),
+      }))
       toast.success('附件解析完成')
     } catch (error) {
       toast.error(error instanceof Error ? error.message : '重试解析失败')
