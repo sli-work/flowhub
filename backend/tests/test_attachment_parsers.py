@@ -75,3 +75,51 @@ async def test_pptx_parsed_with_slide_location():
 async def test_unsupported_extension_skipped():
     parsed = await parse_attachment(_doc("a.exe"), b"MZ....")
     assert parsed.status == "skipped"
+
+
+async def test_pdf_text_page_parsed_with_location():
+    import fitz
+
+    pdf = fitz.open()
+    page = pdf.new_page()
+    page.insert_text((72, 72), "备件库存看板", fontname="china-s")
+    data = pdf.tobytes()
+    pdf.close()
+    parsed = await parse_attachment(_doc("doc.pdf"), data)
+    assert parsed.status == "indexed"
+    assert parsed.parser == "pdf"
+    assert parsed.chunks and parsed.chunks[0].location.startswith("p")
+    assert "备件库存看板" in parsed.chunks[0].text
+
+
+async def test_pdf_no_text_without_ocr_needs_ocr():
+    import fitz
+
+    from flowhub_api.services.ocr import NoopOcrAdapter
+
+    pdf = fitz.open()
+    pdf.new_page()  # 空白页，无文本层
+    data = pdf.tobytes()
+    pdf.close()
+    parsed = await parse_attachment(_doc("scan.pdf"), data, ocr=NoopOcrAdapter())
+    assert parsed.status == "needs_ocr"
+    assert any(c.kind == "ocr_marker" for c in parsed.chunks)
+
+
+async def test_pdf_no_text_with_ocr_extracts_text():
+    import fitz
+
+    pdf = fitz.open()
+    pdf.new_page()
+    data = pdf.tobytes()
+    pdf.close()
+
+    class FakeOcr:
+        available = True
+
+        async def extract_text(self, image_bytes, page_no):
+            return "OCR 识别内容"
+
+    parsed = await parse_attachment(_doc("scan.pdf"), data, ocr=FakeOcr())
+    assert parsed.status == "indexed"
+    assert any("OCR 识别内容" in c.text for c in parsed.chunks)

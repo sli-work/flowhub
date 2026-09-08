@@ -46,12 +46,19 @@ _SYNC_PARSERS = {
     "docx": "_parse_docx", "xlsx": "_parse_xlsx", "pptx": "_parse_pptx",
 }
 
+_OCR_MAX_PAGES = 5
+_OCR_TIMEOUT_SEC = 8.0
+
 
 async def parse_attachment(doc, data: bytes, ocr=None) -> ParsedAttachment:
-    """按扩展名派发解析；返回带来源定位的证据块。pdf/zip 由 Task 3/4 补齐，暂 skipped。"""
+    """按扩展名派发解析；返回带来源定位的证据块。pdf 走异步 OCR 降级解析，zip 由 Task 4 补齐，暂 skipped。"""
     ext = _ext(doc)
     if ext == "pdf":
-        return _skip_pdf(doc)
+        try:
+            return await _parse_pdf(doc, data, ocr)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("PDF 解析 %s 失败: %s", doc.name, exc)
+            return ParsedAttachment(doc_id=doc.id, status="failed", parser="pdf", error=str(exc)[:200])
     if ext == "zip":
         return ParsedAttachment(doc_id=doc.id, status="skipped", parser="zip")
     fn = _SYNC_PARSERS.get(ext)
@@ -63,10 +70,6 @@ async def parse_attachment(doc, data: bytes, ocr=None) -> ParsedAttachment:
     except Exception as exc:  # noqa: BLE001
         logger.warning("解析 %s 失败: %s", doc.name, exc)
         return ParsedAttachment(doc_id=doc.id, status="failed", parser=ext, error=str(exc)[:200])
-
-
-def _skip_pdf(doc) -> ParsedAttachment:
-    return ParsedAttachment(doc_id=doc.id, status="skipped", parser="pdf")
 
 
 def _chunk(doc, location: str, seq: int, kind: str, text: str) -> EvidenceChunk:
@@ -144,3 +147,47 @@ def _parse_pptx(doc, data: bytes) -> ParsedAttachment:
                                  (title + "\n" + body).strip()[:2000]))
     return ParsedAttachment(doc_id=doc.id, status="indexed", parser="pptx",
                             chunks=chunks, entries_or_pages=len(prs.slides._sldIdLst))
+
+
+async def _parse_pdf(doc, data: bytes, ocr=None) -> ParsedAttachment:
+    import asyncio
+    import fitz  # PyMuPDF
+
+    pdf = fitz.open(stream=data, filetype="pdf")
+    chunks = []
+    ocr_pages = 0
+    has_text = False
+    try:
+        for page_no, page in enumerate(pdf, start=1):
+            text = page.get_text("text") or ""
+            lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+            if lines:
+                has_text = True
+                title = max(lines, key=len)[:200]
+                chunks.append(_chunk(doc, f"p{page_no}", len(chunks) + 1,
+                                     "title" if len(lines) > 1 else "text", title))
+                chunks.append(_chunk(doc, f"p{page_no}", len(chunks) + 1, "text",
+                                     "\n".join(lines)[:4000]))
+                continue
+            marker = _chunk(doc, f"p{page_no}", len(chunks) + 1, "ocr_marker", "[无文本层，需 OCR 识别]")
+            if ocr is not None and getattr(ocr, "available", False) and ocr_pages < _OCR_MAX_PAGES:
+                try:
+                    pix = page.get_pixmap(dpi=200)
+                    png = pix.tobytes("png")
+                    ocr_text = await asyncio.wait_for(
+                        ocr.extract_text(png, page_no), timeout=_OCR_TIMEOUT_SEC,
+                    )
+                except Exception:  # noqa: BLE001 — OCR 失败降级为标记
+                    ocr_text = ""
+                if ocr_text.strip():
+                    ocr_pages += 1
+                    has_text = True
+                    chunks.append(_chunk(doc, f"p{page_no}", len(chunks) + 1, "text",
+                                         f"[OCR] {ocr_text.strip()[:2000]}"))
+                    continue
+            chunks.append(marker)
+    finally:
+        pdf.close()
+    status = "indexed" if has_text else "needs_ocr"
+    return ParsedAttachment(doc_id=doc.id, status=status, parser="pdf",
+                            chunks=chunks, entries_or_pages=len(chunks))
