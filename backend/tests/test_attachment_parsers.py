@@ -1,8 +1,9 @@
-"""附件解析器：数据结构 + 纯文本 / DOCX / XLSX / PPTX 的解析与证据定位。"""
+"""附件解析器：数据结构 + 纯文本 / DOCX / XLSX / PPTX / ZIP 的解析与证据定位。"""
+import zipfile
 from io import BytesIO
 
 from flowhub_api.models.support import DocItem
-from flowhub_api.services.attachment_parsers import parse_attachment
+from flowhub_api.services.attachment_parsers import _zip_name_decode, parse_attachment
 
 TXT = "需求: 备件库存看板\n数据来自 Q2 复盘。\n"
 
@@ -125,15 +126,32 @@ async def test_pdf_no_text_with_ocr_extracts_text():
     assert any("OCR 识别内容" in c.text for c in parsed.chunks)
 
 
-import zipfile
-
-
 def _zip_bytes(entries: dict[str, bytes]) -> bytes:
     buf = BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
         for name, content in entries.items():
             zf.writestr(name, content)
     return buf.getvalue()
+
+
+def _zip_bomb_header_bytes() -> bytes:
+    """构造 central directory 声明超大 file_size（300MB）的单条目 zip 头，不实际写全量数据。"""
+    buf = BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_STORED) as zf:
+        zf.writestr("big.bin", b"x" * 100)
+    data = bytearray(buf.getvalue())
+    big = 314572800  # 300MB，超过 200MB 上限
+    patched = 0
+    i = 0
+    while True:
+        idx = data.find(b"PK\x01\x02", i)  # central directory 条目签名
+        if idx == -1:
+            break
+        data[idx + 24: idx + 28] = big.to_bytes(4, "little")  # 未压缩大小字段
+        patched += 1
+        i = idx + 1
+    assert patched == 1, "central directory 应恰好一个条目"
+    return bytes(data)
 
 
 async def test_zip_indexes_whitelist_text_only():
@@ -192,4 +210,64 @@ async def test_zip_compression_bomb_rejected():
     entries = {f"f{i}.txt": b"x" * 100 for i in range(2001)}
     data = _zip_bytes(entries)
     parsed = await parse_attachment(_doc("bomb.zip"), data)
+    assert parsed.status == "failed"
+
+
+async def test_zip_wrapped_axure_extracts_title_and_pages():
+    # 单层包裹目录：root/index.html + root/data/document.js，剥掉 root/ 后识别为 axure
+    data = _zip_bytes({
+        "wrapped/index.html": "<html><head><title>订单系统原型</title></head><body></body></html>",
+        "wrapped/data/document.js": 'var document = {"pages": [{"name": "首页", "id": "p1"}, {"name": "订单详情", "id": "p2"}]};',
+        "wrapped/js/script.js": "console.log('not for model');",
+    })
+    parsed = await parse_attachment(_doc("axure-wrapped.zip"), data)
+    assert parsed.status == "indexed"
+    assert parsed.parser == "axure"
+    texts = "\n".join(c.text for c in parsed.chunks)
+    assert "订单系统原型" in texts
+    assert "首页" in texts and "订单详情" in texts
+    assert "console.log" not in texts
+
+
+async def test_zip_js_without_pages_not_leaked():
+    # data/*.js 无 pages: 时也不得把脚本正文交给模型；非 data/ 的 js 同样不进
+    data = _zip_bytes({
+        "data/helper.js": "function helper(){ return 'secret body'; }",
+        "js/script.js": "console.log('also secret');",
+        "readme.txt": "说明：正常文本",
+    })
+    parsed = await parse_attachment(_doc("js.zip"), data)
+    assert parsed.status == "indexed"
+    texts = "\n".join(c.text for c in parsed.chunks)
+    assert "secret body" not in texts
+    assert "also secret" not in texts
+    assert "说明：正常文本" in texts
+
+
+async def test_zip_ascii_name_without_utf8_flag_readable():
+    # ASCII 名、无 UTF-8 标志（0x800）的 zip：解码名 == info.filename，内容应可读
+    data = _zip_bytes({
+        "readme.txt": "说明：ASCII 名旁内容",
+        "data/items.json": '{"sku": "B-9"}',
+    })
+    parsed = await parse_attachment(_doc("ascii.zip"), data)
+    assert parsed.status == "indexed"
+    texts = "\n".join(c.text for c in parsed.chunks)
+    assert "说明：ASCII 名旁内容" in texts
+    assert "B-9" in texts
+
+
+def test_zip_name_decode_recovers_gbk():
+    # 无 UTF-8 标志的条目名由 zipfile 按 CP437 解码得到乱码；应还原回 GBK 正确中文名
+    raw = "需求文档".encode("gbk")
+    info = zipfile.ZipInfo("placeholder")
+    info.flag_bits &= ~0x800
+    info.filename = raw.decode("cp437")
+    assert _zip_name_decode(info) == "需求文档"
+
+
+async def test_zip_total_size_bomb_rejected():
+    # central directory 声明 file_size=300MB 的单条目头：总量超 200MB 上限应拒绝
+    data = _zip_bomb_header_bytes()
+    parsed = await parse_attachment(_doc("big.zip"), data)
     assert parsed.status == "failed"

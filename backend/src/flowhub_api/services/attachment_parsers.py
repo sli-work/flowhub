@@ -5,7 +5,6 @@
 """
 import io
 import logging
-import re
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -226,8 +225,11 @@ def _zip_name_decode(info) -> str:
     return info.filename
 
 
-def _zip_safe_entries(data: bytes) -> list[tuple[str, int]]:
-    """只读安全校验：总量 ≤200MB、条目 ≤2000、防路径穿越、忽略 __MACOSX/.DS_Store；返回 [(name, size)]。"""
+def _zip_safe_entries(data: bytes) -> list[tuple[str, zipfile.ZipInfo]]:
+    """只读安全校验：总量 ≤200MB、条目 ≤2000、防路径穿越、忽略 __MACOSX/.DS_Store；返回 [(name, info)]。
+
+    name 为解码后的展示名；读取内容一律用 info（zf.open(info)），避免解码名 ≠ info.filename 时 KeyError。
+    """
     total = 0
     entry_count = 0
     entries = []
@@ -246,11 +248,24 @@ def _zip_safe_entries(data: bytes) -> list[tuple[str, int]]:
             if total > _ZIP_MAX_TOTAL:
                 raise BizError(BizCode.VALIDATION, "解压后体积超限（上限 200MB），疑似压缩炸弹")
             if not info.is_dir():
-                entries.append((name, info.file_size))
+                entries.append((name, info))
     return entries
 
 
-def _is_axure(entries: list[tuple[str, int]]) -> bool:
+def _zip_wrapper_prefix(names: list[str]) -> str:
+    """计算单层包裹目录前缀：所有条目都在同一根目录下且含 {root}/index.html 时返回 'root/'，否则空串。
+
+    Axure 包常见「macOS 压缩文件夹」产物：root/index.html + root/data/*.js，需剥掉 root/ 再判断/展示。
+    """
+    if not names:
+        return ""
+    seg = names[0].split("/", 1)[0]
+    if seg and f"{seg}/index.html" in names and all(n == seg or n.startswith(seg + "/") for n in names):
+        return seg + "/"
+    return ""
+
+
+def _is_axure(entries: list[tuple[str, zipfile.ZipInfo]]) -> bool:
     paths = {name.lower() for name, _ in entries}
     if "index.html" in paths:
         return True
@@ -261,65 +276,72 @@ def _is_axure(entries: list[tuple[str, int]]) -> bool:
 
 async def _parse_zip(doc, data: bytes) -> ParsedAttachment:
     entries = _zip_safe_entries(data)
+    prefix = _zip_wrapper_prefix([name for name, _ in entries])
     chunks = []
     indexed = 0
     if _is_axure(entries):
-        return _parse_axure(doc, data, entries)
+        return _parse_axure(doc, data, entries, prefix)
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
-        for name, _size in entries:
-            ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+        for name, info in entries:
+            rel = name[len(prefix):] if prefix else name
+            ext = rel.rsplit(".", 1)[-1].lower() if "." in rel else ""
             if ext in _ZIP_NESTED_EXT:
-                chunks.append(_chunk(doc, name, len(chunks) + 1, "text",
+                chunks.append(_chunk(doc, rel, len(chunks) + 1, "text",
                                      "[嵌套压缩包，不递归解压，请在任务页下载后查看]"))
                 continue
             if ext not in _ZIP_TEXT_EXT:
                 continue
             try:
-                content = zf.read(name)
+                content = zf.open(info).read()
             except Exception:  # noqa: BLE001
                 continue
             text = content.decode("utf-8", errors="replace")
             lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
             if lines:
                 indexed += 1
-                chunks.append(_chunk(doc, name, len(chunks) + 1, "text", "\n".join(lines)[:4000]))
+                chunks.append(_chunk(doc, rel, len(chunks) + 1, "text", "\n".join(lines)[:4000]))
     return ParsedAttachment(doc_id=doc.id, status="indexed" if chunks else "needs_ocr",
                             parser="zip", chunks=chunks, entries_or_pages=indexed)
 
 
-def _parse_axure(doc, data: bytes, entries: list[tuple[str, int]]) -> ParsedAttachment:
+def _parse_axure(doc, data: bytes, entries: list[tuple[str, zipfile.ZipInfo]], prefix: str) -> ParsedAttachment:
     import re as _re
 
     chunks = []
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
-        names = {name.lower() for name, _ in entries}
-        for target in ("index.html",):
-            if target not in names:
-                continue
-            name = next(n for n, _ in entries if n.lower() == target)
-            html = zf.read(name).decode("utf-8", errors="replace")
+        names = {(name[len(prefix):] if prefix else name).lower(): name for name, _ in entries}
+        if "index.html" in names:
+            name = names["index.html"]
+            rel = name[len(prefix):] if prefix else name
+            try:
+                html = zf.open(next(info for n, info in entries if n == name)).read().decode("utf-8", errors="replace")
+            except Exception:  # noqa: BLE001
+                html = ""
             m = _re.search(r"<title[^>]*>(.*?)</title>", html, _re.S | _re.I)
             if m and m.group(1).strip():
-                chunks.append(_chunk(doc, name, len(chunks) + 1, "title",
+                chunks.append(_chunk(doc, rel, len(chunks) + 1, "title",
                                      f"[Axure 原型] {m.group(1).strip()[:200]}"))
-        for name, _ in entries:
-            ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
-            if ext not in _ZIP_TEXT_EXT and not (ext == "js" and name.startswith("data/")):
+        for name, info in entries:
+            rel = name[len(prefix):] if prefix else name
+            ext = rel.rsplit(".", 1)[-1].lower() if "." in rel else ""
+            if ext not in _ZIP_TEXT_EXT and not (ext == "js" and rel.startswith("data/")):
                 continue
             try:
-                content = zf.read(name)
+                content = zf.open(info).read()
             except Exception:  # noqa: BLE001
                 continue
             text = content.decode("utf-8", errors="replace")
-            if ext == "js" and "pages:" in text:
-                # 仅静态提取页面名/页面树文本，绝不执行脚本
-                page_names = _re.findall(r'"name"\s*:\s*"([^"]{1,80})"', text)
-                if page_names:
-                    chunks.append(_chunk(doc, name, len(chunks) + 1, "text",
-                                         f"[Axure 页面树] {' / '.join(page_names[:50])}"))
+            if ext == "js":
+                # 仅静态提取页面名/页面树文本，绝不执行脚本，也不把脚本正文交给模型。
+                # 标记兼容两种形态：真实 Axure 产物是 "pages":（带引号 key），简报示例为 pages:[
+                if '"pages"' in text or "pages:" in text:
+                    page_names = _re.findall(r'"name"\s*:\s*"([^"]{1,80})"', text)
+                    if page_names:
+                        chunks.append(_chunk(doc, rel, len(chunks) + 1, "text",
+                                             f"[Axure 页面树] {' / '.join(page_names[:50])}"))
                 continue
             lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
             if lines:
-                chunks.append(_chunk(doc, name, len(chunks) + 1, "text", "\n".join(lines)[:4000]))
+                chunks.append(_chunk(doc, rel, len(chunks) + 1, "text", "\n".join(lines)[:4000]))
     return ParsedAttachment(doc_id=doc.id, status="indexed" if chunks else "needs_ocr",
                             parser="axure", chunks=chunks, entries_or_pages=len(entries))
