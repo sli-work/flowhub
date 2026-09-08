@@ -1,9 +1,6 @@
 """附件证据服务：意图选择 / 权限与安全过滤 / 解析缓存 / 检索注入 / 渲染。"""
 import pytest
 
-from flowhub_api.db.session import SessionFactory
-from flowhub_api.models.support import DocItem
-from flowhub_api.models.workflow import TaskItem, WorkItem
 from flowhub_api.models import User
 from flowhub_api.services import attachment_evidence as svc
 
@@ -12,41 +9,6 @@ from flowhub_api.services import attachment_evidence as svc
 def _ensure_schema_and_seed(client):
     """触发 lifespan（建表 + seed demo 用户），供直接操作 SessionFactory 的用例使用。"""
     return client
-
-
-@pytest.fixture
-async def seeded():
-    async with SessionFactory() as session:
-        wi = WorkItem(id="WI-EVID-001", type="issue", title="备件库存看板", project="售后",
-                      assignee="张三", creator="张三")
-        task = TaskItem(id="T-EVID-001", wi_id=wi.id, title="分析备件库存", project="售后",
-                        node="分析", node_id="n1", type="issue", assignee="张三")
-        docs = [
-            DocItem(id="evd1", name="Q2服务复盘.pdf", project="售后", scan="已扫描", uploader="张三",
-                    size="1KB", time="t1", wi=wi.id, object_name="d1/Q2.pdf"),
-            DocItem(id="evd2", name="备件清单.xlsx", project="售后", scan="已扫描", uploader="张三",
-                    size="1KB", time="t2", wi=wi.id, object_name="d2/list.xlsx"),
-            DocItem(id="evd3", name="无关文档.txt", project="售后", scan="已扫描", uploader="李四",
-                    size="1KB", time="t3", wi=wi.id, object_name="d3/x.txt"),
-            DocItem(id="evd4", name="病毒文件.zip", project="售后", scan="含毒", uploader="王五",
-                    size="1KB", time="t4", wi=wi.id, object_name="d4/v.zip"),
-            DocItem(id="evd5", name="已删除.txt", project="售后", scan="已扫描", uploader="张三",
-                    size="1KB", time="t5", wi=wi.id, object_name="d5/d.txt", deleted=True),
-            DocItem(id="evd6", name="无对象.txt", project="售后", scan="已扫描", uploader="张三",
-                    size="1KB", time="t6", wi=wi.id, object_name=None),
-        ]
-        session.add(wi); session.add(task); session.add_all(docs)
-        await session.commit()
-        admin = (await session.execute(
-            __import__("sqlalchemy").select(User).where(User.account == "liting")
-        )).scalars().first()
-        yield session, task, admin, docs
-        # 清理固定 ID 行，避免后续用例相同主键冲突（admin 为 seed 用户，不删）
-        for d in docs:
-            await session.delete(d)
-        await session.delete(task)
-        await session.delete(wi)
-        await session.commit()
 
 
 def _pdf_bytes(text: str) -> bytes:

@@ -49,7 +49,8 @@ class RepoToolLoopUnavailable(RuntimeError):
 
 
 async def run_repo_tool_loop(llm, messages: list, bundle, *, on_trace: Callable[[dict], Awaitable[None]] | Callable[[dict], None] | None = None,
-                             max_calls: int = MAX_REPO_TOOL_CALLS) -> tuple[str, int]:
+                             max_calls: int = MAX_REPO_TOOL_CALLS,
+                             max_chars: int = MAX_REPO_TOOL_CONTEXT_CHARS) -> tuple[str, int]:
     """Run a small Pi-style tool loop with FlowHub's explicit safety budget.
 
     Tool selection remains model-driven, while invocation, errors and the
@@ -75,7 +76,7 @@ async def run_repo_tool_loop(llm, messages: list, bundle, *, on_trace: Callable[
             await value
 
     while True:
-        if used >= max_calls or rounds >= 8 or result_chars >= MAX_REPO_TOOL_CONTEXT_CHARS:
+        if used >= max_calls or rounds >= 8 or result_chars >= max_chars:
             await emit({
                 "kind": "tool",
                 "tool": "flowhub.repo.tools",
@@ -106,7 +107,7 @@ async def run_repo_tool_loop(llm, messages: list, bundle, *, on_trace: Callable[
             call_id = str(call.get("id") or f"repo-tool-{used + 1}")
             args = call.get("args") or {}
             tool = tool_by_name.get(name)
-            if used >= max_calls or result_chars >= MAX_REPO_TOOL_CONTEXT_CHARS:
+            if used >= max_calls or result_chars >= max_chars:
                 content = json.dumps({"error": f"仓库工具调用已达到 {max_calls} 次上限；请基于已有证据回答。"}, ensure_ascii=False)
                 status = "blocked"
             elif tool is None:
@@ -122,7 +123,7 @@ async def run_repo_tool_loop(llm, messages: list, bundle, *, on_trace: Callable[
                     content = json.dumps({"error": f"{type(exc).__name__}: {str(exc)[:200]}"}, ensure_ascii=False)
                     status = "failed"
             content = str(content)
-            remaining = MAX_REPO_TOOL_CONTEXT_CHARS - result_chars
+            remaining = max_chars - result_chars
             if remaining <= 0:
                 content = "【仓库工具结果总预算已用尽；请基于已有证据回答。】"
                 status = "blocked"
@@ -132,6 +133,16 @@ async def run_repo_tool_loop(llm, messages: list, bundle, *, on_trace: Callable[
             await emit({"kind": "tool", "tool": name, "status": status,
                         "summary": f"仓库只读工具 {name}{' 已完成' if status == 'succeeded' else ' 未执行'}"})
             transcript.append(ToolMessage(content=content, tool_call_id=call_id))
+
+
+def check_attachment_citations(output: str, tool_trace: list | None) -> list[str]:
+    """产出提到「附件」但本轮未调用任何附件证据工具时提示人工核对。"""
+    if "附件" not in output:
+        return []
+    for item in tool_trace or []:
+        if str(item.get("tool") or "").startswith("flowhub_attachment"):
+            return []
+    return ["产出提到附件但本轮未调用 flowhub_attachment.* 工具检索证据，需人工核对"]
 
 
 def quality_policy(mode: str | None) -> dict[str, bool | int]:
@@ -475,7 +486,7 @@ async def flowhub_read_snapshot(session: AsyncSession, user: User, prompt: str, 
 
 def build_graph(provider: LlmProvider, model: LlmProviderModel, system_prompt: str, flowhub_snapshot=None, emitter=None,
                 quality_mode: str = "accurate", repo_tools_factory=None, output_schema=None, cached_code_evidence=None,
-                force_code_reanalysis: bool = False):
+                force_code_reanalysis: bool = False, attachment_tools_factory=None):
     """构建 LangGraph 运行图。
 
     flowhub_snapshot：async (prompt) -> {context, trace, pre_answer}，FlowHub 基础能力钩子。
@@ -528,6 +539,9 @@ def build_graph(provider: LlmProvider, model: LlmProviderModel, system_prompt: s
         if output_schema:
             deliverable_rule = build_schema_output_instruction(output_schema)
         messages = [("system", f"{system_prompt}\n\n{deliverable_rule}\n事实约束：涉及 FlowHub 数据、任务状态、代码或项目结论时，只能依据提供的上下文；上下文没有依据时必须明确说明不确定，不得编造。代码结论必须紧随使用 [repo@commit:file:L行号 symbol] 格式的【代码证据】引用；未绑定代码仓库时，改为基于任务、表单、文档与项目上下文分析，并明确结论未经过实现验证。")]
+        if attachment_tools_factory is not None:
+            messages[0] = (messages[0][0],
+                messages[0][1] + "\n当前任务有附件证据工具 flowhub_attachment_list / flowhub_attachment_search；涉及附件结论时自行调用检索，引用格式 [附件@文档名:页码或路径:片段号]（序号与检索结果的 [seq] 对应）；无可用证据时明确说明「附件未解析/需人工核对」，不得编造。")
 
         flowhub_context = (state.get("flowhub_context") or "").strip()
         if flowhub_context:
@@ -549,9 +563,34 @@ def build_graph(provider: LlmProvider, model: LlmProviderModel, system_prompt: s
         trace = list(state.get("tool_trace") or [])
         # Quality revisions must reuse the first pass evidence. Re-running the
         # tool loop here multiplied calls by the number of quality attempts.
-        if repo_tools_factory is not None and int(state.get("attempt", 0)) == 0:
+        if (repo_tools_factory is not None or attachment_tools_factory is not None) and int(state.get("attempt", 0)) == 0:
             try:
-                bundle = await repo_tools_factory(state["prompt"], include_preflight=not bool(code_evidence) or force_code_reanalysis)
+                from flowhub_api.services.repo_mirror import RepoToolBundle
+                bundle = RepoToolBundle(tools=[], traces=[], evidence_context=[])
+                attachment_state: dict = {}
+                if attachment_tools_factory is not None:
+                    try:
+                        ab = await attachment_tools_factory(state["prompt"])
+                        bundle.tools += ab.tools
+                        bundle.traces += ab.traces
+                        bundle.evidence_context += ab.evidence_context
+                        attachment_state = {
+                            "candidates": ab.candidates,
+                            "parsed": [{"id": p.doc_id, "status": p.status, "parser": p.parser,
+                                        "cacheHit": p.cache_hit, "durationMs": p.duration_ms,
+                                        "entriesOrPages": p.entries_or_pages, "error": p.error} for p in ab.parsed],
+                            "injected": [{"docId": c.doc_id, "docName": c.doc_name, "location": c.location,
+                                          "seq": c.seq, "kind": c.kind, "text": c.text[:200]} for c in ab.injected],
+                            "totalChars": sum(len(c.text) for c in ab.injected),
+                            "durationMs": 0,
+                        }
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("附件工具构建失败: %s", exc)
+                if repo_tools_factory is not None:
+                    rb = await repo_tools_factory(state["prompt"], include_preflight=not bool(code_evidence) or force_code_reanalysis)
+                    bundle.tools += rb.tools
+                    bundle.traces += rb.traces
+                    bundle.evidence_context += rb.evidence_context
                 for item in bundle.traces:
                     await _emit("trace", {"kind": "tool", **item})
                 if bundle.tools:
@@ -562,6 +601,8 @@ def build_graph(provider: LlmProvider, model: LlmProviderModel, system_prompt: s
                     output, _ = await run_repo_tool_loop(
                         llm, messages, bundle,
                         on_trace=lambda item: _emit("trace", item),
+                        max_calls=MAX_REPO_TOOL_CALLS,
+                        max_chars=MAX_REPO_TOOL_CONTEXT_CHARS,
                     )
                     trace.extend({"tool": item["tool"], "status": item["status"], "summary": item["summary"]}
                                  for item in bundle.traces)
@@ -572,7 +613,8 @@ def build_graph(provider: LlmProvider, model: LlmProviderModel, system_prompt: s
                                           "durationMs": round((time.monotonic() - started) * 1000)})
                     return {"output": output, "tool_trace": trace,
                             "flowhub_context": f"{state.get('flowhub_context', '')}\n\n{tool_evidence}".strip(),
-                            "attempt": int(state.get("attempt", 0)) + 1, "code_evidence": code_evidence}
+                            "attempt": int(state.get("attempt", 0)) + 1, "code_evidence": code_evidence,
+                            "attachmentEvidence": attachment_state}
             except RepoToolLoopUnavailable as exc:
                 trace.append({"tool": "flowhub.repo.tools", "status": "unavailable",
                               "summary": f"模型不支持仓库工具调用，已回退静态代码上下文：{str(exc)[:160]}"})
@@ -820,6 +862,9 @@ async def execute_run(session: AsyncSession, run: ExpertRun, version: ExpertVers
             if lease_guard:
                 await session.commit()
             return bundle
+        async def attachment_tools(prompt):
+            from flowhub_api.services.attachment_tools import create_attachment_tool_bundle
+            return await create_attachment_tool_bundle(session, task, user)
         if lease_guard:
             await lease_guard()
             await session.commit()
@@ -828,7 +873,8 @@ async def execute_run(session: AsyncSession, run: ExpertRun, version: ExpertVers
                 graph = build_graph(provider, model, config['system_prompt'], flowhub_snapshot=snapshot,
                     emitter=emitter, quality_mode=config['quality_mode'], output_schema=config.get('schema'),
                     repo_tools_factory=repo_tools if fingerprint else None, cached_code_evidence=cached_code_evidence,
-                    force_code_reanalysis=force_code_reanalysis).compile(checkpointer=checkpointer)
+                    force_code_reanalysis=force_code_reanalysis,
+                    attachment_tools_factory=attachment_tools if run.task_id and task else None).compile(checkpointer=checkpointer)
                 graph_config = {'configurable': {'thread_id': run.trace_id}}
                 graph_input = {'run_id': run.id, 'prompt': run.input, 'write_intent': run.status == 'interrupted', 'history': config.get('history', '')}
                 if resume_approval:
@@ -853,12 +899,22 @@ async def execute_run(session: AsyncSession, run: ExpertRun, version: ExpertVers
         run.config_snapshot = {**config, 'codeAnalysis': {'mode': analysis_mode, 'fingerprint': fingerprint, 'evidence': evidence}}
         quality = str(result.get('quality_status') or 'needs_human_review')
         run.quality_result = {'status': quality, 'issues': list(result.get('validation_issues') or []), 'contentHash': content_hash(run.output)}
+        tool_trace = list(result.get('tool_trace') or [])
+        quality_issues = list(run.quality_result['issues'])
+        quality_issues.extend(check_attachment_citations(run.output or '', tool_trace))
+        quality = run.quality_result['status']
+        if quality_issues:
+            quality = 'needs_human_review'
+        run.quality_result = {'status': quality, 'issues': quality_issues[:3],
+                              'contentHash': content_hash(run.output)}
         run.status = 'succeeded' if run.output else 'failed'
         if not run.output:
             run.error = '模型未生成有效内容'
         await _snapshot_parsed_for_task(session, run, result)
         run.parsed = {**(run.parsed or {}), 'qualityStatus': quality,
-            'qualityIssues': run.quality_result['issues'], 'contentHash': run.quality_result['contentHash']}
+            'qualityIssues': run.quality_result['issues'],
+            'contentHash': run.quality_result['contentHash'],
+            'attachmentEvidence': result.get('attachmentEvidence') or {}}
         if emitter:
             for item in result.get('tool_trace') or []:
                 await emitter('trace', {'kind': 'tool', 'tool': item.get('tool', 'tool'),
