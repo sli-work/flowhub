@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     bootstrap_admin_password: str = "Admin@123456"
     bootstrap_admin_name: str = "系统管理员"
 
+    # 附件 OCR：本地 RapidOCR（CPU）；false 时扫描件标记「需 OCR」降级
+    attachment_ocr_enabled: bool = False
+
     # Provider API Key 加密（Fernet key 派生；留空回退 secret_key）
     agent_key_encrypt_secret: str = ""
 

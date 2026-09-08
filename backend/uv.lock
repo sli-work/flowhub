@@ -504,6 +504,15 @@ wheels = [
 ]
 
 [[package]]
+name = "et-xmlfile"
+version = "2.0.0"
+source = { registry = "http://192.168.239.230:8887/repository/mc-group-pypi/simple/" }
+sdist = { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/et-xmlfile/2.0.0/et_xmlfile-2.0.0.tar.gz", hash = "sha256:dab3f4764309081ce75662649be815c4c9081e88f0837825f90fd28317d4da54" }
+wheels = [
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/et-xmlfile/2.0.0/et_xmlfile-2.0.0-py3-none-any.whl", hash = "sha256:7a91720bc756843502c3b7504c77b8fe44217c85c537d85037f0f536151b2caa" },
+]
+
+[[package]]
 name = "fastapi"
 version = "0.141.1"
 source = { registry = "http://192.168.239.230:8887/repository/mc-group-pypi/simple/" }
@@ -517,6 +526,14 @@ dependencies = [
 sdist = { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/fastapi/0.141.1/fastapi-0.141.1.tar.gz", hash = "sha256:e8822fc40db1e1858054d7a949a888695bc9bdce70139178e33bd2871a453ca1" }
 wheels = [
     { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/fastapi/0.141.1/fastapi-0.141.1-py3-none-any.whl", hash = "sha256:bfb91aa2d334c61cb35ba9a116fc123b3d3df31640b801cf57a7a78ec3f603b3" },
+]
+
+[[package]]
+name = "flatbuffers"
+version = "25.12.19"
+source = { registry = "http://192.168.239.230:8887/repository/mc-group-pypi/simple/" }
+wheels = [
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/flatbuffers/25.12.19/flatbuffers-25.12.19-py2.py3-none-any.whl", hash = "sha256:7634f50c427838bb021c2d66a3d1168e9d199b0607e6329399f04846d42e20b4" },
 ]
 
 [[package]]
@@ -537,12 +554,17 @@ dependencies = [
     { name = "langgraph-checkpoint-postgres" },
     { name = "mcp" },
     { name = "minio" },
+    { name = "openpyxl" },
     { name = "pillow" },
     { name = "psycopg", extra = ["binary"] },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "pymupdf" },
+    { name = "python-docx" },
     { name = "python-jose", extra = ["cryptography"] },
     { name = "python-multipart" },
+    { name = "python-pptx" },
+    { name = "rapidocr-onnxruntime" },
     { name = "redis" },
     { name = "sqlalchemy" },
     { name = "uvicorn", extra = ["standard"] },
@@ -569,12 +591,17 @@ requires-dist = [
     { name = "langgraph-checkpoint-postgres", specifier = ">=2.0,<3.0" },
     { name = "mcp", specifier = ">=1.0,<2.0" },
     { name = "minio", specifier = ">=7.2,<8.0" },
+    { name = "openpyxl", specifier = ">=3.1.5" },
     { name = "pillow", specifier = ">=10,<12" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2,<4.0" },
     { name = "pydantic", specifier = ">=2.7,<3.0" },
     { name = "pydantic-settings", specifier = ">=2.3,<3.0" },
+    { name = "pymupdf", specifier = ">=1.28.2" },
+    { name = "python-docx", specifier = ">=1.2.0" },
     { name = "python-jose", extras = ["cryptography"], specifier = ">=3.3,<4.0" },
     { name = "python-multipart", specifier = ">=0.0.20,<1.0" },
+    { name = "python-pptx", specifier = ">=1.0.2" },
+    { name = "rapidocr-onnxruntime", specifier = ">=1.4.4" },
     { name = "redis", specifier = ">=5.0,<6.0" },
     { name = "sqlalchemy", specifier = ">=2.0,<3.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30,<1.0" },
@@ -1039,6 +1066,116 @@ wheels = [
 ]
 
 [[package]]
+name = "lxml"
+version = "6.1.3"
+source = { registry = "http://192.168.239.230:8887/repository/mc-group-pypi/simple/" }
+sdist = { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3.tar.gz", hash = "sha256:45222d94ddd511536f3b2f7d9deae3b2339b4ce0f075f1ca25703b07cad9dd21" }
+wheels = [
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp312-cp312-macosx_10_13_universal2.whl", hash = "sha256:0c0710ac085a157b593c38fbcacd950f15c4afa8e2057527185875ab302752bc" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:623c8799c17128753c65699f1c3aa32402657393a9ad6db09ed8b98ddf76611d" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:f683dc6300317700025e41d89a43e0276692ded16113a3c43eab704d605c58e5" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:379f8a75cf6eb7eef0af074b55f49ab73b868388a98de14646abcdfa4564bb11" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp312-cp312-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:b37772102d44bb6628186accca3a121b1fa3a6b3d97518a8c29a5229ca4c0d0a" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp312-cp312-manylinux_2_26_ppc64le.manylinux_2_28_ppc64le.whl", hash = "sha256:ddcf547bea2aee967d6a77779376a45e77e610e8465147a1f3d7e20d539d6e32" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp312-cp312-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:909f4e927bb051f7740d6367285fc60cdcfdaf0258c2dba4ff5ba7eadadc250c" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp312-cp312-manylinux_2_28_i686.whl", hash = "sha256:a5c18810318303ce9afb3f95e2ddb54834f96fa699a8600433fd5a93dcf44c56" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp312-cp312-manylinux_2_31_armv7l.whl", hash = "sha256:3e42265103fb385d8642a78672edf376c6f7e1d3598a7a4f9cb1278f2f6b5f6f" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp312-cp312-manylinux_2_38_riscv64.manylinux_2_39_riscv64.whl", hash = "sha256:21402998e4b78e7cce237d2788841aaa21ac9a4d1574d04dc2d12ee41ae807b5" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:38fc4e4e4e084e0bd491949482527d406788045c546d4f8789e93fc527b91385" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp312-cp312-musllinux_1_2_armv7l.whl", hash = "sha256:5609efdb0d3c95499c00046bc53648b3482ec2175b5503d6e611b3f0555dc71d" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp312-cp312-musllinux_1_2_ppc64le.whl", hash = "sha256:97ce49699d87ebf8aad631b55d65b33219a4f1bfefbbf5bff19dc9af160aeaf9" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp312-cp312-musllinux_1_2_riscv64.whl", hash = "sha256:48542c9acba9ff9450bd18d871d2c2c8787fdb283572b623d206f1b927cd7d9e" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:c55e71a9b1db1f107efb60da49c093689b74c5c31a708e5379e2fd9439d4fbb5" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp312-cp312-win32.whl", hash = "sha256:b3ff39654f0ce6ebd4db154211136dbe7e8157bcc3bed2344c87f32c7c6ecb6c" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp312-cp312-win_amd64.whl", hash = "sha256:3e9a00d1c2c30936f7add097c41afc5da6556c580909104aafd382cac92a855c" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp312-cp312-win_arm64.whl", hash = "sha256:1aeca87830c4fe649dcf93fe2b059525b71c72587f21be4ae4af7103082a79fa" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp313-cp313-macosx_10_13_universal2.whl", hash = "sha256:3a48093cdb058a93af842ede9703520e810b05dcd0fc6d7190a06376c3bfb6bd" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp313-cp313-macosx_10_13_x86_64.whl", hash = "sha256:887c021d9a977cff89cb273047c1352997b772a8908a25c21836861f69b92be1" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp313-cp313-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:611a51e61c92f62345a50b0035df6fc0d678f9299f33728826d831598862f59d" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:b477912f42c5c33405a10c759d22f80cf5af043ae02d95b9d8e5e5bc555739ed" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp313-cp313-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:5cffe18571ccc51d742cd08cbb3f8b756de9311d18c7ea98f5d92f37b8fb60c2" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp313-cp313-manylinux_2_26_ppc64le.manylinux_2_28_ppc64le.whl", hash = "sha256:75cc6569e86be5785b6188ef1642670c6adbc984e81ec35e224842ecd9eefcc8" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp313-cp313-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:d85dfab42dd672f87a7f76e9de7172962aee69fa12044f0d6e1a23cbd53fb80e" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp313-cp313-manylinux_2_28_i686.whl", hash = "sha256:42632b4024ab24a6b488f559ac851312509888b6b80ae2aa11cf29a646a0d245" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp313-cp313-manylinux_2_31_armv7l.whl", hash = "sha256:febd35ef45f603c2d74b74655efdbf45e14f55fc0aef4ac82b663ca829b283e0" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp313-cp313-manylinux_2_38_riscv64.manylinux_2_39_riscv64.whl", hash = "sha256:a43b3bdf11e477dc7770609d3477316f974354dfc8425d596f64f471cc8daf6e" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp313-cp313-musllinux_1_2_aarch64.whl", hash = "sha256:5d582042c69857c364e8153de6e18e0da9b7b515a6a8113caf69a6ec8e0520f2" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp313-cp313-musllinux_1_2_armv7l.whl", hash = "sha256:8e49a646acfab83c68974f4aa1d0a2acca9e88d7d627ae0fc13201b14b76d310" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp313-cp313-musllinux_1_2_ppc64le.whl", hash = "sha256:0dee106e9aa97fb00541b1ed7827070564d0549c3d3fba8920e6b20fd980f748" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp313-cp313-musllinux_1_2_riscv64.whl", hash = "sha256:dd5e90f34cffcfed97f36cf066325773d2b6021c60c29942e53a18b028501b1d" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:d9b3e7d71bf6acff341233417abbdface29c647e3113892d9aaedc02eb4aa2bc" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp313-cp313-win32.whl", hash = "sha256:160fcf381f76c3aeac28a756bec44f48942a8f7245a87aa28e3a523b4d90cd87" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp313-cp313-win_amd64.whl", hash = "sha256:e477aca0bc0d19f3b4ae9e4f2a1cfd687c31bf772d78734910658186b40b2477" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp313-cp313-win_arm64.whl", hash = "sha256:b1cc980905221a5d8b3c476330730b3adb40ff80add71ffbdb6215ba055656f1" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp314-cp314-macosx_10_15_universal2.whl", hash = "sha256:2bec13085dc8ef48a3fe62f7dfcacfeda2c785cdf19cc8eeda2bb9ed081da165" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp314-cp314-macosx_10_15_x86_64.whl", hash = "sha256:4f4db7c7e954d289d71878938348b3d91b904a3e8210a11939359fb758a58e7d" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp314-cp314-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:2cae5d5c90a62d9139c512a0cb1aad1d182b022b5740daea2617eb5bf7fc658e" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:c6c0c13128a32eb04a51357e56a094e13aa8e6d3d1884de2e9ae923f6915e1a8" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp314-cp314-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:2221e88679d1351e9a40aaee54bc65679b9795bbd0160bc3d5e36b163344eb75" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp314-cp314-manylinux_2_26_ppc64le.manylinux_2_28_ppc64le.whl", hash = "sha256:cfb398886a7eb4c719161c3efcff2a1248febc53a4d8e5072d2d8a87fed84ac9" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp314-cp314-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:a7eb78ba28b187e1e9203a55c60fcf70df2d22cb205fe6d51b9383d6097419f0" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp314-cp314-manylinux_2_28_i686.whl", hash = "sha256:ea6b1e9105b4b24a34c722432d9fb578f9ed83af21fa1abda639011e0f22bbb6" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp314-cp314-manylinux_2_31_armv7l.whl", hash = "sha256:e8b17e23df3e827a69d25af70990ca2420e92668aaffaeeb3cd2351d7916a023" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp314-cp314-manylinux_2_38_riscv64.manylinux_2_39_riscv64.whl", hash = "sha256:1b7c37339d7e75cab9a123a04248e243cefefb302ad6db566ea0c77cbcde421e" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp314-cp314-musllinux_1_2_aarch64.whl", hash = "sha256:83e3a51e7933db700a0da0db31849db3a24022d9970da9bb73001e1d0326fd92" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp314-cp314-musllinux_1_2_armv7l.whl", hash = "sha256:9bde9ae026a55b9a192078dfa6e27dd0ca4a050171ab6272e92f97b757dfdf48" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp314-cp314-musllinux_1_2_ppc64le.whl", hash = "sha256:1a635e837b50a1819bebfedaac5916498ea024120969da8790500148fb0a894d" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp314-cp314-musllinux_1_2_riscv64.whl", hash = "sha256:d0c5c362bc94f1929dc7e96e715bbe7bd17037f802e6d8f0d1545df9133c0559" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp314-cp314-musllinux_1_2_x86_64.whl", hash = "sha256:c59e4265608da6a041f54646ecc0c9ecdbb19aaf14c4c684bb6c2114998cc415" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp314-cp314-win32.whl", hash = "sha256:2e62c569ec7531b679b184cbfe335c501c1d13c4b363560013019962eb630e6d" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp314-cp314-win_amd64.whl", hash = "sha256:66299564c046bc7e0cc5de5106601eae907e9fa5904cd68a323380a8502f7861" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp314-cp314-win_arm64.whl", hash = "sha256:ebd054ad1737a68fb7c5c073d405cef2b88bb824e294de3b4a4e995b47f0e376" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp314-cp314t-macosx_10_15_universal2.whl", hash = "sha256:5a143e6207579de8baeded4eaac9134413200359f1969d636f0bfb98ee8c3c8f" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp314-cp314t-macosx_10_15_x86_64.whl", hash = "sha256:a1cec0f99b9b914d39176347a93b7610dc09324491aee1cbc57cd291a41a1d55" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp314-cp314t-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:f6b9d2aad499c769ee8287609ab0e6de99d8bcea99c6e6c2e64945259fd52fb2" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp314-cp314t-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:28a23fefdb345b2d4d0ff2860571b5ff9a89a28b6a120f720e8fb0324d346626" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp314-cp314t-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:545ccc14fb05485f48b4439ec35beb16d5b5280eb6c81c658bd4707a2a119414" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp314-cp314t-manylinux_2_26_ppc64le.manylinux_2_28_ppc64le.whl", hash = "sha256:93476b6514b373fc6ca67d26c442784f7807c86f00635bfe79f935c3eab2af17" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp314-cp314t-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:8db38ff3fb7aee7d6a82ae4da2eef1178656fe1216841fbd24870062a9d60473" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp314-cp314t-manylinux_2_28_i686.whl", hash = "sha256:25f4118c438f96bb466e83108506d03d5c31b1bd2387e83e5b070bda6ded9c37" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp314-cp314t-manylinux_2_31_armv7l.whl", hash = "sha256:1beb0f9909b26cee938df9ba56b15252a84429b1fc30ce6fca161390b9789a70" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp314-cp314t-manylinux_2_38_riscv64.manylinux_2_39_riscv64.whl", hash = "sha256:3a27ac6c780c8b8a1cd231b58407634cafc1c4cc28cd6c7141362df0f36351e7" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp314-cp314t-musllinux_1_2_aarch64.whl", hash = "sha256:a1932d7ce78a561367512c594fe66eac2b2ec9b9264cfd9b5f950622f4a116e2" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp314-cp314t-musllinux_1_2_armv7l.whl", hash = "sha256:7d0f5976aa2701996f759b30172925829867547bb073af0ae67d1307a0f0262c" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp314-cp314t-musllinux_1_2_ppc64le.whl", hash = "sha256:c5e7ce578aa8a80910a72a8ca0bbea3baae10100827249001999726a788456d8" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp314-cp314t-musllinux_1_2_riscv64.whl", hash = "sha256:d97c5227621af74b111882a290b10f371780a38eef9d9e730408fba2259b52fb" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:da707f14ea3c35ee463d50acd596d6488e4b2b4ae7cf77a5bf93f55c023d63e8" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp314-cp314t-win32.whl", hash = "sha256:9efe56a68179f3adc4de41861c9358931db03837c48dd5e1c78077b84dd07f3a" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp314-cp314t-win_amd64.whl", hash = "sha256:c9389b3784b56c58d933b5e0aecdf28f901b073ff385358d8a7d40907f6e14b2" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp314-cp314t-win_arm64.whl", hash = "sha256:32a409be3190b088f960ac92bfedfbef2f86c49ff940765e1548177592d20026" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp315-cp315-macosx_10_15_universal2.whl", hash = "sha256:6ea2f13dce778ca072ccee598bca46a092ce192e8fd907b6c1f0e52c800529a0" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp315-cp315-macosx_10_15_x86_64.whl", hash = "sha256:c581b1d68b3845fb86c6b2983e755b29bf001461c59fa411d2c26a911b6559a9" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp315-cp315-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:2e01125896585139453cab8cb235893644d8815d7509520da95ae3ee8d1c1f79" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp315-cp315-manylinux_2_26_ppc64le.manylinux_2_28_ppc64le.whl", hash = "sha256:290f66b97ede0e552e1cb44a0fd8a74f9753ee635b50830a0b122fb72788d015" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp315-cp315-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:73fc05988ed20809450474ba760a87c8ad4e455fc09783c02195e56ec634b41a" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp315-cp315-manylinux_2_31_armv7l.whl", hash = "sha256:dc3a44689eea43eab836e5c98a8ab015dc2419987d1ea6eafc7c590cdff86bed" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp315-cp315-manylinux_2_38_riscv64.manylinux_2_39_riscv64.whl", hash = "sha256:209c3ccbfe35a04ac6d24f0611f9d1cbf8025d49991b14acd935236234d6c156" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp315-cp315-musllinux_1_2_aarch64.whl", hash = "sha256:2f5b2a2b9811b853b39bfa41367c6d78747b8e3e80e07fc5a24aae295c1a4d7d" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp315-cp315-musllinux_1_2_armv7l.whl", hash = "sha256:6a406d0b3cb207b0fa460ed4dc93e866f44f105da0169361cb18ff998a44c7f0" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp315-cp315-musllinux_1_2_ppc64le.whl", hash = "sha256:53258656846f5c48996b882fb4b135885e088a3ad3d96b4bc0530f95124d1f69" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp315-cp315-musllinux_1_2_riscv64.whl", hash = "sha256:aa633613ff907ea91b9b0489a1f0da1b8725d8c6ccec6b77e8a1c9c235044bb0" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp315-cp315-musllinux_1_2_x86_64.whl", hash = "sha256:90f709b9accab6b2e4d14f5c8718203877a0486bcb3afd74d8b539ecd1e961d4" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp315-cp315-win32.whl", hash = "sha256:b4fc6b03b9d9d90557274f571ab30e7fbbfc527955536935d96f98b6817a86e4" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp315-cp315-win_amd64.whl", hash = "sha256:33cadd956b667997e4de1635fce9541f2e8ede2038fcde8cf55aa14d571d1bad" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp315-cp315-win_arm64.whl", hash = "sha256:8a330c0ee5fa318c7b5cbbaad882baeca3f570357e7eb25ab34bf31008150758" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp315-cp315t-macosx_10_15_universal2.whl", hash = "sha256:0bf5a3e397df2ec4258eb5eea4c1ac6cf013ca1abd04a176903bff20a70021fe" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp315-cp315t-macosx_10_15_x86_64.whl", hash = "sha256:13d22c0d57355366b393936acf6b98a5e0edeadddd3fccbc6a846c50a76b8741" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp315-cp315t-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:cad7617727a96d189bd6f979d0fadf765198c7934e85f4edaba9bf3ad919a300" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp315-cp315t-manylinux_2_26_ppc64le.manylinux_2_28_ppc64le.whl", hash = "sha256:cae82b5ca24b0c2beedb269f6e2a96f466acd926879ab00ae19f1a65cbf9ffb0" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp315-cp315t-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:69cafd61aea04ebb3502c93c2aaa568b12931ca0802231e0b5de76bf8b6e74bd" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp315-cp315t-manylinux_2_31_armv7l.whl", hash = "sha256:dc205732d593118cf701d986f40e9de7801bb2e371cb189ddbda9b7348f4d97e" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp315-cp315t-manylinux_2_38_riscv64.manylinux_2_39_riscv64.whl", hash = "sha256:88e719b9437f148f7e1465df845c758dd1598618cbea3a2fd1e61a715542f2b2" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp315-cp315t-musllinux_1_2_aarch64.whl", hash = "sha256:40983eabefd13da003e68170928c7acc011f0d095eefce5871a3c71c9385fb9a" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp315-cp315t-musllinux_1_2_armv7l.whl", hash = "sha256:fad67b12ffe0f71e02b4932b04883cbc76a9072bbd30731409d3523cf058b011" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp315-cp315t-musllinux_1_2_ppc64le.whl", hash = "sha256:6cd11e7550d89e551a87dcec30f04b1fca32e86b68708aa01a4daa455d8605e5" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp315-cp315t-musllinux_1_2_riscv64.whl", hash = "sha256:ca0ec532ad2f5ba1e5ec120ac157769c57f01855b3d8bf37213f5d88abd9ba0a" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp315-cp315t-musllinux_1_2_x86_64.whl", hash = "sha256:e99e09ab7741f1281e2677f4c0058c7f5267d182530b09c87e4f6aa26adf3887" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp315-cp315t-win32.whl", hash = "sha256:ace1d2c83b2bd24db5940600541140e87a325e119cb32d5fa9ad720d7e76648e" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp315-cp315t-win_amd64.whl", hash = "sha256:b49638355ea3bebba70da783ccbc630fd72afa16bc46c54474bfa1f9a915bbc6" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/lxml/6.1.3/lxml-6.1.3-cp315-cp315t-win_arm64.whl", hash = "sha256:5a721a98c649855963811b59b55755b30566e7f7fc40bdc9803d66dee9f811cf" },
+]
+
+[[package]]
 name = "mako"
 version = "1.4.1"
 source = { registry = "http://192.168.239.230:8887/repository/mc-group-pypi/simple/" }
@@ -1237,6 +1374,38 @@ wheels = [
 ]
 
 [[package]]
+name = "onnxruntime"
+version = "1.29.0"
+source = { registry = "http://192.168.239.230:8887/repository/mc-group-pypi/simple/" }
+dependencies = [
+    { name = "flatbuffers" },
+    { name = "numpy" },
+    { name = "packaging" },
+    { name = "protobuf" },
+]
+wheels = [
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/onnxruntime/1.29.0/onnxruntime-1.29.0-cp312-cp312-macosx_14_0_arm64.whl", hash = "sha256:3a3814c041251d6a77fdf513fb282056538ee826d2f1178a0df3c549d3fff6ba" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/onnxruntime/1.29.0/onnxruntime-1.29.0-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:d2fb19e848f7c33ed8d3182b52504aaa11c5e8da438bbb47296f85b133cbcf6b" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/onnxruntime/1.29.0/onnxruntime-1.29.0-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:2b80d8c7ec2cc7438e4da3760b88c24568cba72c9ace96d668800a6c79419acb" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/onnxruntime/1.29.0/onnxruntime-1.29.0-cp312-cp312-win_amd64.whl", hash = "sha256:4acf2b4948b7ede87221ca6332344b8facdc8059d6ac751a7d367d04532b02dd" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/onnxruntime/1.29.0/onnxruntime-1.29.0-cp312-cp312-win_arm64.whl", hash = "sha256:dc61a79cb39afd66ab3f01fd2c23591a7f01de89c1668e1fb6315067fc279164" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/onnxruntime/1.29.0/onnxruntime-1.29.0-cp313-cp313-macosx_14_0_arm64.whl", hash = "sha256:be0f8ed688cfb1d4d5765a137193b7bfab0c8ea214eed99260b380bb525a3a7f" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/onnxruntime/1.29.0/onnxruntime-1.29.0-cp313-cp313-manylinux_2_28_aarch64.whl", hash = "sha256:d67673c5367727860922c5262d724472f1b5539fb7ccf4c81a638f9b71719803" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/onnxruntime/1.29.0/onnxruntime-1.29.0-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:e2128f31f449e922c62dbe5d8b6b7b079f0bcaf2d56a102fa203cb6e5bb5ab19" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/onnxruntime/1.29.0/onnxruntime-1.29.0-cp313-cp313-win_amd64.whl", hash = "sha256:2945e1f82f81f27e88decea88c7861f45baea23818950d467bf3909aa303119e" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/onnxruntime/1.29.0/onnxruntime-1.29.0-cp313-cp313-win_arm64.whl", hash = "sha256:4b940b0d777590c7e20bf298f5c16af1ea6ad1b400a1c822a6be192f64f4d954" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/onnxruntime/1.29.0/onnxruntime-1.29.0-cp313-cp313t-manylinux_2_28_aarch64.whl", hash = "sha256:533f8370ce124304e5cb08ab961836cf755631e3dd77adc5f3bbdab70c2b7d99" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/onnxruntime/1.29.0/onnxruntime-1.29.0-cp313-cp313t-manylinux_2_28_x86_64.whl", hash = "sha256:c1ad3f437153fe77f9d01a08fbaac0beb030e09b8a80ace1603bcf69b6c95481" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/onnxruntime/1.29.0/onnxruntime-1.29.0-cp314-cp314-macosx_14_0_arm64.whl", hash = "sha256:e74b278af1d949876f5d91d1268fd6c680e79f2bac194967394eaba9fdf69e7e" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/onnxruntime/1.29.0/onnxruntime-1.29.0-cp314-cp314-manylinux_2_28_aarch64.whl", hash = "sha256:939e5d65f332e6d399774b2bd0d3559fd8fa629c1e77833db29d968d2384f23d" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/onnxruntime/1.29.0/onnxruntime-1.29.0-cp314-cp314-manylinux_2_28_x86_64.whl", hash = "sha256:6c0c37b92f67ed68dd36221ce0403e1d9bd4f7efce724439978a2597848530e5" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/onnxruntime/1.29.0/onnxruntime-1.29.0-cp314-cp314-win_amd64.whl", hash = "sha256:4a3129ae56e70d2618ff773920166916310370a7e3cacb60b9e0e8910092725f" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/onnxruntime/1.29.0/onnxruntime-1.29.0-cp314-cp314-win_arm64.whl", hash = "sha256:e417ef8628dcce310d2d53023e750ea298ec14d4341ae6dc3a572bfd9bc7fa97" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/onnxruntime/1.29.0/onnxruntime-1.29.0-cp314-cp314t-manylinux_2_28_aarch64.whl", hash = "sha256:11264bb58f7b7cf6af835ab10d36838d73680580820fd6f51d90124a1ca8f449" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/onnxruntime/1.29.0/onnxruntime-1.29.0-cp314-cp314t-manylinux_2_28_x86_64.whl", hash = "sha256:1ea91cef3b971506e51ae9c37c16d027774ec64994a524ec1bdfb027d68a9832" },
+]
+
+[[package]]
 name = "openai"
 version = "2.54.0"
 source = { registry = "http://192.168.239.230:8887/repository/mc-group-pypi/simple/" }
@@ -1253,6 +1422,37 @@ dependencies = [
 sdist = { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/openai/2.54.0/openai-2.54.0.tar.gz", hash = "sha256:e3e6f8bc1ba30ddf381ace1a14340eed381cb984a1a59bd0f34b5be3b5d49cfa" }
 wheels = [
     { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/openai/2.54.0/openai-2.54.0-py3-none-any.whl", hash = "sha256:89089789197ccdb87f173a03145ed1598d00795220c93e96cf712b1cbf5e5f2b" },
+]
+
+[[package]]
+name = "opencv-python"
+version = "5.0.0.93"
+source = { registry = "http://192.168.239.230:8887/repository/mc-group-pypi/simple/" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/opencv-python/5.0.0.93/opencv_python-5.0.0.93.tar.gz", hash = "sha256:66aac3e5b5faa48d4025816592f3af19e4bfc2c68dec067bae2dbb4ca10aa9e2" }
+wheels = [
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/opencv-python/5.0.0.93/opencv_python-5.0.0.93-cp37-abi3-macosx_13_0_arm64.whl", hash = "sha256:198a75138241810206a17c829dbcc40a7cb1841cda538ca86cbbfc6c7d95f898" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/opencv-python/5.0.0.93/opencv_python-5.0.0.93-cp37-abi3-macosx_14_0_x86_64.whl", hash = "sha256:6bbc32f59e1b1a7db7b39c81f63d00625f041d333037fd8702f6da52cc39108b" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/opencv-python/5.0.0.93/opencv_python-5.0.0.93-cp37-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:e2b4272e736836f66c2d176e43ab8101f3a00d45654916399f52e150c58981ac" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/opencv-python/5.0.0.93/opencv_python-5.0.0.93-cp37-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:f8b6d0a212253dd26ad338c812f1f23ca118fdf05a9c8c6b9444f161aa8c5881" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/opencv-python/5.0.0.93/opencv_python-5.0.0.93-cp37-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:08d5d91d967b58d6db86073b2ad3eaef88ca4ebdfd45c9059bf59f5ded0c7ad2" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/opencv-python/5.0.0.93/opencv_python-5.0.0.93-cp37-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:c8de2dec111122a02e8beb28e16c31904992dfd6186560b142a92c71403c1039" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/opencv-python/5.0.0.93/opencv_python-5.0.0.93-cp37-abi3-win32.whl", hash = "sha256:4b4b1a34c79bf8d3738e3cfe9a9e67b51a79663f6b692cbdad8c31f570da4157" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/opencv-python/5.0.0.93/opencv_python-5.0.0.93-cp37-abi3-win_amd64.whl", hash = "sha256:f90ba04b8f73bc5c3814037699739f0156f597338a98f05956c684e7c3ca10d2" },
+]
+
+[[package]]
+name = "openpyxl"
+version = "3.1.5"
+source = { registry = "http://192.168.239.230:8887/repository/mc-group-pypi/simple/" }
+dependencies = [
+    { name = "et-xmlfile" },
+]
+sdist = { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/openpyxl/3.1.5/openpyxl-3.1.5.tar.gz", hash = "sha256:cf0e3cf56142039133628b5acffe8ef0c12bc902d2aadd3e0fe5878dc08d1050" }
+wheels = [
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/openpyxl/3.1.5/openpyxl-3.1.5-py2.py3-none-any.whl", hash = "sha256:5282c12b107bffeef825f4617dc029afaf41d0ea60823bbb665ef3079dc79de2" },
 ]
 
 [[package]]
@@ -1431,6 +1631,21 @@ wheels = [
 ]
 
 [[package]]
+name = "protobuf"
+version = "7.36.1"
+source = { registry = "http://192.168.239.230:8887/repository/mc-group-pypi/simple/" }
+sdist = { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/protobuf/7.36.1/protobuf-7.36.1.tar.gz", hash = "sha256:d0f6470f0ce2b84e3feaea2d4b816378b37ba4d4aa08a274305373de93e2d524" }
+wheels = [
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/protobuf/7.36.1/protobuf-7.36.1-cp310-abi3-macosx_10_9_universal2.whl", hash = "sha256:3cf2ee25d006cee57294a1196ea43b37feb78e0dcd1e8af5c1aeddb777655aca" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/protobuf/7.36.1/protobuf-7.36.1-cp310-abi3-manylinux2014_aarch64.whl", hash = "sha256:43d3d37b1eb24c113b9b7d02008cac44e423f00b611b7781ae998d7623972969" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/protobuf/7.36.1/protobuf-7.36.1-cp310-abi3-manylinux2014_s390x.whl", hash = "sha256:39c518c05586c016d7874ff6079ee115bcec1ea5fbb1d177fbf7867ef4c67e44" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/protobuf/7.36.1/protobuf-7.36.1-cp310-abi3-manylinux2014_x86_64.whl", hash = "sha256:97198b77e369a0abd8e262b8f6c7266c55ddb796a3a12c76d7b8881188ed83aa" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/protobuf/7.36.1/protobuf-7.36.1-cp310-abi3-win32.whl", hash = "sha256:0b53ce95272aad50ad25d7ff03373743209822e8ba42ea7fad27d2bee1547d00" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/protobuf/7.36.1/protobuf-7.36.1-cp310-abi3-win_amd64.whl", hash = "sha256:51139351435d9b43d88a55eaa49fb6f737fbb478fb0cbf2cf694d1a04a9d3363" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/protobuf/7.36.1/protobuf-7.36.1-py3-none-any.whl", hash = "sha256:7d951e46b3f963d6c264c367c437921de9d5aedd9c3f9612b9077736b4e3ad5c" },
+]
+
+[[package]]
 name = "psycopg"
 version = "3.3.4"
 source = { registry = "http://192.168.239.230:8887/repository/mc-group-pypi/simple/" }
@@ -1507,6 +1722,36 @@ source = { registry = "http://192.168.239.230:8887/repository/mc-group-pypi/simp
 sdist = { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/pyasn1/0.6.4/pyasn1-0.6.4.tar.gz", hash = "sha256:9c447d8431c947fe4c8febc4ed9e760bc29011a5b01e5c74b67025bd9fb8ce81" }
 wheels = [
     { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/pyasn1/0.6.4/pyasn1-0.6.4-py3-none-any.whl", hash = "sha256:deda9277cfd454080ec40b207fb6df82206a3a2688735233cdcd8d3d565f088b" },
+]
+
+[[package]]
+name = "pyclipper"
+version = "1.4.0"
+source = { registry = "http://192.168.239.230:8887/repository/mc-group-pypi/simple/" }
+sdist = { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/pyclipper/1.4.0/pyclipper-1.4.0.tar.gz", hash = "sha256:9882bd889f27da78add4dd6f881d25697efc740bf840274e749988d25496c8e1" }
+wheels = [
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/pyclipper/1.4.0/pyclipper-1.4.0-cp312-cp312-macosx_10_13_universal2.whl", hash = "sha256:222ac96c8b8281b53d695b9c4fedc674f56d6d4320ad23f1bdbd168f4e316140" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/pyclipper/1.4.0/pyclipper-1.4.0-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:f3672dbafbb458f1b96e1ee3e610d174acb5ace5bd2ed5d1252603bb797f2fc6" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/pyclipper/1.4.0/pyclipper-1.4.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:d1f807e2b4760a8e5c6d6b4e8c1d71ef52b7fe1946ff088f4fa41e16a881a5ca" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/pyclipper/1.4.0/pyclipper-1.4.0-cp312-cp312-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:ce1f83c9a4e10ea3de1959f0ae79e9a5bd41346dff648fee6228ba9eaf8b3872" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/pyclipper/1.4.0/pyclipper-1.4.0-cp312-cp312-win32.whl", hash = "sha256:3ef44b64666ebf1cb521a08a60c3e639d21b8c50bfbe846ba7c52a0415e936f4" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/pyclipper/1.4.0/pyclipper-1.4.0-cp312-cp312-win_amd64.whl", hash = "sha256:d1e5498d883b706a4ce636247f0d830c6eb34a25b843a1b78e2c969754ca9037" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/pyclipper/1.4.0/pyclipper-1.4.0-cp313-cp313-macosx_10_13_universal2.whl", hash = "sha256:d49df13cbb2627ccb13a1046f3ea6ebf7177b5504ec61bdef87d6a704046fd6e" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/pyclipper/1.4.0/pyclipper-1.4.0-cp313-cp313-macosx_10_13_x86_64.whl", hash = "sha256:37bfec361e174110cdddffd5ecd070a8064015c99383d95eb692c253951eee8a" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/pyclipper/1.4.0/pyclipper-1.4.0-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:14c8bdb5a72004b721c4e6f448d2c2262d74a7f0c9e3076aeff41e564a92389f" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/pyclipper/1.4.0/pyclipper-1.4.0-cp313-cp313-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:f2a50c22c3a78cb4e48347ecf06930f61ce98cf9252f2e292aa025471e9d75b1" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/pyclipper/1.4.0/pyclipper-1.4.0-cp313-cp313-win32.whl", hash = "sha256:c9a3faa416ff536cee93417a72bfb690d9dea136dc39a39dbbe1e5dadf108c9c" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/pyclipper/1.4.0/pyclipper-1.4.0-cp313-cp313-win_amd64.whl", hash = "sha256:d4b2d7c41086f1927d14947c563dfc7beed2f6c0d9af13c42fe3dcdc20d35832" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/pyclipper/1.4.0/pyclipper-1.4.0-cp314-cp314-macosx_10_15_universal2.whl", hash = "sha256:7c87480fc91a5af4c1ba310bdb7de2f089a3eeef5fe351a3cedc37da1fcced1c" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/pyclipper/1.4.0/pyclipper-1.4.0-cp314-cp314-macosx_10_15_x86_64.whl", hash = "sha256:81d8bb2d1fb9d66dc7ea4373b176bb4b02443a7e328b3b603a73faec088b952e" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/pyclipper/1.4.0/pyclipper-1.4.0-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:773c0e06b683214dcfc6711be230c83b03cddebe8a57eae053d4603dd63582f9" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/pyclipper/1.4.0/pyclipper-1.4.0-cp314-cp314-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:9bc45f2463d997848450dbed91c950ca37c6cf27f84a49a5cad4affc0b469e39" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/pyclipper/1.4.0/pyclipper-1.4.0-cp314-cp314-win32.whl", hash = "sha256:0b8c2105b3b3c44dbe1a266f64309407fe30bf372cf39a94dc8aaa97df00da5b" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/pyclipper/1.4.0/pyclipper-1.4.0-cp314-cp314-win_amd64.whl", hash = "sha256:6c317e182590c88ec0194149995e3d71a979cfef3b246383f4e035f9d4a11826" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/pyclipper/1.4.0/pyclipper-1.4.0-cp314-cp314t-macosx_10_15_universal2.whl", hash = "sha256:f160a2c6ba036f7eaf09f1f10f4fbfa734234af9112fb5187877efed78df9303" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/pyclipper/1.4.0/pyclipper-1.4.0-cp314-cp314t-macosx_10_15_x86_64.whl", hash = "sha256:a9f11ad133257c52c40d50de7a0ca3370a0cdd8e3d11eec0604ad3c34ba549e9" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/pyclipper/1.4.0/pyclipper-1.4.0-cp314-cp314t-win32.whl", hash = "sha256:bbc827b77442c99deaeee26e0e7f172355ddb097a5e126aea206d447d3b26286" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/pyclipper/1.4.0/pyclipper-1.4.0-cp314-cp314t-win_amd64.whl", hash = "sha256:29dae3e0296dff8502eeb7639fcfee794b0eec8590ba3563aee28db269da6b04" },
 ]
 
 [[package]]
@@ -1676,6 +1921,24 @@ crypto = [
 ]
 
 [[package]]
+name = "pymupdf"
+version = "1.28.2"
+source = { registry = "http://192.168.239.230:8887/repository/mc-group-pypi/simple/" }
+sdist = { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/pymupdf/1.28.2/pymupdf-1.28.2.tar.gz", hash = "sha256:5e0be7908a715aa20333caddd73f1d6f01e4cd0c26e869fa2dd0b7f344da2249" }
+wheels = [
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/pymupdf/1.28.2/pymupdf-1.28.2-cp310-abi3-macosx_10_15_x86_64.whl", hash = "sha256:5fc315b425ff1f7afdd1ea2f348205cb19b806767daae7ce4d64115799c2bae1" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/pymupdf/1.28.2/pymupdf-1.28.2-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:7113846b35dbf0a033f088e4f4fb543dabeb4b0b12c112966a1ca1ee2d5eacae" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/pymupdf/1.28.2/pymupdf-1.28.2-cp310-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:3050a233dde1211efe89ada74e2add6238436434159f46097a1423aad2842545" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/pymupdf/1.28.2/pymupdf-1.28.2-cp310-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:397d6715c1f0df7548a92d0afd8ce370fc48fa47aeefac16be2bc04a16a8227f" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/pymupdf/1.28.2/pymupdf-1.28.2-cp310-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:f89fb2d86d07d643a269f17a093105057e20c79c1d06c103b53600067b6d2b01" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/pymupdf/1.28.2/pymupdf-1.28.2-cp310-abi3-win32.whl", hash = "sha256:530ef543a3885b3b81cb72a854e7c5a625a9233201221132bb6c31698c6a2bdb" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/pymupdf/1.28.2/pymupdf-1.28.2-cp310-abi3-win_amd64.whl", hash = "sha256:ebd244918798502d7b4504c90410d1711a4d7675a32584ca30f1bab419ecbffe" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/pymupdf/1.28.2/pymupdf-1.28.2-cp310-abi3-win_arm64.whl", hash = "sha256:ffe91a24edc75c80da2a4b62f50fc0f54632d34fc8fe4cbc48e5c7ff07cf8fb4" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/pymupdf/1.28.2/pymupdf-1.28.2-cp313-abi3-pyemscripten_2025_0_wasm32.whl", hash = "sha256:2e1b574c0fd2cb238021033fd3c0f9c4388816638df064e4bfb56d9d81736dc8" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/pymupdf/1.28.2/pymupdf-1.28.2-cp314-cp314t-manylinux_2_28_x86_64.whl", hash = "sha256:fd481ed48bef56305c41fb7e05a055c03345c899c7b101dad086258b438f8168" },
+]
+
+[[package]]
 name = "pytest"
 version = "8.4.2"
 source = { registry = "http://192.168.239.230:8887/repository/mc-group-pypi/simple/" }
@@ -1701,6 +1964,19 @@ dependencies = [
 sdist = { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/pytest-asyncio/0.26.0/pytest_asyncio-0.26.0.tar.gz", hash = "sha256:c4df2a697648241ff39e7f0e4a73050b03f123f760673956cf0d72a4990e312f" }
 wheels = [
     { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/pytest-asyncio/0.26.0/pytest_asyncio-0.26.0-py3-none-any.whl", hash = "sha256:7b51ed894f4fbea1340262bdae5135797ebbe21d8638978e35d31c6d19f72fb0" },
+]
+
+[[package]]
+name = "python-docx"
+version = "1.2.0"
+source = { registry = "http://192.168.239.230:8887/repository/mc-group-pypi/simple/" }
+dependencies = [
+    { name = "lxml" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/python-docx/1.2.0/python_docx-1.2.0.tar.gz", hash = "sha256:7bc9d7b7d8a69c9c02ca09216118c86552704edc23bac179283f2e38f86220ce" }
+wheels = [
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/python-docx/1.2.0/python_docx-1.2.0-py3-none-any.whl", hash = "sha256:3fd478f3250fbbbfd3b94fe1e985955737c145627498896a8a6bf81f4baf66c7" },
 ]
 
 [[package]]
@@ -1738,6 +2014,21 @@ source = { registry = "http://192.168.239.230:8887/repository/mc-group-pypi/simp
 sdist = { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/python-multipart/0.0.32/python_multipart-0.0.32.tar.gz", hash = "sha256:be54b7f3fa167bb83e4fcd936b887b708f4e57fe75911c02aebf53efaf8d938e" }
 wheels = [
     { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/python-multipart/0.0.32/python_multipart-0.0.32-py3-none-any.whl", hash = "sha256:ff6d3f776f16878c894e52e107296ffc890e913c611b1a4ec6c44e2821fe2e23" },
+]
+
+[[package]]
+name = "python-pptx"
+version = "1.0.2"
+source = { registry = "http://192.168.239.230:8887/repository/mc-group-pypi/simple/" }
+dependencies = [
+    { name = "lxml" },
+    { name = "pillow" },
+    { name = "typing-extensions" },
+    { name = "xlsxwriter" },
+]
+sdist = { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/python-pptx/1.0.2/python_pptx-1.0.2.tar.gz", hash = "sha256:479a8af0eaf0f0d76b6f00b0887732874ad2e3188230315290cd1f9dd9cc7095" }
+wheels = [
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/python-pptx/1.0.2/python_pptx-1.0.2-py3-none-any.whl", hash = "sha256:160838e0b8565a8b1f67947675886e9fea18aa5e795db7ae531606d68e785cba" },
 ]
 
 [[package]]
@@ -1893,6 +2184,25 @@ wheels = [
     { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp315-cp315t-win32.whl", hash = "sha256:15da2b258908eb38853c1a6a58a1d09d9aad9c721e03a68c8ba691cd31dff739" },
     { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp315-cp315t-win_amd64.whl", hash = "sha256:3d502769263318690d4f6638b08483979d1b88cdc7c6f087482eea935fde4031" },
     { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidfuzz/3.14.6/rapidfuzz-3.14.6-cp315-cp315t-win_arm64.whl", hash = "sha256:07c7aa0b1e4b9999a54f9e73317d6743ff85442c8ef7b7fbbe6b190fd37d9e75" },
+]
+
+[[package]]
+name = "rapidocr-onnxruntime"
+version = "1.4.4"
+source = { registry = "http://192.168.239.230:8887/repository/mc-group-pypi/simple/" }
+dependencies = [
+    { name = "numpy" },
+    { name = "onnxruntime" },
+    { name = "opencv-python" },
+    { name = "pillow" },
+    { name = "pyclipper" },
+    { name = "pyyaml" },
+    { name = "shapely" },
+    { name = "six" },
+    { name = "tqdm" },
+]
+wheels = [
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rapidocr-onnxruntime/1.4.4/rapidocr_onnxruntime-1.4.4-py3-none-any.whl", hash = "sha256:971d7d5f223a7a808662229df1ef69893809d8457d834e6373d3854bc1782cbf" },
 ]
 
 [[package]]
@@ -2142,6 +2452,57 @@ dependencies = [
 sdist = { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rsa/4.9.1/rsa-4.9.1.tar.gz", hash = "sha256:e7bdbfdb5497da4c07dfd35530e1a902659db6ff241e39d9953cad06ebd0ae75" }
 wheels = [
     { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/rsa/4.9.1/rsa-4.9.1-py3-none-any.whl", hash = "sha256:68635866661c6836b8d39430f97a996acbd61bfa49406748ea243539fe239762" },
+]
+
+[[package]]
+name = "shapely"
+version = "2.1.2"
+source = { registry = "http://192.168.239.230:8887/repository/mc-group-pypi/simple/" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/shapely/2.1.2/shapely-2.1.2.tar.gz", hash = "sha256:2ed4ecb28320a433db18a5bf029986aa8afcfd740745e78847e330d5d94922a9" }
+wheels = [
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/shapely/2.1.2/shapely-2.1.2-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:fe2533caae6a91a543dec62e8360fe86ffcdc42a7c55f9dfd0128a977a896b94" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/shapely/2.1.2/shapely-2.1.2-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:ba4d1333cc0bc94381d6d4308d2e4e008e0bd128bdcff5573199742ee3634359" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/shapely/2.1.2/shapely-2.1.2-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:0bd308103340030feef6c111d3eb98d50dc13feea33affc8a6f9fa549e9458a3" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/shapely/2.1.2/shapely-2.1.2-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:1e7d4d7ad262a48bb44277ca12c7c78cb1b0f56b32c10734ec9a1d30c0b0c54b" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/shapely/2.1.2/shapely-2.1.2-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:e9eddfe513096a71896441a7c37db72da0687b34752c4e193577a145c71736fc" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/shapely/2.1.2/shapely-2.1.2-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:980c777c612514c0cf99bc8a9de6d286f5e186dcaf9091252fcd444e5638193d" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/shapely/2.1.2/shapely-2.1.2-cp312-cp312-win32.whl", hash = "sha256:9111274b88e4d7b54a95218e243282709b330ef52b7b86bc6aaf4f805306f454" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/shapely/2.1.2/shapely-2.1.2-cp312-cp312-win_amd64.whl", hash = "sha256:743044b4cfb34f9a67205cee9279feaf60ba7d02e69febc2afc609047cb49179" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/shapely/2.1.2/shapely-2.1.2-cp313-cp313-macosx_10_13_x86_64.whl", hash = "sha256:b510dda1a3672d6879beb319bc7c5fd302c6c354584690973c838f46ec3e0fa8" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/shapely/2.1.2/shapely-2.1.2-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:8cff473e81017594d20ec55d86b54bc635544897e13a7cfc12e36909c5309a2a" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/shapely/2.1.2/shapely-2.1.2-cp313-cp313-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:fe7b77dc63d707c09726b7908f575fc04ff1d1ad0f3fb92aec212396bc6cfe5e" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/shapely/2.1.2/shapely-2.1.2-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:7ed1a5bbfb386ee8332713bf7508bc24e32d24b74fc9a7b9f8529a55db9f4ee6" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/shapely/2.1.2/shapely-2.1.2-cp313-cp313-musllinux_1_2_aarch64.whl", hash = "sha256:a84e0582858d841d54355246ddfcbd1fce3179f185da7470f41ce39d001ee1af" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/shapely/2.1.2/shapely-2.1.2-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:dc3487447a43d42adcdf52d7ac73804f2312cbfa5d433a7d2c506dcab0033dfd" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/shapely/2.1.2/shapely-2.1.2-cp313-cp313-win32.whl", hash = "sha256:9c3a3c648aedc9f99c09263b39f2d8252f199cb3ac154fadc173283d7d111350" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/shapely/2.1.2/shapely-2.1.2-cp313-cp313-win_amd64.whl", hash = "sha256:ca2591bff6645c216695bdf1614fca9c82ea1144d4a7591a466fef64f28f0715" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/shapely/2.1.2/shapely-2.1.2-cp313-cp313t-macosx_10_13_x86_64.whl", hash = "sha256:2d93d23bdd2ed9dc157b46bc2f19b7da143ca8714464249bef6771c679d5ff40" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/shapely/2.1.2/shapely-2.1.2-cp313-cp313t-macosx_11_0_arm64.whl", hash = "sha256:01d0d304b25634d60bd7cf291828119ab55a3bab87dc4af1e44b07fb225f188b" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/shapely/2.1.2/shapely-2.1.2-cp313-cp313t-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:8d8382dd120d64b03698b7298b89611a6ea6f55ada9d39942838b79c9bc89801" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/shapely/2.1.2/shapely-2.1.2-cp313-cp313t-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:19efa3611eef966e776183e338b2d7ea43569ae99ab34f8d17c2c054d3205cc0" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/shapely/2.1.2/shapely-2.1.2-cp313-cp313t-musllinux_1_2_aarch64.whl", hash = "sha256:346ec0c1a0fcd32f57f00e4134d1200e14bf3f5ae12af87ba83ca275c502498c" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/shapely/2.1.2/shapely-2.1.2-cp313-cp313t-musllinux_1_2_x86_64.whl", hash = "sha256:6305993a35989391bd3476ee538a5c9a845861462327efe00dd11a5c8c709a99" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/shapely/2.1.2/shapely-2.1.2-cp313-cp313t-win32.whl", hash = "sha256:c8876673449f3401f278c86eb33224c5764582f72b653a415d0e6672fde887bf" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/shapely/2.1.2/shapely-2.1.2-cp313-cp313t-win_amd64.whl", hash = "sha256:4a44bc62a10d84c11a7a3d7c1c4fe857f7477c3506e24c9062da0db0ae0c449c" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/shapely/2.1.2/shapely-2.1.2-cp314-cp314-macosx_10_13_x86_64.whl", hash = "sha256:9a522f460d28e2bf4e12396240a5fc1518788b2fcd73535166d748399ef0c223" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/shapely/2.1.2/shapely-2.1.2-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:1ff629e00818033b8d71139565527ced7d776c269a49bd78c9df84e8f852190c" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/shapely/2.1.2/shapely-2.1.2-cp314-cp314-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:f67b34271dedc3c653eba4e3d7111aa421d5be9b4c4c7d38d30907f796cb30df" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/shapely/2.1.2/shapely-2.1.2-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:21952dc00df38a2c28375659b07a3979d22641aeb104751e769c3ee825aadecf" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/shapely/2.1.2/shapely-2.1.2-cp314-cp314-musllinux_1_2_aarch64.whl", hash = "sha256:1f2f33f486777456586948e333a56ae21f35ae273be99255a191f5c1fa302eb4" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/shapely/2.1.2/shapely-2.1.2-cp314-cp314-musllinux_1_2_x86_64.whl", hash = "sha256:cf831a13e0d5a7eb519e96f58ec26e049b1fad411fc6fc23b162a7ce04d9cffc" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/shapely/2.1.2/shapely-2.1.2-cp314-cp314-win32.whl", hash = "sha256:61edcd8d0d17dd99075d320a1dd39c0cb9616f7572f10ef91b4b5b00c4aeb566" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/shapely/2.1.2/shapely-2.1.2-cp314-cp314-win_amd64.whl", hash = "sha256:a444e7afccdb0999e203b976adb37ea633725333e5b119ad40b1ca291ecf311c" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/shapely/2.1.2/shapely-2.1.2-cp314-cp314t-macosx_10_13_x86_64.whl", hash = "sha256:5ebe3f84c6112ad3d4632b1fd2290665aa75d4cef5f6c5d77c4c95b324527c6a" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/shapely/2.1.2/shapely-2.1.2-cp314-cp314t-macosx_11_0_arm64.whl", hash = "sha256:5860eb9f00a1d49ebb14e881f5caf6c2cf472c7fd38bd7f253bbd34f934eb076" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/shapely/2.1.2/shapely-2.1.2-cp314-cp314t-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:b705c99c76695702656327b819c9660768ec33f5ce01fa32b2af62b56ba400a1" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/shapely/2.1.2/shapely-2.1.2-cp314-cp314t-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:a1fd0ea855b2cf7c9cddaf25543e914dd75af9de08785f20ca3085f2c9ca60b0" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/shapely/2.1.2/shapely-2.1.2-cp314-cp314t-musllinux_1_2_aarch64.whl", hash = "sha256:df90e2db118c3671a0754f38e36802db75fe0920d211a27481daf50a711fdf26" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/shapely/2.1.2/shapely-2.1.2-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:361b6d45030b4ac64ddd0a26046906c8202eb60d0f9f53085f5179f1d23021a0" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/shapely/2.1.2/shapely-2.1.2-cp314-cp314t-win32.whl", hash = "sha256:b54df60f1fbdecc8ebc2c5b11870461a6417b3d617f555e5033f1505d36e5735" },
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/shapely/2.1.2/shapely-2.1.2-cp314-cp314t-win_amd64.whl", hash = "sha256:0036ac886e0923417932c2e6369b6c52e38e0ff5d9120b90eef5cd9a5fc5cae9" },
 ]
 
 [[package]]
@@ -3046,6 +3407,15 @@ wheels = [
     { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/websockets/17.0.1/websockets-17.0.1-cp314-cp314t-win_amd64.whl", hash = "sha256:bb31f42ea095ea826463c770829aa188a86c9a5c976b1467cbbf583c811de833" },
     { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/websockets/17.0.1/websockets-17.0.1-cp314-cp314t-win_arm64.whl", hash = "sha256:dbfae8e75b342e31fc6fd1a8bbb393b7cbb91d6cfd581650300a94381e7b7e2b" },
     { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/websockets/17.0.1/websockets-17.0.1-py3-none-any.whl", hash = "sha256:c6be9cba65c65cc76dfa3d4619e359ff02a4476c74e179b215236c11a0b32345" },
+]
+
+[[package]]
+name = "xlsxwriter"
+version = "3.2.9"
+source = { registry = "http://192.168.239.230:8887/repository/mc-group-pypi/simple/" }
+sdist = { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/xlsxwriter/3.2.9/xlsxwriter-3.2.9.tar.gz", hash = "sha256:254b1c37a368c444eac6e2f867405cc9e461b0ed97a3233b2ac1e574efb4140c" }
+wheels = [
+    { url = "http://192.168.239.230:8887/repository/mc-group-pypi/packages/xlsxwriter/3.2.9/xlsxwriter-3.2.9-py3-none-any.whl", hash = "sha256:9a5db42bc5dff014806c58a20b9eae7322a134abb6fce3c92c181bfb275ec5b3" },
 ]
 
 [[package]]
