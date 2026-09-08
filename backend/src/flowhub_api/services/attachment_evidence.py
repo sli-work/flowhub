@@ -3,6 +3,7 @@
 权限与 agent_context 一致（403 语义不变）；只读取当前工作项已授权附件，
 跳过 deleted / 含毒 / 无对象 的文档。解析预算、ZIP 安全校验见 spec「安全约束」。
 """
+import asyncio
 import inspect
 import logging
 import time
@@ -61,15 +62,8 @@ def _extract_keywords(text: str) -> list[str]:
     return out[:10]
 
 
-async def _load_bytes(doc: DocItem) -> bytes:
-    """从 MinIO 读取文档对象；返回空 bytes 表示不可读（调用方按解析失败处理）。"""
-    from flowhub_api.clients.minio import get_minio
-    from flowhub_api.core.config import get_settings
-
-    minio = get_minio()
-    if minio is None or not doc.object_name:
-        return b""
-    resp = minio.get_object(get_settings().minio_bucket, doc.object_name)
+def _sync_read(minio, bucket: str, object_name: str) -> bytes:
+    resp = minio.get_object(bucket, object_name)
     try:
         data = resp.read(_MAX_DOC_BYTES + 1)
     finally:
@@ -78,6 +72,18 @@ async def _load_bytes(doc: DocItem) -> bytes:
     if len(data) > _MAX_DOC_BYTES:
         raise ValueError("文件过大（上限 50MB），跳过解析")
     return data
+
+
+async def _load_bytes(doc: DocItem) -> bytes:
+    """从 MinIO 读取文档对象（网络读取 offload 到线程，避免阻塞事件循环）；
+    返回空 bytes 表示不可读（调用方按解析失败处理）。"""
+    from flowhub_api.clients.minio import get_minio
+    from flowhub_api.core.config import get_settings
+
+    minio = get_minio()
+    if minio is None or not doc.object_name:
+        return b""
+    return await asyncio.to_thread(_sync_read, minio, get_settings().minio_bucket, doc.object_name)
 
 
 async def _collect_attachments(session, task: TaskItem) -> list[DocItem]:
@@ -158,25 +164,20 @@ async def _parse_or_load(doc: DocItem, cache, ocr) -> tuple[ParsedAttachment, bo
         if inspect.isawaitable(data):
             data = await data
     except ValueError as exc:
-        parsed = ParsedAttachment(doc_id=doc.id, status="failed", parser="unknown",
-                                  error=str(exc)[:200])
-        parsed.cache_hit = False
-        await cache.set(key, parsed)
-        return parsed, False
+        return ParsedAttachment(doc_id=doc.id, status="failed", parser="unknown",
+                                error=str(exc)[:200]), False
     except Exception as exc:
         logger.warning("读取附件 %s 失败：%s", doc.id, exc)
-        parsed = ParsedAttachment(doc_id=doc.id, status="failed", parser="unknown",
-                                  error=f"读取失败：{str(exc)[:200]}")
-        parsed.cache_hit = False
-        await cache.set(key, parsed)
-        return parsed, False
+        return ParsedAttachment(doc_id=doc.id, status="failed", parser="unknown",
+                                error=f"读取失败：{str(exc)[:200]}"), False
     if not data:
         parsed = ParsedAttachment(doc_id=doc.id, status="failed", parser="unknown",
                                   error="文档内容不可读")
-    else:
-        parsed = await parse_attachment(doc, data, ocr)
-    parsed.cache_hit = False
-    await cache.set(key, parsed)
+        return parsed, False
+    parsed = await parse_attachment(doc, data, ocr)
+    # 只缓存成功索引结果：failed/needs_ocr/skipped 不写缓存，保证修复原因后重试会真实重新解析
+    if parsed.status == "indexed":
+        await cache.set(key, parsed)
     return parsed, False
 
 
@@ -231,7 +232,7 @@ async def retrieve_more_evidence(
     cache=None, ocr=None,
 ) -> EvidenceResult:
     """模型二次检索：只重检索已缓存解析结果，不重新下载对象；深度超限拒绝。"""
-    if depth > MAX_RETRIEVAL_DEPTH:
+    if depth < 1 or depth > MAX_RETRIEVAL_DEPTH:
         raise ValueError(f"检索深度超限（最大 {MAX_RETRIEVAL_DEPTH}）")
     if not await can_read_task(session, user, task):
         raise BizError(BizCode.PERM_DENIED, "无权限读取该任务附件证据（仅任务处理人或管理员可见）", http_status=403)

@@ -6,15 +6,16 @@
 import inspect
 import json
 import logging
+import time
 from dataclasses import dataclass, field
 
 from langchain_core.tools import StructuredTool
 
 from flowhub_api.core.response import BizCode, BizError
 from flowhub_api.services.agent_context import can_read_task
-from flowhub_api.services.attachment_cache import ProcessLRUAttachmentCache, cache_key
+from flowhub_api.services.attachment_cache import cache_key
 from flowhub_api.services.attachment_evidence import (
-    _collect_attachments, _extract_keywords, _load_bytes, _rank_chunks,
+    _DEFAULT_CACHE, _collect_attachments, _extract_keywords, _load_bytes, _rank_chunks,
 )
 from flowhub_api.services.attachment_parsers import PARSER_VERSION, ParsedAttachment, parse_attachment
 
@@ -26,6 +27,9 @@ logger = logging.getLogger(__name__)
 MAX_ATTACHMENT_TOOL_CALLS = 6
 MAX_ATTACHMENT_TOOL_CONTEXT_CHARS = 8000
 MAX_SEARCH_DEPTH = 3
+# search 单次调用内的检索预算：文档 ≤3、耗时 ≤10s（与 build_attachment_evidence 一致）
+MAX_SEARCH_DOCS = 3
+SEARCH_DEADLINE_SEC = 10.0
 
 
 @dataclass
@@ -41,7 +45,7 @@ class AttachmentToolBundle:
 async def create_attachment_tool_bundle(session, task, user) -> AttachmentToolBundle:
     if not await can_read_task(session, user, task):
         raise BizError(BizCode.PERM_DENIED, "无权限读取该任务", http_status=403)
-    cache = ProcessLRUAttachmentCache()
+    cache = _DEFAULT_CACHE
     from flowhub_api.services.ocr import get_ocr_adapter
 
     ocr = get_ocr_adapter()
@@ -59,18 +63,19 @@ async def create_attachment_tool_bundle(session, task, user) -> AttachmentToolBu
         return json.dumps({"attachments": bundle.candidates}, ensure_ascii=False)
 
     async def search(query: str, doc_ids: str = "", exclude_seq: str = "", depth: int = 1) -> str:
-        if depth > MAX_SEARCH_DEPTH:
+        if depth < 1 or depth > MAX_SEARCH_DEPTH:
             return json.dumps({"error": "检索深度超限"}, ensure_ascii=False)
         docs = await _collect_attachments(session, task)
         wanted = {part.strip() for part in doc_ids.split(",") if part.strip()}
-        target = {d.id for d in docs} if not wanted else {d.id for d in docs if d.id in wanted}
+        target_docs = [d for d in docs if (not wanted or d.id in wanted)]
         exclude = {int(part) for part in exclude_seq.split(",") if part.strip().isdigit()}
         keywords = _extract_keywords(query)
         chunks_by_doc: dict = {}
         parsed_list: list = []
-        for doc in docs:
-            if doc.id not in target:
-                continue
+        deadline = time.monotonic() + SEARCH_DEADLINE_SEC
+        for doc in target_docs[:MAX_SEARCH_DOCS]:
+            if time.monotonic() > deadline:
+                break
             key = cache_key(doc, PARSER_VERSION)
             parsed = await cache.get(key)
             if parsed is None:
@@ -80,8 +85,9 @@ async def create_attachment_tool_bundle(session, task, user) -> AttachmentToolBu
                 parsed = (await parse_attachment(doc, data, ocr) if data
                           else ParsedAttachment(doc_id=doc.id, status="failed", parser="unknown",
                                                 error="文档内容不可读"))
-                parsed.cache_hit = False
-                await cache.set(key, parsed)
+                # 只缓存成功索引结果：failed/needs_ocr/skipped 不写缓存，保证重试真实重新解析
+                if parsed.status == "indexed":
+                    await cache.set(key, parsed)
             parsed_list.append(parsed)
             if parsed.status == "indexed":
                 chunks_by_doc[parsed.doc_id] = [c for c in parsed.chunks if c.seq not in exclude]

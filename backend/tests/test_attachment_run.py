@@ -1,4 +1,6 @@
 """LangGraph 集成：附件证据工具 Bundle + 质量校验。"""
+from types import SimpleNamespace
+
 import pytest
 
 from flowhub_api.models import User
@@ -50,6 +52,65 @@ async def test_attachment_search_depth_limit(seeded):
     bundle = await attachment_tools.create_attachment_tool_bundle(session, task, admin)
     out = await next(t for t in bundle.tools if t.name == "flowhub_attachment_search").ainvoke({"query": "备件", "depth": 99})
     assert "深度超限" in out
+    out_zero = await next(t for t in bundle.tools if t.name == "flowhub_attachment_search").ainvoke({"query": "备件", "depth": 0})
+    assert "深度超限" in out_zero
+
+
+@pytest.mark.asyncio
+async def test_attachment_tool_loop_drives_search_and_backfills_state(seeded, monkeypatch):
+    """合并工具循环接缝：stub llm 驱动 run_repo_tool_loop 调用附件搜索 → trace 出现 → 回填状态非空。"""
+    from sqlalchemy import select
+
+    from flowhub_api.db.session import SessionFactory
+    from flowhub_api.models.workflow import TaskItem, WorkItem
+    from flowhub_api.models.support import DocItem
+    from flowhub_api.services.expert_runtime import run_repo_tool_loop
+
+    async with SessionFactory() as session:
+        wi = WorkItem(id="WI-LOOP-001", type="issue", title="备件盘点", project="售后",
+                      assignee="张三", creator="张三")
+        task = TaskItem(id="T-LOOP-001", wi_id=wi.id, title="分析备件盘点", project="售后",
+                        node="分析", node_id="n1", type="issue", assignee="张三")
+        doc = DocItem(id="d-loop", name="备件清单.txt", project="售后", scan="已扫描",
+                      uploader="张三", size="1KB", time="t-loop", wi=wi.id, object_name="d-loop/x.txt")
+        session.add(wi); session.add(task); session.add(doc)
+        wi.start_values = {"attach": [{"id": doc.id, "name": doc.name}]}
+        await session.commit()
+        admin = (await session.execute(select(User).where(User.account == "liting"))).scalars().first()
+        try:
+            monkeypatch.setattr(attachment_tools, "_load_bytes",
+                                lambda d: "备件缺货 120 单\n补货周期 7 天".encode())
+            bundle = await attachment_tools.create_attachment_tool_bundle(session, task, admin)
+
+            class Model:
+                def __init__(self):
+                    self.calls = 0
+
+                def bind_tools(self, tools):
+                    assert any(t.name == "flowhub_attachment_search" for t in tools)
+                    return self
+
+                async def ainvoke(self, messages):
+                    self.calls += 1
+                    if self.calls == 1:
+                        return SimpleNamespace(content="", tool_calls=[
+                            {"id": "c1", "name": "flowhub_attachment_search", "args": {"query": "备件"}}])
+                    return SimpleNamespace(content="基于附件得出结论：备件缺货 120 单。", tool_calls=[])
+
+            trace = []
+            output, used = await run_repo_tool_loop(
+                Model(), [("human", "根据附件分析备件情况")], bundle, on_trace=trace.append)
+            assert used == 1
+            assert "备件缺货 120 单" in output
+            assert any(item.get("tool") == "flowhub_attachment_search" for item in trace)
+            assert bundle.injected, "search 调用后应回填 injected"
+            state = _attachment_state_from_bundle(bundle)
+            assert state["injected"] and state["totalChars"] > 0, "loop 后回填 attachmentEvidence 非空"
+        finally:
+            await session.delete(doc)
+            await session.delete(task)
+            await session.delete(wi)
+            await session.commit()
 
 
 def test_attachment_state_from_bundle_after_search():

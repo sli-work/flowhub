@@ -137,6 +137,23 @@ async def test_retrieve_more_evidence_no_redownload(seeded, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_failed_parse_not_cached_so_reparse_recovers(seeded, monkeypatch):
+    session, task, admin, docs = seeded
+    cache = svc.ProcessLRUAttachmentCache()
+    monkeypatch.setattr(svc, "_load_bytes",
+                        lambda doc: (_ for _ in ()).throw(ValueError("模拟读取失败")))
+
+    first = await svc.build_attachment_evidence(session, task, admin, "今天天气怎么样", cache=cache)
+    assert first.parsed and all(p.status == "failed" for p in first.parsed)
+
+    monkeypatch.setattr(svc, "_load_bytes", lambda doc: "备件缺货 120 单\n补货周期 7 天".encode())
+    second = await svc.build_attachment_evidence(session, task, admin, "今天天气怎么样", cache=cache)
+    indexed = [p for p in second.parsed if p.status == "indexed"]
+    assert indexed, "首次 failed 未写入缓存，修复原因后重试应真实重新解析出 indexed"
+    assert any("备件缺货 120 单" in c.text for c in second.injected)
+
+
+@pytest.mark.asyncio
 async def test_retrieve_more_evidence_depth_limit(seeded):
     session, task, admin, _ = seeded
     with pytest.raises(ValueError) as exc:

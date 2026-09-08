@@ -21,6 +21,14 @@ async def test_plain_text_parsed_with_location():
     assert "备件库存看板" in parsed.chunks[0].text
 
 
+async def test_plain_long_line_truncated():
+    long_line = "x" * 20000
+    parsed = await parse_attachment(_doc("minified.json"), (long_line + "\n尾行").encode("utf-8"))
+    assert parsed.status == "indexed"
+    assert all(len(c.text) <= 4000 for c in parsed.chunks), "单行应截断到 4000 字符，避免挤掉全部证据"
+    assert parsed.chunks[-1].text == "尾行"
+
+
 async def test_docx_parsed_with_paragraph_and_table():
     import docx
 
@@ -105,6 +113,16 @@ async def test_pdf_no_text_without_ocr_needs_ocr():
     parsed = await parse_attachment(_doc("scan.pdf"), data, ocr=NoopOcrAdapter())
     assert parsed.status == "needs_ocr"
     assert any(c.kind == "ocr_marker" for c in parsed.chunks)
+
+
+async def test_pdf_zero_pages_failed():
+    # 手工构造 0 页最小 PDF（PyMuPDF 无法序列化零页文档）
+    data = (b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"
+            b"2 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\n"
+            b"trailer\n<< /Root 1 0 R /Size 3 >>\n%%EOF\n")
+    parsed = await parse_attachment(_doc("empty.pdf"), data)
+    assert parsed.status == "failed"
+    assert "无页面" in parsed.error
 
 
 async def test_pdf_no_text_with_ocr_extracts_text():

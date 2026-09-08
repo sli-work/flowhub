@@ -91,7 +91,8 @@ def _chunk(doc, location: str, seq: int, kind: str, text: str) -> EvidenceChunk:
 def _parse_plain(doc, data: bytes) -> ParsedAttachment:
     text = data.decode("utf-8", errors="replace")
     lines = [line for line in text.splitlines() if line.strip()]
-    chunks = [_chunk(doc, f"p{idx}", idx, "text", line) for idx, line in enumerate(lines, start=1)]
+    # 单行可达 50MB（如 minified JSON）：每行截断到 4000 字符，避免单个超大 chunk 挤掉全部证据
+    chunks = [_chunk(doc, f"p{idx}", idx, "text", line[:4000]) for idx, line in enumerate(lines, start=1)]
     if not chunks and text.strip():
         chunks.append(_chunk(doc, "p1", 1, "text", text[:4000]))
     return ParsedAttachment(doc_id=doc.id, status="indexed", parser="plain",
@@ -165,6 +166,9 @@ async def _parse_pdf(doc, data: bytes, ocr=None) -> ParsedAttachment:
     import fitz  # PyMuPDF
 
     pdf = fitz.open(stream=data, filetype="pdf")
+    if len(pdf) == 0:
+        pdf.close()
+        return ParsedAttachment(doc_id=doc.id, status="failed", parser="pdf", error="PDF 无页面")
     chunks = []
     ocr_pages = 0
     has_text = False
