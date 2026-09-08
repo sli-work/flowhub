@@ -1065,3 +1065,35 @@ async def split_suggest(
     await AuditService(session).record(actor=user.name, action="task:split_suggest", target=t.id, result="success")
     await session.commit()
     return ok({"proposals": proposals, "raw": raw if parse_error else "", "parseError": parse_error})
+
+
+@router.post("/{task_id}/reparse-attachments")
+async def reparse_attachments(
+    task_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_db)],
+):
+    """失败重试：仅重跑附件解析与证据注入，不调用模型、不写 Run。"""
+    task = await session.get(TaskItem, task_id)
+    if task is None:
+        raise BizError(BizCode.NOT_FOUND, "任务不存在")
+    if not await can_read_task(session, user, task):
+        raise BizError(BizCode.PERM_DENIED, "无权限读取该任务", http_status=403)
+    from flowhub_api.services.attachment_evidence import build_attachment_evidence
+
+    evidence = await build_attachment_evidence(session, task, user, task.brief or task.title)
+    await AuditService(session).record(
+        actor=user.name, action="attachment:reparse", target=f"{task.id} · 附件重试解析", result="success",
+    )
+    await session.commit()
+    return ok({
+        "attachments": [{
+            "id": p.doc_id, "status": p.status, "parser": p.parser, "cacheHit": p.cache_hit,
+            "durationMs": p.duration_ms, "entriesOrPages": p.entries_or_pages, "error": p.error,
+        } for p in evidence.parsed],
+        "injected": [{
+            "docName": c.doc_name, "location": c.location, "seq": c.seq,
+            "kind": c.kind, "text": c.text,
+        } for c in evidence.injected],
+        "durationMs": evidence.duration_ms,
+    }, "附件解析完成")
