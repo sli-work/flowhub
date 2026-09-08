@@ -138,3 +138,57 @@ async def test_render_evidence_section_formats_locations():
     assert "[附件@Q2.pdf:p2:1]" in rendered
     empty = svc.EvidenceResult(candidates=[], parsed=[], injected=[], total_chars=0, duration_ms=0)
     assert "附件未解析或与问题无关" in svc.render_evidence_section(empty)
+
+
+@pytest.mark.asyncio
+async def test_oversized_attachment_degrades_to_failed(seeded, monkeypatch):
+    session, task, admin, docs = seeded
+    cache = svc.ProcessLRUAttachmentCache()
+
+    async def oversized(doc):
+        raise ValueError("文件过大（上限 50MB），跳过解析")
+
+    monkeypatch.setattr(svc, "_load_bytes", oversized)
+    result = await svc.build_attachment_evidence(
+        session, task, admin, "分析备件库存，参考 Q2 复盘与备件清单", cache=cache)
+    assert result.parsed, "超大附件应降级为 failed 而非抛异常"
+    assert all(p.status == "failed" for p in result.parsed)
+    assert all("文件过大" in p.error for p in result.parsed)
+
+
+@pytest.mark.asyncio
+async def test_retrieve_more_evidence_no_redownload(seeded, monkeypatch):
+    session, task, admin, docs = seeded
+    calls = {"n": 0}
+
+    def counting_load(doc):
+        calls["n"] += 1
+        return "备件内容".encode()
+
+    monkeypatch.setattr(svc, "_load_bytes", counting_load)
+    cache = svc.ProcessLRUAttachmentCache()
+    await svc.build_attachment_evidence(
+        session, task, admin, "分析备件库存，参考 Q2 复盘与备件清单", cache=cache)
+    n_build = calls["n"]
+    await svc.retrieve_more_evidence(session, task, admin, "备件", cache=cache)
+    assert calls["n"] == n_build, "二次检索缓存未命中应跳过，不重新下载"
+
+
+@pytest.mark.asyncio
+async def test_retrieve_more_evidence_depth_limit(seeded):
+    session, task, admin, _ = seeded
+    with pytest.raises(ValueError) as exc:
+        await svc.retrieve_more_evidence(session, task, admin, "备件", depth=99)
+    assert "深度超限" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_no_keyword_match_falls_back_to_first_docs(seeded, monkeypatch):
+    session, task, admin, docs = seeded
+    monkeypatch.setattr(svc, "_load_bytes", lambda doc: "无关内容".encode())
+    cache = svc.ProcessLRUAttachmentCache()
+    result = await svc.build_attachment_evidence(session, task, admin, "今天天气怎么样", cache=cache)
+    selected = [c for c in result.candidates if c.selected]
+    assert selected, "无关键词命中时按前 limit_docs 兜底选中候选"
+    assert all(c.reason.startswith("无关键词") for c in selected)
+    assert {c.doc.id for c in selected} <= {"evd1", "evd2", "evd3"}

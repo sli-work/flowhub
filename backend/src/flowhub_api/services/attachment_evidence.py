@@ -6,7 +6,7 @@
 import inspect
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from sqlalchemy import select
 
@@ -76,7 +76,7 @@ async def _load_bytes(doc: DocItem) -> bytes:
         resp.close()
         resp.release_conn()
     if len(data) > _MAX_DOC_BYTES:
-        raise ValueError("附件过大（上限 50MB），跳过解析")
+        raise ValueError("文件过大（上限 50MB），跳过解析")
     return data
 
 
@@ -152,10 +152,24 @@ async def _parse_or_load(doc: DocItem, cache, ocr) -> tuple[ParsedAttachment, bo
     key = cache_key(doc, PARSER_VERSION)
     cached = await cache.get(key)
     if cached is not None:
-        return cached, True
-    data = _load_bytes(doc)
-    if inspect.isawaitable(data):
-        data = await data
+        return replace(cached, cache_hit=True), True
+    try:
+        data = _load_bytes(doc)
+        if inspect.isawaitable(data):
+            data = await data
+    except ValueError as exc:
+        parsed = ParsedAttachment(doc_id=doc.id, status="failed", parser="unknown",
+                                  error=str(exc)[:200])
+        parsed.cache_hit = False
+        await cache.set(key, parsed)
+        return parsed, False
+    except Exception as exc:
+        logger.warning("读取附件 %s 失败：%s", doc.id, exc)
+        parsed = ParsedAttachment(doc_id=doc.id, status="failed", parser="unknown",
+                                  error=f"读取失败：{str(exc)[:200]}")
+        parsed.cache_hit = False
+        await cache.set(key, parsed)
+        return parsed, False
     if not data:
         parsed = ParsedAttachment(doc_id=doc.id, status="failed", parser="unknown",
                                   error="文档内容不可读")
@@ -199,8 +213,7 @@ async def build_attachment_evidence(
     for candidate in selected[:limit_docs]:
         if time.monotonic() > deadline:
             break
-        parsed, cache_hit = await _parse_or_load(candidate.doc, cache, ocr)
-        parsed.cache_hit = cache_hit
+        parsed, _ = await _parse_or_load(candidate.doc, cache, ocr)
         parsed_list.append(parsed)
         if parsed.status == "indexed" and parsed.chunks:
             chunks_by_doc[parsed.doc_id] = parsed.chunks
@@ -236,8 +249,9 @@ async def retrieve_more_evidence(
         key = cache_key(doc, PARSER_VERSION)
         parsed = await cache.get(key)
         if parsed is None:
-            parsed, _ = await _parse_or_load(doc, cache, ocr)
-        parsed_list.append(parsed)
+            logger.debug("二次检索：缓存未命中，跳过 %s（不重新下载）", doc.id)
+            continue
+        parsed_list.append(replace(parsed, cache_hit=True))
         if parsed.status == "indexed":
             chunks_by_doc[parsed.doc_id] = [
                 c for c in parsed.chunks if c.seq not in exclude
