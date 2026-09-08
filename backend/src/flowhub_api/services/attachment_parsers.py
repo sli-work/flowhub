@@ -3,6 +3,7 @@
 安全约束见 spec「安全约束」：普通 ZIP 只索引白名单文本条目，不递归嵌套压缩包，
 不把脚本/二进制正文交给模型；ZIP 校验复用 routes/documents.py 的常量。
 """
+import asyncio
 import io
 import logging
 import zipfile
@@ -76,7 +77,7 @@ async def parse_attachment(doc, data: bytes, ocr=None) -> ParsedAttachment:
         return ParsedAttachment(doc_id=doc.id, status="skipped", parser="unknown")
     try:
         parser = globals()[fn]
-        return parser(doc, data)
+        return await asyncio.to_thread(parser, doc, data)
     except Exception as exc:  # noqa: BLE001
         logger.warning("解析 %s 失败: %s", doc.name, exc)
         return ParsedAttachment(doc_id=doc.id, status="failed", parser=ext, error=str(exc)[:200])

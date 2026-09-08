@@ -1,0 +1,140 @@
+"""附件证据服务：意图选择 / 权限与安全过滤 / 解析缓存 / 检索注入 / 渲染。"""
+import pytest
+
+from flowhub_api.db.session import SessionFactory
+from flowhub_api.models.support import DocItem
+from flowhub_api.models.workflow import TaskItem, WorkItem
+from flowhub_api.models import User
+from flowhub_api.services import attachment_evidence as svc
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _ensure_schema_and_seed(client):
+    """触发 lifespan（建表 + seed demo 用户），供直接操作 SessionFactory 的用例使用。"""
+    return client
+
+
+@pytest.fixture
+async def seeded():
+    async with SessionFactory() as session:
+        wi = WorkItem(id="WI-EVID-001", type="issue", title="备件库存看板", project="售后",
+                      assignee="张三", creator="张三")
+        task = TaskItem(id="T-EVID-001", wi_id=wi.id, title="分析备件库存", project="售后",
+                        node="分析", node_id="n1", type="issue", assignee="张三")
+        docs = [
+            DocItem(id="evd1", name="Q2服务复盘.pdf", project="售后", scan="已扫描", uploader="张三",
+                    size="1KB", time="t1", wi=wi.id, object_name="d1/Q2.pdf"),
+            DocItem(id="evd2", name="备件清单.xlsx", project="售后", scan="已扫描", uploader="张三",
+                    size="1KB", time="t2", wi=wi.id, object_name="d2/list.xlsx"),
+            DocItem(id="evd3", name="无关文档.txt", project="售后", scan="已扫描", uploader="李四",
+                    size="1KB", time="t3", wi=wi.id, object_name="d3/x.txt"),
+            DocItem(id="evd4", name="病毒文件.zip", project="售后", scan="含毒", uploader="王五",
+                    size="1KB", time="t4", wi=wi.id, object_name="d4/v.zip"),
+            DocItem(id="evd5", name="已删除.txt", project="售后", scan="已扫描", uploader="张三",
+                    size="1KB", time="t5", wi=wi.id, object_name="d5/d.txt", deleted=True),
+            DocItem(id="evd6", name="无对象.txt", project="售后", scan="已扫描", uploader="张三",
+                    size="1KB", time="t6", wi=wi.id, object_name=None),
+        ]
+        session.add(wi); session.add(task); session.add_all(docs)
+        await session.commit()
+        admin = (await session.execute(
+            __import__("sqlalchemy").select(User).where(User.account == "liting")
+        )).scalars().first()
+        yield session, task, admin, docs
+        # 清理固定 ID 行，避免后续用例相同主键冲突（admin 为 seed 用户，不删）
+        for d in docs:
+            await session.delete(d)
+        await session.delete(task)
+        await session.delete(wi)
+        await session.commit()
+
+
+def _pdf_bytes(text: str) -> bytes:
+    import fitz
+
+    pdf = fitz.open()
+    page = pdf.new_page()
+    page.insert_text((72, 72), text, fontname="china-s")
+    data = pdf.tobytes()
+    pdf.close()
+    return data
+
+
+def _xlsx_bytes() -> bytes:
+    from io import BytesIO
+
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["月份", "sku", "qty"])
+    ws.append(["4月", "A-1", "42"])
+    buf = BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_intent_selects_relevant_attachments(seeded, monkeypatch):
+    session, task, admin, docs = seeded
+    contents = {
+        "evd1": _pdf_bytes("Q2 服务复盘：备件缺货 120 单"),
+        "evd2": _xlsx_bytes(),
+        "evd3": "无关内容".encode(),
+    }
+    monkeypatch.setattr(svc, "_load_bytes", lambda doc: contents.get(doc.id, b""))
+
+    result = await svc.build_attachment_evidence(
+        session, task, admin, question="分析备件库存看板，参考 Q2 复盘与备件清单")
+    selected = {c.doc.id for c in result.candidates if c.selected}
+    assert "evd1" in selected and "evd2" in selected
+    assert "evd3" not in selected, "无关附件不应被选中"
+    assert "evd4" not in selected and "evd5" not in selected and "evd6" not in selected
+    # 含毒/删除/无对象被跳过且不在候选里
+    ids = {c.doc.id for c in result.candidates}
+    assert ids == {"evd1", "evd2", "evd3"}
+    assert result.injected and all(c.doc_id in {"evd1", "evd2"} for c in result.injected)
+
+
+@pytest.mark.asyncio
+async def test_permission_denied_403(seeded):
+    session, task, admin, _ = seeded
+    outsider = User(id="u-none", name="局外人", account="outsider", roles=[])
+    with pytest.raises(Exception) as exc:
+        await svc.build_attachment_evidence(session, task, outsider, "问题")
+    assert exc.value.status_code == 403  # BizError 暴露 status_code（HTTPException 属性）
+
+
+@pytest.mark.asyncio
+async def test_cache_hit_skips_reparse(seeded, monkeypatch):
+    session, task, admin, docs = seeded
+    calls = {"n": 0}
+    real = svc.parse_attachment
+
+    async def counting_parse(doc, data, ocr=None):
+        calls["n"] += 1
+        return await real(doc, data, ocr)
+
+    monkeypatch.setattr(svc, "_load_bytes", lambda doc: "内容".encode())
+    monkeypatch.setattr(svc, "parse_attachment", counting_parse)
+
+    await svc.build_attachment_evidence(session, task, admin, "备件")
+    n_first = calls["n"]
+    await svc.build_attachment_evidence(session, task, admin, "备件")
+    assert calls["n"] == n_first, "第二次应命中缓存，不重新解析"
+
+
+@pytest.mark.asyncio
+async def test_render_evidence_section_formats_locations():
+    from flowhub_api.services.attachment_parsers import EvidenceChunk
+
+    result = svc.EvidenceResult(
+        candidates=[], parsed=[], injected=[
+            EvidenceChunk(doc_id="d1", doc_name="Q2.pdf", location="p2", seq=1, kind="text", text="内容"),
+        ],
+        total_chars=4, duration_ms=10,
+    )
+    rendered = svc.render_evidence_section(result)
+    assert "[附件@Q2.pdf:p2:1]" in rendered
+    empty = svc.EvidenceResult(candidates=[], parsed=[], injected=[], total_chars=0, duration_ms=0)
+    assert "附件未解析或与问题无关" in svc.render_evidence_section(empty)
