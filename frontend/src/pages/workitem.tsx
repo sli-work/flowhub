@@ -7,7 +7,7 @@ import {
   Badge, DocRow, SectionCard, Timeline, wiStatusBadge, taskStatusBadge, EmptyState, type Tone,
 } from '../components/common'
 import { DocumentViewerDrawer } from '../components/document-viewer-drawer'
-import type { WorkItem } from '../types'
+import type { IssueSummary, WorkItem, WorkflowIssue } from '../types'
 
 const labelTone: Record<string, Tone> = {
   分派规则: 'pur', 值班: 'cyn', 看板: 'info', SLA: 'orgx', 去重: 'pur', AI: 'cyn',
@@ -25,6 +25,8 @@ export function WorkItemPage() {
   const fileRef = useRef<HTMLInputElement>(null)
   const [docs, setDocs] = useState<{ id: string; name: string; kind: string; size: string; version: string; level: string; uploader: string; time?: string }[]>([])
   const [viewer, setViewer] = useState<{ open: boolean; initialId?: string }>({ open: false })
+  const [issues, setIssues] = useState<WorkflowIssue[]>([])
+  const [issueSummary, setIssueSummary] = useState<IssueSummary>({ total: 0, open: 0, blocking: 0, waitingVerification: 0 })
 
   const refreshDocs = () => {
     if (!activeWiId) return
@@ -38,15 +40,16 @@ export function WorkItemPage() {
   /* 详情 + 实例 + 起始表单值 + 任务 + 关联文档：全部按当前工作项 ID 拉取（真实数据） */
   useEffect(() => {
     if (!activeWiId) { navigate('tasks'); return }
-    setWi(null); setInstance(null); setStartValues({}); setTaskList([]); setDocs([]); setTimeline([])
-    api.get<{ item: WorkItem; instance: typeof instance; startValues: Record<string, unknown>; tasks: typeof taskList }>(`/api/v1/work-items/${activeWiId}`)
+    setWi(null); setInstance(null); setStartValues({}); setTaskList([]); setDocs([]); setTimeline([]); setIssues([])
+    api.get<{ item: WorkItem; instance: typeof instance; startValues: Record<string, unknown>; tasks: typeof taskList; issueSummary?: IssueSummary }>(`/api/v1/work-items/${activeWiId}`)
       .then((d) => {
-        setWi(d.item); setInstance(d.instance); setStartValues(d.startValues); setTaskList(d.tasks)
+        setWi(d.item); setInstance(d.instance); setStartValues(d.startValues); setTaskList(d.tasks); setIssueSummary(d.issueSummary ?? { total: 0, open: 0, blocking: 0, waitingVerification: 0 })
         setTimeline(d.tasks.map((t) => ({
           id: t.id, time: t.due, title: `节点「${t.node}」`, desc: `任务 ${t.id} · 处理人 ${t.assignee} · ${t.status}`, by: t.assignee || '系统', kind: 'user',
         })))
       })
       .catch(() => { /* 后端不可用：保持占位 */ })
+    api.get<{ items: WorkflowIssue[] }>(`/api/v1/work-items/${activeWiId}/issues`).then((d) => setIssues(d.items)).catch(() => {})
     api.get<{ items: { id: string; name: string; kind: string; size: string; version: string; level: string; uploader: string; time?: string }[] }>(`/api/v1/documents?wi=${activeWiId}&page_size=100`)
       .then((dd) => setDocs(dd.items))
       .catch(() => {})
@@ -217,6 +220,11 @@ export function WorkItemPage() {
           <SectionCard title="处理历史" extra={<button className="text-xs font-medium text-blue-600 hover:underline" onClick={() => navigate('audit')}>审计</button>}>
             {/* 点击任一历史节点条目 → 进入对应任务处理页查看（历史任务为只读回看） */}
             <Timeline events={timeline} onSelect={(id) => openTask(id, activeWiId ?? undefined)} />
+          </SectionCard>
+
+          <SectionCard title="问题闭环" extra={<Badge tone={issueSummary.blocking ? 'err' : 'info'}>{issueSummary.open} 未关闭</Badge>}>
+            <p className="mb-2 text-[11.5px] text-slate-400">阻断 {issueSummary.blocking} · 待验证 {issueSummary.waitingVerification}</p>
+            <div className="space-y-2">{issues.slice(0, 6).map((issue) => <button key={issue.id} className="w-full rounded-lg border border-slate-200 p-2 text-left text-[12px] dark:border-slate-700" onClick={() => { const id = issue.verificationTaskId || issue.handlerTaskId || issue.sourceTaskId; if (id) openTask(id, activeWiId ?? undefined) }}><b className="block truncate text-slate-700 dark:text-slate-200">{issue.title}</b><span className="text-slate-400">{issue.sourceNode} → {issue.targetNode} · {issue.status}{issue.blocking ? ' · 阻断' : ''}</span></button>)}</div>
           </SectionCard>
         </div>
 

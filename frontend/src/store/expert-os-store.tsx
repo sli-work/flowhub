@@ -145,15 +145,26 @@ export function ExpertOsProvider({ children }: { children: ReactNode }) {
     let active = true
     const refresh = async () => {
       try {
-        const [experts, providers, deployments, runs, approvals, skills, mcp] = await Promise.all([
+        // 一项资源接口失败（例如当前用户没有 MCP 管理权限）不能让整个 OS
+        // 回退到本地缓存；每张概览卡都独立使用本次成功返回的服务端数据。
+        const results = await Promise.allSettled([
           api.get<{ items: ExpertRecord[] }>('/api/v1/experts'),
           api.get<{ items: ProviderRecord[] }>('/api/v1/providers'),
           api.get<{ items: DeploymentRecord[] }>('/api/v1/expert-deployments'),
-          api.get<{ items: RunRecord[] }>('/api/v1/expert-runs'),
+          api.get<{ items: RunRecord[] }>('/api/v1/expert-runs?page_size=100'),
           api.get<{ items: ApprovalRecord[] }>('/api/v1/expert-approvals?status=all'),
           api.get<{ items: SkillRecord[] }>('/api/v1/expert-skills'),
           api.get<{ items: import('../types').McpServerRecord[] }>('/api/v1/mcp-servers'),
         ])
+        const fulfilledValue = <T,>(result: PromiseSettledResult<T>, fallback: T): T =>
+          result.status === 'fulfilled' ? result.value : fallback
+        const experts = fulfilledValue(results[0], { items: [] as ExpertRecord[] })
+        const providers = fulfilledValue(results[1], { items: [] as ProviderRecord[] })
+        const deployments = fulfilledValue(results[2], { items: [] as DeploymentRecord[] })
+        const runs = fulfilledValue(results[3], { items: [] as RunRecord[] })
+        const approvals = fulfilledValue(results[4], { items: [] as ApprovalRecord[] })
+        const skills = fulfilledValue(results[5], { items: [] as SkillRecord[] })
+        const mcp = fulfilledValue(results[6], { items: [] as McpServerRecord[] })
         if (!active) return
         const details = await Promise.all(experts.items.map((expert) => api.get<{ expert: ExpertRecord; versions: { id: string; systemPrompt: string; providerModelId?: string; model?: string; skills: string[]; knowledgeBaseIds: string[]; status?: string; testedAt?: string }[] }>(`/api/v1/experts/${expert.id}`).catch(() => null)))
         if (!active) return
@@ -171,7 +182,7 @@ export function ExpertOsProvider({ children }: { children: ReactNode }) {
         return [detail.expert.id, { versionId: version?.id, systemPrompt: version?.systemPrompt ?? '', providerId, model, knowledgeBaseIds: version?.knowledgeBaseIds ?? [], revision: 1, testedRevision: version?.status === 'published' || version?.testedAt ? 1 : null }]
       }))
         setState((current) => ({ ...current, experts: experts.items, configs: { ...current.configs, ...configs }, providers: providers.items, deployments: deployments.items, runs: runs.items, approvals: approvals.items, skills: skills.items, mcpServers: mcp.items, mcpTools: deriveMcpTools(mcp.items) }))
-      } catch { setState((current) => ({ ...current, mcpServers: [], mcpTools: [] })) }
+      } catch { /* 网络不可用时保留上次成功数据，避免概览卡短暂清空 */ }
       if (active) setState((current) => ({ ...current, serverSynced: true }))
     }
     void refresh()

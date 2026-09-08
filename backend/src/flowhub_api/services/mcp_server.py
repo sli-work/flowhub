@@ -19,7 +19,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
 from flowhub_api.db.session import SessionFactory
-from flowhub_api.models import DocItem, TaskItem, User, WorkItem
+from flowhub_api.models import DocItem, TaskItem, User, WorkItem, WorkflowIssue
 from flowhub_api.services.time import now_iso
 
 _current_user: contextvars.ContextVar[User] = contextvars.ContextVar("flowhub_mcp_user")
@@ -112,6 +112,8 @@ async def get_task(task_id: str) -> dict:
         cfg: dict = {}
         if project is not None and tpl is not None:
             cfg = await svc._node_cfg_of(tpl, task.node_id) or {}
+        from flowhub_api.services.task_issues import TaskIssueService
+        issue_service = TaskIssueService(session)
         return {
             **await _task_summary(session, task),
             "formValues": task.form_values or {},
@@ -119,6 +121,8 @@ async def get_task(task_id: str) -> dict:
             "acceptance": (cfg.get("deliverable") or {}).get("acceptance") or [],
             "acceptanceChecks": task.acceptance_checks or {},
             "workItem": {"id": wi.id if wi else "", "title": wi.title if wi else "", "status": wi.status if wi else ""},
+            "issues": [issue_service.brief(issue) for issue in await issue_service.issues_for_task(task)],
+            "issueSummary": await issue_service.summary(task.wi_id, task.id),
         }
 
 
@@ -213,7 +217,8 @@ async def claim_task(task_id: str) -> dict:
 async def submit_task(task_id: str, form_values: dict, acceptance_checks: dict | None = None) -> dict:
     """提交任务并流转到下一节点（仅任务处理人或系统/组织管理员）。
 
-    - form_values：按节点 formSchema 的 key 组织；upload 字段传 create_document 返回的 [{id, name}] 引用数组；
+    - form_values：按节点 formSchema 的 key 组织；upload/file 字段传 create_document 返回的 [{id, name}] 引用数组；
+      image 字段只能填人工通过图片上传组件创建的 [{id, name}] 引用，Expert 不生成图片内容；
     - acceptance_checks：节点配置了验收标准（acceptance）时必须逐项 {key: {"text": ..., "checked": true}}；
     - 校验失败/无权限返回 {"error": ...}；成功返回下一节点与处理人信息。"""
     user = _current_user.get()
@@ -228,8 +233,24 @@ async def submit_task(task_id: str, form_values: dict, acceptance_checks: dict |
         if task.status == "pending_confirmation":
             return {"error": "Expert 正在自动处理该节点，完成后会自动流转"}
         try:
-            from flowhub_api.services.workflow import WorkflowService
+            if (task.source or "").startswith("issue:") and ":handling:" in (task.source or ""):
+                from flowhub_api.services.task_issues import TaskIssueService
+                from flowhub_api.routes.notifications import publish_notification
 
+                issue, verification_task, notifications = await TaskIssueService(session).complete_handling(
+                    task, form_values or {}, acceptance_checks or {}, user,
+                )
+                await session.commit()
+                for notification in notifications:
+                    await publish_notification(notification)
+                return {"submitted": True, "task": await _task_summary(session, task), "issue": TaskIssueService.brief(issue),
+                        "nextTaskId": verification_task.id, "nextNode": {"id": verification_task.node_id, "label": verification_task.node}}
+            if (task.source or "").startswith("issue:") and ":verify:" in (task.source or ""):
+                return {"error": "问题验证请调用 verify_task_issue"}
+            from flowhub_api.services.workflow import WorkflowService
+            from flowhub_api.services.task_issues import TaskIssueService
+
+            await TaskIssueService(session).assert_origin_can_advance(task)
             result = await WorkflowService(session).submit_and_advance(task, form_values or {}, acceptance_checks or {}, user)
             await session.commit()
         except Exception as exc:  # noqa: BLE001
@@ -244,6 +265,70 @@ async def submit_task(task_id: str, form_values: dict, acceptance_checks: dict |
             "waitingJoin": bool(result.get("waiting_join")),
             "closed": bool(result.get("closed")),
         }
+
+
+@mcp.tool()
+async def create_task_issue(task_id: str, target_task_id: str, title: str, description: str,
+                            priority: Literal["P0", "P1", "P2", "P3"] = "P2", blocking: bool | None = None) -> dict:
+    """从任意当前任务创建局部返工问题，投递到本工作项已完成的前置任务。
+
+    问题处理不会推动主流程；blocking=true 时，原任务在验证通过前不能提交。
+    """
+    user = _current_user.get()
+    from flowhub_api.routes.notifications import publish_notification
+    from flowhub_api.services.task_issues import TaskIssueService
+
+    async with SessionFactory() as session:
+        task = await session.get(TaskItem, task_id)
+        if task is None:
+            return {"error": "任务不存在"}
+        service = TaskIssueService(session)
+        try:
+            issue, notifications = await service.create(task, target_task_id=target_task_id, title=title,
+                description=description, priority=priority, blocking=blocking, actor=user)
+            await session.commit()
+        except Exception as exc:  # noqa: BLE001
+            return {"error": getattr(exc, "detail", None) or str(exc)}
+        for notification in notifications:
+            await publish_notification(notification)
+        return {"created": True, "issue": service.brief(issue)}
+
+
+@mcp.tool()
+async def list_task_issues(task_id: str) -> list[dict]:
+    """查询与当前任务关联的问题及阻断汇总。"""
+    user = _current_user.get()
+    from flowhub_api.services.task_issues import TaskIssueService
+
+    async with SessionFactory() as session:
+        task = await session.get(TaskItem, task_id)
+        if task is None or not await _can_read_task(session, user, task):
+            return [{"error": "任务不存在或无权限"}]
+        service = TaskIssueService(session)
+        return [{"summary": await service.summary(task.wi_id, task.id), "items": [service.brief(issue) for issue in await service.issues_for_task(task)]}]
+
+
+@mcp.tool()
+async def verify_task_issue(issue_id: str, passed: bool, notes: str = "") -> dict:
+    """提交问题回归结论。失败会自动创建下一轮前置节点处理任务。"""
+    user = _current_user.get()
+    from flowhub_api.models import WorkflowIssue
+    from flowhub_api.routes.notifications import publish_notification
+    from flowhub_api.services.task_issues import TaskIssueService
+
+    async with SessionFactory() as session:
+        issue = await session.get(WorkflowIssue, issue_id)
+        if issue is None:
+            return {"error": "问题不存在"}
+        service = TaskIssueService(session)
+        try:
+            next_task, notifications = await service.verify(issue, passed, notes, user)
+            await session.commit()
+        except Exception as exc:  # noqa: BLE001
+            return {"error": getattr(exc, "detail", None) or str(exc)}
+        for notification in notifications:
+            await publish_notification(notification)
+        return {"verified": True, "issue": service.brief(issue), "nextTaskId": next_task.id if next_task else ""}
 
 
 @mcp.tool()
@@ -274,12 +359,18 @@ async def get_work_item(wi_id: str) -> dict:
         )).scalars().all()
         if not _is_admin(user) and not any([await _can_read_task(session, user, task) for task in tasks]):
             return {"error": "无权限读取该工作项（仅涉及的任务处理人或系统/组织管理员可读）"}
+        from flowhub_api.services.task_issues import TaskIssueService
+        issue_service = TaskIssueService(session)
         return {
             "id": wi.id, "title": wi.title, "type": wi.type, "project": wi.project,
             "status": wi.status, "priority": wi.priority, "assignee": wi.assignee,
             "creator": wi.creator, "due": wi.due, "labels": wi.labels,
             "startValues": wi.start_values or {},
             "tasks": [await _task_summary(session, task) for task in tasks],
+            "issues": [issue_service.brief(issue) for issue in (await session.execute(
+                select(WorkflowIssue).where(WorkflowIssue.wi_id == wi_id).order_by(WorkflowIssue.created_at.desc())
+            )).scalars().all()],
+            "issueSummary": await issue_service.summary(wi_id),
         }
 
 

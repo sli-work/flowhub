@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from flowhub_api.core.response import BizCode, BizError
 from flowhub_api.models import DocItem, TaskAppend, TaskItem, User, WorkItem
 from flowhub_api.services.document_access import document_content_link
+from flowhub_api.services.workflow import main_task_clause
 from flowhub_api.services import repo_mirror
 
 logger = logging.getLogger(__name__)
@@ -116,6 +117,9 @@ async def build_task_context(session: AsyncSession, user: User, task: TaskItem, 
     current_assignees = "、".join(user.name for user in current_recipients) or task.assignee
     lines.append("")
     lines.append(f"【当前节点任务】{task.id}｜节点「{task.node}」｜状态 {task.status}｜处理人 {current_assignees}｜截止 {task.due}")
+    if task.brief:
+        lines.append("  问题/任务说明：")
+        lines.append(task.brief.replace("\n", "\n  "))
     lines.append("  当前节点表单值：")
     lines.append(_fmt_values(task.form_values).replace("\n", "\n  "))
 
@@ -124,7 +128,7 @@ async def build_task_context(session: AsyncSession, user: User, task: TaskItem, 
     lines.append("【该节点之前的节点记录】")
     prev_tasks = (await session.execute(
         select(TaskItem)
-        .where(TaskItem.wi_id == task.wi_id, TaskItem.id < task.id, TaskItem.status == "completed")
+        .where(TaskItem.wi_id == task.wi_id, TaskItem.id < task.id, TaskItem.status == "completed", main_task_clause())
         .order_by(TaskItem.id.asc())
     )).scalars().all()
     attachment_ids = _file_ids(wi.start_values if wi else None)

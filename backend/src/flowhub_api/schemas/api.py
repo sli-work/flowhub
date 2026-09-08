@@ -290,3 +290,18 @@ class RepoBindingCreateReq(BaseModel):
 class RepoBindingUpdateReq(BaseModel):
     role: str | None = Field(default=None, pattern=r"^(main|docs|service|lib)$")
     default_branch: str | None = None
+
+
+# ---------- 通用问题闭环 ----------
+class IssueCreateReq(BaseModel):
+    title: str = Field(min_length=1, max_length=255)
+    description: str = Field(min_length=1, max_length=8000)
+    target_task_id: str = Field(min_length=1, max_length=40)
+    priority: Literal["P0", "P1", "P2", "P3"] = "P2"
+    # 未显式选择时，紧急问题默认阻断；调用方仍可明确设为 false。
+    blocking: bool | None = None
+
+
+class IssueVerifyReq(BaseModel):
+    passed: bool
+    notes: str = Field(default="", max_length=8000)

@@ -81,6 +81,24 @@ export interface TaskItem {
   frozen?: boolean
 }
 
+export interface WorkflowIssue {
+  id: string
+  sourceTaskId: string
+  sourceNode: string
+  targetNode: string
+  handlerTaskId?: string | null
+  verificationTaskId?: string | null
+  title: string
+  description: string
+  priority: 'P0' | 'P1' | 'P2' | 'P3'
+  blocking: boolean
+  status: 'handling' | 'waiting_verification' | 'closed' | 'deferred'
+  reporter: string
+  round: number
+}
+
+export interface IssueSummary { total: number; open: number; blocking: number; waitingVerification: number }
+
 /* 节点处理人绑定：模板节点 → 具体用户 + 角色（流转时自动分配，PRD §4.5） */
 export interface NodeAssignment {
   nodeId: string
@@ -204,7 +222,7 @@ export interface TemplateVersion {
 /* 结构化表单 Schema（节点表单 / 新建工作项硬性要求） */
 export type FormFieldType =
   | 'input' | 'textarea' | 'select' | 'multiselect' | 'radio'
-  | 'date' | 'number' | 'upload' | 'file'
+  | 'date' | 'number' | 'upload' | 'file' | 'image'
 
 export interface FormFieldOption {
   label: string
@@ -389,7 +407,7 @@ export interface RuntimeEvent {
 export interface RunRecord {
   id: string; session: string; expert: string; version: string; deployment: string
   status: RunStatus; duration: string; traceId: string; started: string; events: RuntimeEvent[]
-  output?: string; error?: string
+  input?: string; output?: string; error?: string
 }
 
 export interface ApprovalRecord {

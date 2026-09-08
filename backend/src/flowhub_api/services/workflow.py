@@ -2,17 +2,31 @@
 import re
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from flowhub_api.core.response import BizCode, BizError
 from flowhub_api.models import (
-    GlobalTemplate, NodeAssignment, NotificationItem, Project, TaskItem, User, WorkItem, WorkflowInstance,
+    DocItem, GlobalTemplate, NodeAssignment, NotificationItem, Project, TaskItem, User, WorkItem, WorkflowInstance,
 )
 from flowhub_api.models.workflow import PRIORITY
 from flowhub_api.seed.init import gen_id
 from flowhub_api.services.audit import AuditService
 from flowhub_api.services import repo_mirror
+
+
+def is_empty_form_value(value: object) -> bool:
+    """Return whether a schema value is absent, including empty upload arrays."""
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    return isinstance(value, (list, tuple, set, dict)) and not value
+
+
+def main_task_clause():
+    """Issue-loop tasks share the table for UX, but never participate in the main DAG."""
+    return or_(TaskItem.source.is_(None), ~TaskItem.source.like("issue:%"))
 
 
 class WorkflowService:
@@ -67,6 +81,13 @@ class WorkflowService:
         nodes = await self.nodes_of(tpl, version)
         start_node = next((n for n in nodes if n.get("type") == "start"), nodes[0] if nodes else {"id": "", "label": "开始"})
         start_label = start_node.get("label", "开始")
+        await self.validate_image_references(
+            project=project.name,
+            wi_id=None,
+            schema=(start_node.get("cfg") or {}).get("schema") or [],
+            form_values=start_values,
+            uploader=creator.name,
+        )
         # 权限：只有第一个节点的候选处理人（或系统/组织管理员）才能创建工作项；
         # start 节点未配置处理人时允许任何登录用户创建
         is_admin = any(r.id in ("system_admin", "organization_admin") for r in creator.roles)
@@ -293,6 +314,7 @@ class WorkflowService:
                 TaskItem.wi_id == task.wi_id,
                 TaskItem.node_id == node_id,
                 TaskItem.status.not_in(["completed", "cancelled"]),
+                main_task_clause(),
                 TaskItem.parent_task_id.is_(None),
                 TaskItem.id != task.id,
                 lineage_cond,
@@ -315,7 +337,7 @@ class WorkflowService:
         # 产出契约统一校验：所有产出节点的 schema 必填项 + 验收清单强制勾选（此前仅 end 节点校验）
         for field in cfg.get("schema") or []:
             key = field.get("key", "")
-            if field.get("required") and not str(values.get(key, "") or "").strip():
+            if field.get("required") and is_empty_form_value(values.get(key)):
                 raise BizError(BizCode.VALIDATION, f"「{field.get('label', key)}」为必填")
         acceptance = self.deliverable_of(cfg).get("acceptance") or []
         if acceptance:
@@ -333,6 +355,7 @@ class WorkflowService:
                     TaskItem.wi_id == task.wi_id,
                     TaskItem.id != task.id,
                     TaskItem.status.not_in(["completed", "cancelled"]),
+                    main_task_clause(),
                 )
             )).scalars().first()
             wi = await self.session.get(WorkItem, task.wi_id)
@@ -397,7 +420,7 @@ class WorkflowService:
         join_sources = {a for a, b in edges if b == next_id}
         if len(join_sources) > 1:
             # 子任务独立流转：汇合只等待同一子线 root 的分支，不能与其他子线互相满足/阻塞。
-            join_stmt = select(TaskItem).where(TaskItem.wi_id == task.wi_id, TaskItem.status == "completed")
+            join_stmt = select(TaskItem).where(TaskItem.wi_id == task.wi_id, TaskItem.status == "completed", main_task_clause())
             if task.lineage_root_id:
                 join_stmt = join_stmt.where(TaskItem.lineage_root_id == task.lineage_root_id)
             else:
@@ -563,7 +586,16 @@ class WorkflowService:
         """人工提交任务核心（HTTP 路由与外部 MCP 工具共用）：
         表单/验收快照落库 → 表单附件回填工作项关联 → 沿边流转 → 审计。
         调用方负责 commit 与响应组装；返回 advance 结果（或无绑定时的兜底结果）。"""
-        from flowhub_api.models import DocItem
+        # 先按任务冻结的模板版本验证图片引用，再落库；避免任意文档 ID 被写入表单。
+        project, tpl = await self.resolve_template_for_task(t)
+        if project and tpl:
+            instance = (await self.session.execute(
+                select(WorkflowInstance).where(WorkflowInstance.work_item_id == t.wi_id)
+            )).scalar_one_or_none()
+            cfg = await self._node_cfg_of(tpl, t.node_id, instance.version if instance else None) or {}
+            await self.validate_image_references(
+                project=t.project, wi_id=t.wi_id, schema=cfg.get("schema") or [], form_values=form_values or {},
+            )
 
         t.form_values = form_values or {}
         t.acceptance_checks = acceptance_checks or {}
@@ -582,7 +614,6 @@ class WorkflowService:
             for d in docs:
                 d.wi = t.wi_id
         # 推进流程：需要项目 + 模板定位主边
-        project, tpl = await self.resolve_template_for_task(t)
         if project and tpl:
             result = await self.advance(t, project, tpl)
         else:
@@ -595,6 +626,53 @@ class WorkflowService:
                    "assignees": [a.get("name") for a in (result.get("next_assignees") or []) if isinstance(a, dict)]},
         )
         return result
+
+    async def validate_image_references(
+        self, *, project: str, wi_id: str | None, schema: list[dict], form_values: dict,
+        uploader: str | None = None,
+    ) -> None:
+        """Validate image-field references before they become task/work-item data.
+
+        Image files are intentionally scoped to a project and work item.  New
+        work items can reference only the current creator's unbound uploads;
+        task submissions can additionally reference files already bound to the
+        same work item.
+        """
+        image_fields = [field for field in schema if field.get("type") == "image"]
+        if not image_fields:
+            return
+        refs: list[tuple[str, str]] = []
+        for field in image_fields:
+            key = str(field.get("key") or "")
+            value = form_values.get(key)
+            if value is None:
+                continue
+            if not isinstance(value, list):
+                raise BizError(BizCode.VALIDATION, f"「{field.get('label', key)}」必须是图片引用数组")
+            for ref in value:
+                if not isinstance(ref, dict) or not isinstance(ref.get("id"), str) or not ref["id"].strip():
+                    raise BizError(BizCode.VALIDATION, f"「{field.get('label', key)}」包含无效图片引用")
+                refs.append((key, ref["id"]))
+        if not refs:
+            return
+        ids = {doc_id for _, doc_id in refs}
+        docs = (await self.session.execute(select(DocItem).where(DocItem.id.in_(ids)))).scalars().all()
+        found = {doc.id: doc for doc in docs}
+        for key, doc_id in refs:
+            doc = found.get(doc_id)
+            if doc is None or doc.deleted:
+                raise BizError(BizCode.VALIDATION, f"图片「{doc_id}」不存在或已删除")
+            if doc.kind != "节点表单图片":
+                raise BizError(BizCode.VALIDATION, f"字段「{key}」只能引用图片上传组件创建的文件")
+            if "." not in doc.name or f".{doc.name.rsplit('.', 1)[-1].lower()}" not in {".png", ".jpg", ".jpeg", ".webp"}:
+                raise BizError(BizCode.VALIDATION, f"字段「{key}」引用的不是受支持的图片文件")
+            if doc.project != project:
+                raise BizError(BizCode.FORBIDDEN, "不能引用其他项目的图片")
+            if wi_id is None:
+                if doc.wi is not None or (uploader is not None and doc.uploader != uploader):
+                    raise BizError(BizCode.FORBIDDEN, "只能引用当前用户为新工作项上传的图片")
+            elif doc.wi not in (None, wi_id):
+                raise BizError(BizCode.FORBIDDEN, "不能引用其他工作项的图片")
 
     async def resolve_template_for_task(self, task: TaskItem) -> tuple[Project | None, GlobalTemplate | None]:
         """按流程实例定位模板，不能随项目后来绑定的版本漂移。"""

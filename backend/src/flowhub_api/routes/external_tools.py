@@ -91,7 +91,8 @@ async def download_skill_markdown(_: Annotated[User, Depends(get_current_user)])
 3. `get_task <task_id>` 查看当前节点的 `formSchema`（待填字段：key/type/required）与 `acceptance`（验收标准）；
 4. upload 类型字段：用 `create_document(name, content, wi_id)` 把 Markdown 产出保存为文档，拿到 `{{id, name}}` 引用；
 5. `submit_task(task_id, form_values, acceptance_checks)` 提交：
-   - `form_values` 按 formSchema 的 key 组织，upload 字段传 `[{{"id": ..., "name": ...}}]`；
+   - `form_values` 按 formSchema 的 key 组织，upload/file 字段传 `[{{"id": ..., "name": ...}}]`；
+     image 字段只能传人工上传 PNG、JPEG、WebP 后得到的图片引用，不能由 Expert 自动生成；
    - `acceptance_checks` 逐项 `{{"<key>": {{"text": "<标准原文>", "checked": true}}}}`，验收标准必须全部勾选，否则校验失败；
 6. 返回 `nextNode` / `nextAssignees` 表示已流转；`waitingJoin: true` 表示并行汇合等待其他分支。
 

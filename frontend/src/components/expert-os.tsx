@@ -21,12 +21,12 @@ export function OsStatusBadge({ status, label, dot = true }: { status: string; l
   return <Badge tone={STATUS_TONES[status] ?? 'gry'} dot={dot}>{label ?? STATUS_LABELS[status] ?? status}</Badge>
 }
 
-export function MetricStrip({ items }: { items: { label: string; value: ReactNode; note?: string; tone?: Tone }[] }) {
+export function MetricStrip({ items }: { items: { label: string; value: ReactNode; note?: string; tone?: Tone; icon?: ReactNode }[] }) {
   return (
     <div className="mb-5 grid grid-cols-2 gap-3 xl:grid-cols-5">
       {items.map((item) => (
         <div key={item.label} className="rounded-xl border border-slate-200 bg-white px-4 py-3.5 dark:border-slate-700/60 dark:bg-slate-900">
-          <div className="flex items-center justify-between gap-2 text-[11.5px] font-medium text-slate-400"><span>{item.label}</span>{item.tone && <span className={cn('h-2 w-2 rounded-full', item.tone === 'suc' ? 'bg-emerald-500' : item.tone === 'warn' ? 'bg-amber-500' : item.tone === 'err' ? 'bg-red-500' : 'bg-blue-500')} />}</div>
+          <div className="flex items-center justify-between gap-2 text-[11.5px] font-medium text-slate-400"><span>{item.label}</span><span className={cn('flex h-7 w-7 items-center justify-center rounded-lg', item.tone === 'suc' ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-500/15' : item.tone === 'warn' ? 'bg-amber-50 text-amber-600 dark:bg-amber-500/15' : item.tone === 'err' ? 'bg-red-50 text-red-600 dark:bg-red-500/15' : item.tone === 'pur' ? 'bg-violet-50 text-violet-600 dark:bg-violet-500/15' : 'bg-blue-50 text-blue-600 dark:bg-blue-500/15')}>{item.icon ?? <span className="h-2 w-2 rounded-full bg-current" />}</span></div>
           <div className="mt-2 text-2xl font-semibold tracking-tight text-slate-900 dark:text-slate-100">{item.value}</div>
           {item.note && <div className="mt-1 truncate text-[11px] text-slate-400">{item.note}</div>}
         </div>

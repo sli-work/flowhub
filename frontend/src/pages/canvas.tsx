@@ -1,4 +1,6 @@
-import { useRef, useState, useEffect } from 'react'
+import { useRef, useState, useEffect, useMemo, type MouseEvent as ReactMouseEvent } from 'react'
+import { ReactFlow, Background, Controls, Handle, MarkerType, MiniMap, Position, type Connection, type Edge, type Node, type NodeChange, type NodeProps, type ReactFlowInstance } from '@xyflow/react'
+import '@xyflow/react/dist/style.css'
 import {
   Save, ShieldCheck, Undo2, GitBranch, Zap, X, Plus, Trash2,
   Move, Link2, Eye, Check, Play, Clock, LayoutGrid,
@@ -74,6 +76,40 @@ const H = 640
 const NODE_W = 132
 const NODE_H = 60
 
+type FlowNodeData = { canvas: CanvasNode; editable: boolean; flash: boolean }
+
+function WorkflowNode({ data, selected }: NodeProps<Node<FlowNodeData>>) {
+  const { canvas, editable, flash } = data
+  const style = nodeStyle[canvas.type]
+  return (
+    <div className={cn('min-w-[132px] rounded-xl border bg-white px-3 py-2 shadow-sm transition-shadow dark:bg-slate-800',
+      flash ? 'animate-pulse border-red-500 ring-2 ring-red-500/40'
+        : selected ? 'border-blue-500 ring-2 ring-blue-500/20' : 'border-slate-300 dark:border-slate-600')}>
+      {/* start 保留 target 锚点供「回退到开始」边渲染，但不可拖线连入（主线入边非法）；end 同理保留 source 锚点 */}
+      <Handle type="target" position={Position.Left}
+        className={cn('!h-3 !w-3 !border-2 !border-white !bg-slate-400', canvas.type === 'start' && '!bg-slate-300 !opacity-60')}
+        isConnectable={editable && canvas.type !== 'start'} />
+      <div className="flex items-center gap-2"><span className={cn('h-2.5 w-2.5 rounded-full', style.bg)} /><b className="max-w-[92px] truncate text-xs text-slate-700 dark:text-slate-100">{canvas.label}</b></div>
+      <div className="mt-1 truncate text-[9px] text-slate-400">{typeLine[canvas.type]}</div>
+      <Handle type="source" position={Position.Right}
+        className={cn('!h-3 !w-3 !border-2 !border-white !bg-blue-600', canvas.type === 'end' && '!bg-slate-400 !opacity-60')}
+        isConnectable={editable && canvas.type !== 'end'} />
+    </div>
+  )
+}
+
+const flowNodeTypes = { workflow: WorkflowNode }
+
+/* 稳定引用的边样式（见 flowEdges 处注释） */
+const MARKER_MAIN = { type: MarkerType.ArrowClosed, color: '#64748B' }
+const MARKER_MAIN_SEL = { type: MarkerType.ArrowClosed, color: '#2563EB' }
+const MARKER_FB = { type: MarkerType.ArrowClosed, color: '#F87171' }
+const MARKER_FB_SEL = { type: MarkerType.ArrowClosed, color: '#2563EB' }
+const EDGE_STYLE_MAIN = { stroke: '#64748B', strokeWidth: 1.8 }
+const EDGE_STYLE_MAIN_SEL = { stroke: '#2563EB', strokeWidth: 2.6 }
+const EDGE_STYLE_FB = { stroke: '#F87171', strokeWidth: 2.6, strokeDasharray: '5 4' } as const
+const EDGE_STYLE_FB_SEL = { stroke: '#2563EB', strokeWidth: 2.6, strokeDasharray: '5 4' }
+
 interface Snap {
   nodes: CanvasNode[]
   edges: [string, string][]
@@ -92,10 +128,15 @@ function defaultCfg(type: CanvasNode['type']): CanvasNode['cfg'] {
   }
 }
 
+/* 状态节点 = 业务节点 + React Flow 测量结果。
+   measured 必须保留：@xyflow/react v12 在 setNodes 时若节点缺 measured 会清空 handleBounds，
+   导致所有边在拖动的每一帧被卸载重建（画布闪烁） */
+type StateNode = CanvasNode & { measured?: { width?: number; height?: number } }
+
 export function CanvasPage() {
-  const { openDialog, locateNode, setCheckProblems, canvasTarget } = useApp()
+  const { openDialog, locateNode, setCheckProblems, canvasTarget, updateCanvasVersion, openCanvas } = useApp()
   const [mode, setMode] = useState<'view' | 'edit'>('view')
-  const [nodes, setNodes] = useState<CanvasNode[]>([])
+  const [nodes, setNodes] = useState<StateNode[]>([])
   const [edges, setEdges] = useState<[string, string][]>([])
   const [fallbacks, setFallbacks] = useState<[string, string][]>([])
   const [selectedId, setSelectedId] = useState<string>('')
@@ -116,12 +157,53 @@ export function CanvasPage() {
   const tplName = canvasTarget?.templateName ?? '需求流程'
   const viewVersion = canvasTarget?.version ?? 'v3'
 
+  /* 画布高度：默认 560，底边可拖拽调整（320-1200，8px 步进），记忆到 localStorage */
+  const [canvasH, setCanvasH] = useState(() => {
+    const saved = Number(localStorage.getItem('flowhub_canvas_h'))
+    return saved >= 320 && saved <= 1200 ? saved : 560
+  })
+  const onCanvasResizeStart = (e: ReactMouseEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    const startY = e.clientY
+    const startH = canvasH
+    let latest = startH
+    document.body.style.userSelect = 'none'
+    const onMove = (ev: MouseEvent) => {
+      latest = Math.min(1200, Math.max(320, Math.round((startH + ev.clientY - startY) / 8) * 8))
+      setCanvasH(latest)
+    }
+    const onUp = () => {
+      document.body.style.userSelect = ''
+      localStorage.setItem('flowhub_canvas_h', String(latest))
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+
   /* 挂载时从后端拉取画布（GET /templates/{id}/versions/{v}/canvas，后端空时返回默认画布） */
   useEffect(() => {
     api.get<{ nodes: CanvasNode[]; edges: [string, string][]; fallbacks: [string, string][] }>(`/api/v1/templates/${tplId}/versions/${viewVersion}/canvas`)
       .then((d) => {
-        // 统一节点尺寸为当前画布规格（历史版本节点可能存有旧尺寸）
-        const normalized = d.nodes.map((n) => ({ ...n, width: NODE_W, height: NODE_H }))
+        // 历史版本节点可能是极简数据（缺 label/x/y/cfg，甚至类型已废弃）：
+        // 统一补全默认值，避免 NaN 坐标导致节点消失、属性面板访问 cfg.schema 白屏
+        const normalized: CanvasNode[] = d.nodes.map((raw, i) => {
+          const type = (nodeStyle[raw.type as CanvasNode['type']] ? raw.type : 'task') as CanvasNode['type']
+          const cfg = { ...defaultCfg(type), ...(raw.cfg ?? {}) }
+          if (!Array.isArray(cfg.schema)) cfg.schema = []
+          return {
+            ...raw,
+            type,
+            sub: raw.sub ?? type.toUpperCase(),
+            label: raw.label?.trim() || nodeStyle[type].label,
+            x: Number.isFinite(raw.x) ? raw.x : 24 + (i % 5) * (NODE_W + 36),
+            y: Number.isFinite(raw.y) ? raw.y : 24 + Math.floor(i / 5) * (NODE_H + 50),
+            width: NODE_W,
+            height: NODE_H,
+            cfg,
+          }
+        })
         // 画布扩大后，历史布局可能挤在左上角：整体居中（保持相对位置不变）
         if (normalized.length) {
           const minX = Math.min(...normalized.map((n) => n.x))
@@ -136,87 +218,36 @@ export function CanvasPage() {
         setEdges(d.edges)
         setFallbacks(d.fallbacks)
         setSelectedId(d.nodes[0]?.id ?? '')
+        // onInit 时 fetch 尚未返回（fitView 空操作），数据到达后需重新适配视图，避免首屏节点被裁掉
+        window.setTimeout(() => flowRef.current?.fitView({ padding: 0.2 }), 0)
       })
       .catch(() => { /* 后端不可用：画布为空 */ })
   }, [tplId, viewVersion])
 
-  /* ---------- 视图：滚轮缩放 + 拖拽平移 + 适配 ---------- */
-  const [vb, setVb] = useState({ x: 0, y: 0, w: W, h: H })
-  const [zoom, setZoom] = useState(1)
-  const panRef = useRef<{ sx: number; sy: number; vx: number; vy: number; moved: boolean } | null>(null)
-  const panMoved = useRef(false)
-
-  const applyZoom = (factor: number, cx?: number, cy?: number) => {
-    const nw = Math.min(W * 2.5, Math.max(W * 0.35, vb.w * factor))
-    const k = nw / vb.w
-    const px = cx ?? vb.x + vb.w / 2
-    const py = cy ?? vb.y + vb.h / 2
-    setVb({ x: px - (px - vb.x) * k, y: py - (py - vb.y) * k, w: nw, h: vb.h * k })
-    setZoom(W / nw)
-  }
-  /* 适配视图：以当前节点内容为界（而非固定画布尺寸），保证任何布局下全部节点可见 */
-  const fitView = () => {
-    const list = nodesRef.current.length ? nodesRef.current : nodes
-    const maxX = Math.max(W, ...list.map((n) => n.x + n.width + 32))
-    const maxY = Math.max(H, ...list.map((n) => n.y + n.height + 32))
-    setVb({ x: 0, y: 0, w: maxX, h: maxY })
-    setZoom(W / maxX)
-  }
-
-  /* 滚轮缩放（以鼠标位置为中心；非 passive 监听以阻止页面滚动） */
-  useEffect(() => {
-    const svg = svgRef.current
-    if (!svg) return
-    const onWheel = (e: WheelEvent) => {
-      e.preventDefault()
-      const rect = svg.getBoundingClientRect()
-      const cx = vb.x + ((e.clientX - rect.left) / rect.width) * vb.w
-      const cy = vb.y + ((e.clientY - rect.top) / rect.height) * vb.h
-      applyZoom(e.deltaY > 0 ? 1.12 : 1 / 1.12, cx, cy)
-    }
-    svg.addEventListener('wheel', onWheel, { passive: false })
-    return () => svg.removeEventListener('wheel', onWheel)
-  })
-
   const snapshot = useRef<Snap | null>(null)
-  const drag = useRef<{
-    kind: 'move' | 'link'
-    id: string
-    ox: number; oy: number   // move: 节点原坐标; link: 端口坐标
-    start: { x: number; y: number }  // 指针按下时的 SVG 坐标
-    cur: { x: number; y: number } | null
-  } | null>(null)
-  const svgRef = useRef<SVGSVGElement>(null)
-
+  const flowRef = useRef<ReactFlowInstance<Node<FlowNodeData>, Edge> | null>(null)
   const selected = nodes.find((n) => n.id === selectedId) ?? nodes[0] ?? null
   const st = selected ? nodeStyle[selected.type] : nodeStyle.task
 
-  /* ---------- 坐标换算（按当前 viewBox，支持缩放/平移） ---------- */
-  const toSvg = (e: { clientX: number; clientY: number }) => {
-    const rect = svgRef.current!.getBoundingClientRect()
-    return { x: vb.x + (e.clientX - rect.left) * vb.w / rect.width, y: vb.y + (e.clientY - rect.top) * vb.h / rect.height }
-  }
-
-  /* ---------- 发布校验问题定位：选中目标节点 + 视图居中 + 脉冲高亮 ---------- */
+  /* 发布校验定位：选中目标节点 + 聚焦视图 + 脉冲高亮。每个 locateNode 只执行一次，
+     否则 nodes 每次变化（拖拽/编辑属性）都会把视图重新拉回问题节点 */
+  const locatedRef = useRef<string | null>(null)
   useEffect(() => {
-    if (!locateNode) return
-    const target = nodes.find((n) => n.id === locateNode)
+    if (!locateNode || locatedRef.current === locateNode || !nodes.length) return
+    locatedRef.current = locateNode
+    if (!nodes.some((node) => node.id === locateNode)) {
+      toast(`未找到节点 ${locateNode}（当前画布为已发布版本，问题节点属于草稿）`)
+      return
+    }
     setSelectedId(locateNode)
     setLocateFlash(locateNode)
-    // 视图居中到目标节点（缩放态下也能定位）
-    if (target) {
-      setVb((v) => ({
-        x: Math.max(0, Math.min(W - v.w, target.x + target.width / 2 - v.w / 2)),
-        y: Math.max(0, Math.min(H - v.h, target.y + target.height / 2 - v.h / 2)),
-        w: v.w, h: v.h,
-      }))
-    } else {
-      toast(`未找到节点 ${locateNode}（当前画布为已发布版本，问题节点属于草稿）`)
-    }
-    // 脉冲高亮 3 秒后清除
+    flowRef.current?.fitView({ nodes: [{ id: locateNode }], duration: 250, padding: 0.8 })
+  }, [locateNode, nodes])
+  useEffect(() => {
+    if (!locateFlash) return
     const timer = window.setTimeout(() => setLocateFlash(null), 3000)
     return () => window.clearTimeout(timer)
-  }, [locateNode])
+  }, [locateFlash])
 
   /* ---------- 编辑模式进入 / 退出 ---------- */
   const enterEdit = () => {
@@ -225,6 +256,12 @@ export function CanvasPage() {
     setSelectedEdge(null)
     toast('已进入编辑模式：可拖拽节点、拖端口连线、增删节点，按 Delete 删除选中项')
   }
+  /* 保存载荷：剥离 React Flow 内部测量字段（measured），后端只存业务数据 */
+  const toPayload = () => ({
+    nodes: nodes.map(({ measured, ...rest }) => rest),
+    edges,
+    fallbacks,
+  })
   /* ---------- 保存草稿（不发布）：保存到最新草稿版本（没有则自动创建新版本草稿） ---------- */
   const saveDraft = async () => {
     setSnapshotDraft()
@@ -233,9 +270,12 @@ export function CanvasPage() {
     try {
       const r = await api.post<{ version: string; status: string }>(
         `/api/v1/templates/${tplId}/versions/save-draft`,
-        { nodes, edges, fallbacks },
+        toPayload(),
       )
-      toast.success(`画布已保存为 ${r.version} 草稿（未发布）`)
+      // 保存可能自动创建新草稿版本（如当前查看的是已发布版本），画布必须跟随之，否则会误以为节点丢失
+      if (canvasTarget) updateCanvasVersion(r.version)
+      else openCanvas(tplId, tplName, r.version)
+      toast.success(`画布已保存为 ${r.version} 草稿（未发布），已切换到该版本`)
     } catch (e) {
       toast.error(e instanceof ApiError ? e.message : '保存草稿失败')
       setMode('edit')
@@ -252,9 +292,11 @@ export function CanvasPage() {
     try {
       const r = await api.post<{ version: string; status: string }>(
         `/api/v1/templates/${tplId}/versions/save-and-publish`,
-        { nodes, edges, fallbacks },
+        toPayload(),
       )
       toast.success(`已保存并发布版本 ${r.version}：静态校验通过，进入 published 状态`)
+      if (canvasTarget) updateCanvasVersion(r.version)
+      else openCanvas(tplId, tplName, r.version)
     } catch (e) {
       if (e instanceof ApiError && e.status === 422) {
         // 校验未通过：画布已存为新版本草稿（可复用重试），打开发布校验弹框查看完整问题清单并定位
@@ -341,19 +383,21 @@ export function CanvasPage() {
 
   const addNode = (type?: CanvasNode['type']) => {
     const t = type ?? 'task'
-    const idx = nodes.length
-    const row = Math.floor(idx / 5)
-    const col = idx % 5
     const id = `n${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`
     const label = nodeStyle[t].label
+    // 新节点放在现有内容最右侧，避免与居中后的历史布局重叠、出现在视口外
+    const maxX = nodes.length ? Math.max(...nodes.map((n) => n.x + n.width)) : 0
+    const minY = nodes.length ? Math.min(...nodes.map((n) => n.y)) : 0
     const node: CanvasNode = {
-      id, label, type: t, sub: t.toUpperCase(), x: 24 + col * 168, y: 24 + row * 110, width: NODE_W, height: NODE_H,
+      id, label, type: t, sub: t.toUpperCase(), x: maxX + 96, y: minY, width: NODE_W, height: NODE_H,
       cfg: defaultCfg(t),
     }
     setNodes((prev) => [...prev, node])
     setSelectedId(id)
     setSelectedEdge(null)
     setAddOpen(false)
+    // 视图适配，确保新节点可见
+    window.setTimeout(() => flowRef.current?.fitView({ padding: 0.2, duration: 220 }), 0)
     toast(`已添加节点「${label}」（${id}）：拖动右侧端口连线`)
   }
 
@@ -367,12 +411,6 @@ export function CanvasPage() {
   }
 
   /* ---------- 连线操作 ---------- */
-  const addEdge = (from: string, to: string) => {
-    if (from === to) return
-    if (edges.some(([a, b]) => a === from && b === to)) { toast('该连线已存在'); return }
-    setEdges((prev) => [...prev, [from, to]])
-    toast('已创建主线连线')
-  }
   const addFallback = (from: string, to: string) => {
     if (from === to) return
     if (fallbacks.some(([a, b]) => a === from && b === to)) { toast('该回退路径已存在'); return }
@@ -380,186 +418,123 @@ export function CanvasPage() {
     toast.success(`已设置回退目标：${nodes.find((n) => n.id === to)?.label}`)
   }
   const deleteEdge = (key: string) => {
-    setEdges((prev) => prev.filter(([a, b]) => `${a}-${b}` !== key))
+    setEdges((prev) => prev.filter(([a, b]) => `edge:${a}:${b}` !== key))
     setSelectedEdge(null)
     toast('已删除主线连线')
   }
   const deleteFallback = (key: string) => {
-    setFallbacks((prev) => prev.filter(([a, b]) => `fb-${a}-${b}` !== key))
+    setFallbacks((prev) => prev.filter(([a, b]) => `fallback:${a}:${b}` !== key))
+    setSelectedEdge(null)
     toast('已移除回退路径')
   }
 
-  /* ---------- 指针事件（window 级监听，兼容所有浏览器） ---------- */
-  const nodesRef = useRef(nodes)
-  const edgesRef = useRef(edges)
-  useEffect(() => { nodesRef.current = nodes; edgesRef.current = edges })
-
-  /* 稳定的监听器引用（避免 render 闭包版本漂移） */
-  const moveListener = useRef<(e: PointerEvent) => void>(() => {})
-  const upListener = useRef<(e: PointerEvent) => void>(() => {})
-
-  useEffect(() => {
-    return () => {
-      window.removeEventListener('pointermove', moveListener.current)
-      window.removeEventListener('pointerup', upListener.current)
-      window.removeEventListener('pointercancel', upListener.current)
-    }
-  }, [])
-
-  /* ---------- 背景平移（按住空白拖拽；未移动视为点击空白 → 取消选中） ---------- */
-  const onBgPointerDown = (e: React.PointerEvent) => {
-    panRef.current = { sx: e.clientX, sy: e.clientY, vx: vb.x, vy: vb.y, moved: false }
-    panMoved.current = false
-    const onMove = (ev: PointerEvent) => {
-      const p = panRef.current
-      if (!p) return
-      const dx = ev.clientX - p.sx
-      const dy = ev.clientY - p.sy
-      if (Math.abs(dx) + Math.abs(dy) > 3) p.moved = true
-      if (!p.moved) return
-      panMoved.current = true
-      const rect = svgRef.current!.getBoundingClientRect()
-      setVb((v) => ({ x: p.vx - (dx * v.w) / rect.width, y: p.vy - (dy * v.h) / rect.height, w: v.w, h: v.h }))
-    }
-    const onUp = () => {
-      if (!panMoved.current && mode === 'edit') { setSelectedEdge(null); setSelectedId('') }
-      window.removeEventListener('pointermove', onMove)
-      window.removeEventListener('pointerup', onUp)
-    }
-    window.addEventListener('pointermove', onMove)
-    window.addEventListener('pointerup', onUp)
-  }
-
-  /* ---------- 自动整理：拓扑分层 + 蛇形排布（主边最长路径定层级） ---------- */
   const autoLayout = () => {
-    setNodes((prev) => {
-      const ids = prev.map((n) => n.id)
-      const succ = new Map<string, string[]>()
-      const indeg = new Map<string, number>()
-      for (const id of ids) { succ.set(id, []); indeg.set(id, 0) }
-      for (const [a, b] of edges) {
-        if (succ.has(a) && indeg.has(b) && a !== b) {
-          succ.get(a)!.push(b)
-          indeg.set(b, (indeg.get(b) ?? 0) + 1)
-        }
+    const ids = nodes.map((node) => node.id)
+    const outgoing = new Map(ids.map((id) => [id, [] as string[]]))
+    const incoming = new Map(ids.map((id) => [id, 0]))
+    for (const [from, to] of edges) {
+      outgoing.get(from)?.push(to)
+      incoming.set(to, (incoming.get(to) ?? 0) + 1)
+    }
+    const depth = new Map<string, number>()
+    const queue = ids.filter((id) => incoming.get(id) === 0)
+    queue.forEach((id) => depth.set(id, 0))
+    while (queue.length) {
+      const from = queue.shift()!
+      for (const to of outgoing.get(from) ?? []) {
+        depth.set(to, Math.max(depth.get(to) ?? 0, (depth.get(from) ?? 0) + 1))
+        incoming.set(to, (incoming.get(to) ?? 1) - 1)
+        if (incoming.get(to) === 0) queue.push(to)
       }
-      // Kahn 最长路径分层（回退边不参与，避免环干扰）
-      const depth = new Map<string, number>()
-      const work = new Map(indeg)
-      const q = ids.filter((id) => (work.get(id) ?? 0) === 0)
-      for (const id of q) depth.set(id, 0)
-      while (q.length) {
-        const id = q.shift()!
-        for (const b of succ.get(id) ?? []) {
-          depth.set(b, Math.max(depth.get(b) ?? 0, (depth.get(id) ?? 0) + 1))
-          work.set(b, (work.get(b) ?? 1) - 1)
-          if ((work.get(b) ?? 0) === 0) q.push(b)
-        }
-      }
-      for (const id of ids) if (!depth.has(id)) depth.set(id, 0) // 环上孤点放首层兜底
-      // 分层 → 行（行内按当前 x 保持相对顺序）→ 蛇形排布
-      const layers = new Map<number, string[]>()
-      for (const id of [...ids].sort((x, y) => (prev.find((n) => n.id === x)?.x ?? 0) - (prev.find((n) => n.id === y)?.x ?? 0))) {
-        const d = depth.get(id) ?? 0
-        if (!layers.has(d)) layers.set(d, [])
-        layers.get(d)!.push(id)
-      }
-      const depths = [...layers.keys()].sort((a, b) => a - b)
-      // 行距按画布高度自适应：层级多时压缩行距，保证最深行仍在画布内（含节点高与边距）
-      const GAP_X = NODE_W + 72
-      const GAP_Y = depths.length > 1
-        ? Math.max(NODE_H + 28, Math.min(NODE_H + 84, (H - 36 - NODE_H) / (depths.length - 1)))
-        : NODE_H + 84
-      const posById = new Map<string, { x: number; y: number }>()
-      depths.forEach((d, row) => {
-        const rowIds = layers.get(d)!
-        const ltr = row % 2 === 0
-        const ordered = ltr ? rowIds : [...rowIds].reverse()
-        const rowWidth = ordered.length * GAP_X - (GAP_X - NODE_W)
-        const startX = Math.max(32, (W - rowWidth) / 2)
-        ordered.forEach((id, i) => {
-          posById.set(id, {
-            x: Math.round(ltr ? startX + i * GAP_X : startX + (ordered.length - 1 - i) * GAP_X),
-            y: Math.round(36 + row * GAP_Y),
-          })
-        })
-      })
-      return prev.map((n) => ({ ...n, ...(posById.get(n.id) ?? {}) }))
-    })
-    // 布局后适配视图：内容（含新行距）完整可见，避免深层级节点落到画布外
-    setTimeout(() => fitView(), 0)
+    }
+    const columns = new Map<number, string[]>()
+    for (const id of ids) {
+      const level = depth.get(id) ?? 0
+      columns.set(level, [...(columns.get(level) ?? []), id])
+    }
+    const positions = new Map<string, { x: number; y: number }>()
+    for (const [level, column] of [...columns.entries()].sort((a, b) => a[0] - b[0])) {
+      const height = column.length * (NODE_H + 42) - 42
+      column.forEach((id, row) => positions.set(id, { x: 48 + level * (NODE_W + 96), y: Math.max(32, (H - height) / 2) + row * (NODE_H + 42) }))
+    }
+    setNodes((current) => current.map((node) => ({ ...node, ...(positions.get(node.id) ?? {}) })))
     setCheckResult(null)
-    toast.success('已自动整理：按流转顺序分层蛇形排布')
+    window.setTimeout(() => flowRef.current?.fitView({ padding: 0.2, duration: 220 }), 0)
+    toast.success('已自动整理：按流转顺序从左到右分层排布')
   }
 
-  /* ---------- 拖连线落点高亮 ---------- */
-  const [dropTarget, setDropTarget] = useState<string | null>(null)
-  /* 悬停节点：显示删除按钮 */
-  const [hoverNodeId, setHoverNodeId] = useState<string | null>(null)
-
-  /* 拖动范围：画布高度与现有内容（最深节点）取大者，避免越界节点永远拖不回来 */
-  const dragMaxY = () => Math.max(H - NODE_H - 8, ...nodesRef.current.map((n) => n.y + NODE_H + 8))
-  const onWinMove = (e: PointerEvent) => {
-    const d = drag.current
-    if (!d) return
-    const p = toSvg({ clientX: e.clientX, clientY: e.clientY })
-    if (d.kind === 'move') {
-      const nx = Math.round((d.ox + (p.x - d.start.x)) / 8) * 8
-      const ny = Math.round((d.oy + (p.y - d.start.y)) / 8) * 8
-      updateNode(d.id, { x: Math.max(8, Math.min(W - NODE_W - 8, nx)), y: Math.max(8, Math.min(dragMaxY(), ny)) })
-    } else {
-      // 连线磁吸：指针靠近目标节点（含 16px 外扩热区）时吸附到其左侧端口，松手即连
-      const hit = hitNodeRef(p, 16)
-      d.cur = hit ? { x: hit.x, y: hit.y + hit.height / 2 } : p
-      setDropTarget(hit && hit.id !== d.id ? hit.id : null)
+  const wouldCreateCycle = (from: string, to: string) => {
+    const seen = new Set<string>()
+    const visit = (id: string): boolean => {
+      if (id === from) return true
+      if (seen.has(id)) return false
+      seen.add(id)
+      return edges.filter(([source]) => source === id).some(([, target]) => visit(target))
     }
+    return visit(to)
   }
-  const onWinUp = (e: PointerEvent) => {
-    const d = drag.current
-    if (!d) return
-    const p = toSvg({ clientX: e.clientX, clientY: e.clientY })
-    if (d.kind === 'link') {
-      const target = hitNodeRef(p, 16)
-      if (target && target.id !== d.id) {
-        addEdge(d.id, target.id)
-      } else if (target) {
-        toast('不能连接到自身节点')
-      } else {
-        toast('未命中节点：从节点右侧蓝点拖出，靠近目标节点会自动吸附，松手完成连线')
+  const connectionError = (from: string, to: string): string | null => {
+    const source = nodes.find((node) => node.id === from)
+    const target = nodes.find((node) => node.id === to)
+    if (!source || !target) return '连接目标不存在'
+    if (from === to) return '不能连接到自身节点'
+    if (edges.some(([a, b]) => a === from && b === to)) return '该主线连线已存在'
+    if (target.type === 'start') return '开始节点不允许有主线入边'
+    if (source.type === 'end') return '结束节点不允许有主线出边'
+    if (wouldCreateCycle(from, to)) return '主线不能形成环；请使用回退路径表达返工'
+    return null
+  }
+  const onConnect = (connection: Connection) => {
+    if (!connection.source || !connection.target) return
+    const error = connectionError(connection.source, connection.target)
+    if (error) { toast.error(error); return }
+    setEdges((prev) => [...prev, [connection.source!, connection.target!]])
+    toast.success('已创建主线连线')
+  }
+  const onNodeDragStop = (_: unknown, flowNode: Node<FlowNodeData>) =>
+    updateNode(flowNode.id, { x: Math.round(flowNode.position.x / 8) * 8, y: Math.round(flowNode.position.y / 8) * 8 })
+  const onNodesChange = (changes: NodeChange<Node<FlowNodeData>>[]) => {
+    setNodes((current) => changes.reduce((updated, change) => {
+      if (change.type === 'position' && change.position) {
+        return updated.map((node) => node.id === change.id ? { ...node, x: change.position!.x, y: change.position!.y } : node)
       }
-      setDropTarget(null)
-    }
-    drag.current = null
-    window.removeEventListener('pointermove', moveListener.current)
-    window.removeEventListener('pointerup', upListener.current)
-    window.removeEventListener('pointercancel', upListener.current)
+      // 回写测量结果，避免拖动时 handleBounds 被清空导致全量边闪烁重建
+      // （v12 运行时发出的变更字段是 dimensions，类型定义上未声明，需断言读取）
+      if (change.type === 'dimensions') {
+        const measured = (change as { dimensions?: { width?: number; height?: number } }).dimensions
+        if (measured?.width && measured?.height) {
+          return updated.map((node) => node.id === change.id ? { ...node, measured } : node)
+        }
+      }
+      return updated
+    }, current))
   }
-  moveListener.current = onWinMove
-  upListener.current = onWinUp
-  const beginDrag = (kind: 'move' | 'link', id: string, ox: number, oy: number, p: { x: number; y: number }) => {
-    drag.current = { kind, id, ox, oy, start: p, cur: kind === 'link' ? p : null }
-    window.addEventListener('pointermove', moveListener.current)
-    window.addEventListener('pointerup', upListener.current)
-    window.addEventListener('pointercancel', upListener.current)
-  }
-  const onNodePointerDown = (e: React.PointerEvent, n: CanvasNode) => {
-    if (mode !== 'edit') return
-    e.preventDefault()
-    e.stopPropagation()
-    beginDrag('move', n.id, n.x, n.y, toSvg(e))
-    setSelectedId(n.id)
-    setSelectedEdge(null)
-  }
-  const onPortPointerDown = (e: React.PointerEvent, n: CanvasNode) => {
-    if (mode !== 'edit') return
-    e.preventDefault()
-    e.stopPropagation()
-    beginDrag('link', n.id, n.x + NODE_W, n.y + NODE_H / 2, toSvg(e))
-    setSelectedId(n.id)
-    setSelectedEdge(null)
-  }
-  const hitNodeRef = (p: { x: number; y: number }, pad = 0) =>
-    nodesRef.current.find((n) => p.x >= n.x - pad && p.x <= n.x + n.width + pad && p.y >= n.y - pad && p.y <= n.y + n.height + pad)
+  const flowNodes: Node<FlowNodeData>[] = nodes.map((node) => ({
+    id: node.id, type: 'workflow', position: { x: node.x, y: node.y }, measured: node.measured,
+    data: { canvas: node, editable: mode === 'edit', flash: locateFlash === node.id },
+    selected: selectedId === node.id,
+    selectable: true, deletable: false, draggable: mode === 'edit',
+  }))
+  /* marker/style 必须用稳定引用：拖动时组件每帧重渲染，若每帧新建 markerEnd/style 对象，
+     @xyflow/react 会把所有边的 <g> 元素整只卸载重挂（连线闪烁） */
+  const flowEdges: Edge[] = useMemo(() => [
+    ...edges.map(([source, target]) => {
+      const isSel = selectedEdge === `edge:${source}:${target}`
+      return {
+        id: `edge:${source}:${target}`, source, target, type: 'smoothstep', selected: isSel,
+        markerEnd: isSel ? MARKER_MAIN_SEL : MARKER_MAIN,
+        style: isSel ? EDGE_STYLE_MAIN_SEL : EDGE_STYLE_MAIN,
+      }
+    }),
+    ...fallbacks.map(([source, target]) => {
+      const isSel = selectedEdge === `fallback:${source}:${target}`
+      return {
+        id: `fallback:${source}:${target}`, source, target, type: 'smoothstep', selected: isSel,
+        markerEnd: isSel ? MARKER_FB_SEL : MARKER_FB,
+        style: isSel ? EDGE_STYLE_FB_SEL : EDGE_STYLE_FB,
+      }
+    }),
+  ], [edges, fallbacks, selectedEdge])
 
   /* ---------- 键盘删除 ---------- */
   useEffect(() => {
@@ -568,13 +543,27 @@ export function CanvasPage() {
       if (e.key === 'Delete' || e.key === 'Backspace') {
         const tag = (e.target as HTMLElement)?.tagName
         if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
-        if (selectedEdge) { deleteEdge(selectedEdge); return }
+        if (selectedEdge) {
+          if (selectedEdge.startsWith('fallback:')) deleteFallback(selectedEdge)
+          else deleteEdge(selectedEdge)
+          return
+        }
         if (selectedId) { const n = nodes.find((x) => x.id === selectedId); if (n && n.type !== 'start' && n.type !== 'end') deleteNode(selectedId) }
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   })
+
+  /* 「添加节点」下拉：点击外部自动关闭 */
+  useEffect(() => {
+    if (!addOpen) return
+    const close = (e: MouseEvent) => {
+      if (!(e.target as HTMLElement).closest('[data-add-menu]')) setAddOpen(false)
+    }
+    document.addEventListener('mousedown', close)
+    return () => document.removeEventListener('mousedown', close)
+  }, [addOpen])
 
   /* ---------- 静态校验（真实规则） ---------- */
   const runCheck = () => {
@@ -625,84 +614,6 @@ export function CanvasPage() {
     else toast.error(`校验未通过：${msgs.length} 个问题（详见提示条）`)
   }
 
-  /* ---------- 渲染辅助 ---------- */
-  const pos = (id: string) => nodes.find((n) => n.id === id)!
-  const edgeD = (a: string, b: string, offset = 0) => {
-    const A = pos(a), B = pos(b)
-    if (!A || !B) return ''
-    const acx = A.x + A.width / 2, acy = A.y + A.height / 2
-    const bcx = B.x + B.width / 2, bcy = B.y + B.height / 2
-    const dx = bcx - acx, dy = bcy - acy
-    let p1: { x: number; y: number }, p2: { x: number; y: number }
-    if (Math.abs(dy) > Math.abs(dx) * 1.4) {
-      // 近似垂直（蛇形换行）：下行从源底部出、目标顶部入；上行反之
-      if (dy > 0) { p1 = { x: acx, y: A.y + A.height }; p2 = { x: bcx, y: B.y } }
-      else { p1 = { x: acx, y: A.y }; p2 = { x: bcx, y: B.y + B.height } }
-    } else if (dx >= 0) {
-      // 右向流：源右侧出、目标左侧入
-      p1 = { x: A.x + A.width, y: acy }; p2 = { x: B.x, y: bcy }
-    } else {
-      // 回向（目标在左）：源底部绕行出、目标左侧入，避免横穿中间节点
-      p1 = { x: acx, y: A.y + A.height }; p2 = { x: B.x, y: bcy }
-    }
-    // 贝塞尔朝向按跨度主轴选择；offset 平移控制点（拖弯）
-    if (Math.abs(p1.x - p2.x) >= Math.abs(p1.y - p2.y)) {
-      const mx = (p1.x + p2.x) / 2
-      return `M ${p1.x} ${p1.y} C ${mx} ${p1.y + offset}, ${mx} ${p2.y + offset}, ${p2.x} ${p2.y}`
-    }
-    const my = (p1.y + p2.y) / 2 + offset
-    return `M ${p1.x} ${p1.y} C ${p1.x} ${my}, ${p2.x} ${my}, ${p2.x} ${p2.y}`
-  }
-  const fbD = (a: string, b: string) => {
-    const A = pos(a), B = pos(b)
-    if (!A || !B) return ''
-    const x1 = A.x + A.width / 2, y1 = A.y + A.height
-    const x2 = B.x + B.width / 2, y2 = B.y
-    const my = (y1 + y2) / 2 + 28
-    return `M ${x1} ${y1} C ${x1} ${my}, ${x2} ${my}, ${x2} ${y2}`
-  }
-  const edgeKey = (a: string, b: string) => `${a}-${b}`
-  /** 连线视觉偏移：存源节点 cfg.edgeOffsets，随画布保存/加载 */
-  const edgeOffsetOf = (a: string, b: string) => {
-    const from = nodes.find((n) => n.id === a)
-    return from?.cfg.edgeOffsets?.[`${a}-${b}`] ?? 0
-  }
-  const setEdgeOffset = (a: string, b: string, offset: number) => {
-    updateNodeCfg(a, { edgeOffsets: { ...(nodes.find((n) => n.id === a)?.cfg.edgeOffsets ?? {}), [`${a}-${b}`]: Math.round(offset) } })
-  }
-
-  /* ---------- 拖动选中连线调整弯曲度 ---------- */
-  const edgeDragRef = useRef<{ key: string; a: string; b: string; startY: number; startOffset: number } | null>(null)
-  const edgeMoveListener = useRef<(e: PointerEvent) => void>(() => {})
-  const edgeUpListener = useRef<() => void>(() => {})
-  useEffect(() => () => {
-    window.removeEventListener('pointermove', edgeMoveListener.current)
-    window.removeEventListener('pointerup', edgeUpListener.current)
-  }, [])
-  const beginEdgeDrag = (key: string, e: React.PointerEvent) => {
-    const idx = key.startsWith('fb-') ? null : key.split('-')
-    if (!idx) return // 回退边固定绕行形态，不支持拖弯
-    const [a, b] = idx
-    if (e.stopPropagation) e.stopPropagation()
-    edgeDragRef.current = { key, a, b, startY: e.clientY, startOffset: edgeOffsetOf(a, b) }
-    const onMove = (ev: PointerEvent) => {
-      const d = edgeDragRef.current
-      if (!d) return
-      const rect = svgRef.current!.getBoundingClientRect()
-      const scale = vbRef.current.w / rect.width
-      setEdgeOffset(d.a, d.b, d.startOffset + ((ev.clientY - d.startY) * scale) / 2)
-    }
-    const onUp = () => {
-      edgeDragRef.current = null
-      window.removeEventListener('pointermove', onMove)
-      window.removeEventListener('pointerup', onUp)
-    }
-    window.addEventListener('pointermove', onMove)
-    window.addEventListener('pointerup', onUp)
-  }
-  const vbRef = useRef(vb)
-  useEffect(() => { vbRef.current = vb })
-
   /* 添加节点类型选择器 */
   /* 全部节点类型均可添加；开始/结束全局唯一（画布只能各 1 个，发布校验强制） */
   const addableTypes = Object.keys(nodeStyle) as CanvasNode['type'][]
@@ -749,7 +660,7 @@ export function CanvasPage() {
 
       <div className="grid gap-5 xl:grid-cols-[1fr_350px]">
         {/* ============ 画布 ============ */}
-        <div className={cn('rounded-xl border bg-white p-5 shadow-s dark:bg-slate-900',
+        <div className={cn('self-start rounded-xl border bg-white p-5 shadow-s dark:bg-slate-900',
           mode === 'edit' ? 'border-blue-300 ring-2 ring-blue-500/10 dark:border-blue-500/50' : 'border-slate-200 dark:border-slate-700')}>
           <div className="mb-3 flex flex-wrap items-center gap-3 text-[11.5px] text-slate-400">
             <span className="inline-flex items-center gap-1.5"><span className="h-0.5 w-6 bg-blue-400" />主线流转</span>
@@ -775,192 +686,54 @@ export function CanvasPage() {
             </div>
           )}
 
-          <div className="relative overflow-hidden rounded-lg border border-slate-100 bg-slate-50/40 dark:border-slate-800 dark:bg-slate-950/40">
-            <svg
-              ref={svgRef}
-              viewBox={`${vb.x} ${vb.y} ${vb.w} ${vb.h}`}
-              className={cn('block w-full touch-none select-none', mode === 'edit' ? 'cursor-grab active:cursor-grabbing' : 'cursor-grab')}
-              style={{ width: '100%', height: 460 }}
-              onPointerDown={onBgPointerDown}
+          {/* 注意：@xyflow/react v12 的内部 wrapper 用 width/height:100% 覆盖传入的 style，
+              ReactFlow 自身 style 高度不生效，必须把高度放在外层容器上（此处支持拖拽调整） */}
+          <div className="relative overflow-hidden rounded-lg border border-slate-100 bg-slate-50/40 dark:border-slate-800 dark:bg-slate-950/40" style={{ height: canvasH }}>
+            <ReactFlow
+              nodes={flowNodes}
+              edges={flowEdges}
+              nodeTypes={flowNodeTypes}
+              onInit={(instance) => { flowRef.current = instance; window.setTimeout(() => instance.fitView({ padding: 0.2 }), 0) }}
+              onConnect={onConnect}
+              onNodesChange={onNodesChange}
+              onNodeDragStop={onNodeDragStop}
+              onNodeClick={(_, node) => { setSelectedId(node.id); setSelectedEdge(null) }}
+              onEdgeClick={(_, edge) => { if (mode === 'edit') setSelectedEdge(edge.id) }}
+              onPaneClick={() => { if (mode === 'edit') { setSelectedId(''); setSelectedEdge(null) } }}
+              nodesConnectable={mode === 'edit'}
+              nodesDraggable={mode === 'edit'}
+              elementsSelectable
+              deleteKeyCode={null}
+              fitView
+              minZoom={0.3}
+              maxZoom={2.5}
+              defaultEdgeOptions={{ type: 'smoothstep' }}
+              className={mode === 'edit' ? 'bg-slate-50 dark:bg-slate-950' : 'bg-slate-50/60 dark:bg-slate-950/60'}
             >
-              <defs>
-                <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-                  <path d="M 0 0 L 10 5 L 0 10 z" fill="#94A3B8" />
-                </marker>
-                <marker id="arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-                  <path d="M 0 0 L 10 5 L 0 10 z" fill="#2563EB" />
-                </marker>
-                <marker id="arrow-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-                  <path d="M 0 0 L 10 5 L 0 10 z" fill="#F87171" />
-                </marker>
-                <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-                  <path d="M 0 0 L 10 5 L 0 10 z" fill="#10B981" />
-                </marker>
-              </defs>
+              <Background gap={20} size={1} color="#cbd5e1" />
+              <Controls showInteractive={false} />
+              <MiniMap pannable zoomable className="!bg-slate-100 dark:!bg-slate-800" nodeColor={(node) => nodeStyle[(node.data as FlowNodeData).canvas.type].fill} />
+            </ReactFlow>
 
-              {/* 网格背景（编辑模式） */}
-              {mode === 'edit' && (
-                <pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse">
-                  <path d="M 24 0 L 0 0 0 24" fill="none" stroke="#F1F5F9" strokeWidth="0.6" className="dark:stroke-slate-800" />
-                </pattern>
-              )}
-              {mode === 'edit' && <rect x={-2000} y={-2000} width={W + 4000} height={H + 4000} fill="url(#grid)" />}
-
-              {/* 主线边 */}
-              {edges.map(([a, b]) => {
-                const key = edgeKey(a, b)
-                const sel = selectedEdge === key
-                const dPath = edgeD(a, b, edgeOffsetOf(a, b))
-                return (
-                  <g key={key} onClick={(e) => { if (mode === 'edit') { e.stopPropagation(); setSelectedEdge(key) } }} className={mode === 'edit' ? 'cursor-pointer' : ''}>
-                    <path d={dPath} fill="none" stroke={sel ? '#2563EB' : '#94A3B8'} strokeWidth={sel ? 2.6 : 1.6} markerEnd={sel ? 'url(#arrow-blue)' : 'url(#arrow)'} className="transition-colors" />
-                    {/* 加宽点击热区 */}
-                    <path d={dPath} fill="none" stroke="transparent" strokeWidth="14" style={{ pointerEvents: mode === 'edit' ? 'stroke' : 'none' }} />
-                  </g>
-                )
-              })}
-              {/* 回退边（下行绕行曲线） */}
-              {fallbacks.map(([a, b]) => {
-                const key = `fb-${a}-${b}`
-                const sel = selectedEdge === key
-                return (
-                  <g key={key} onClick={(e) => { if (mode === 'edit') { e.stopPropagation(); setSelectedEdge(key) } }} className={mode === 'edit' ? 'cursor-pointer' : ''}>
-                    <path d={fbD(a, b)} fill="none" stroke={sel ? '#2563EB' : '#F87171'} strokeWidth={sel ? 2.6 : 1.4} strokeDasharray="5 4" markerEnd="url(#arrow-red)" className="transition-colors" />
-                    <path d={fbD(a, b)} fill="none" stroke="transparent" strokeWidth="14" style={{ pointerEvents: mode === 'edit' ? 'stroke' : 'none' }} />
-                  </g>
-                )
-              })}
-
-              {/* 临时连线（拖拽中）：磁吸时吸附线 + 跟随提示 */}
-              {drag.current?.kind === 'link' && drag.current.cur && (() => {
-                const d = drag.current!
-                const cur = d.cur!
-                const snapped = !!dropTarget
-                return (
-                  <g pointerEvents="none">
-                    <path d={`M ${d.ox} ${d.oy} L ${cur.x} ${cur.y}`} fill="none"
-                      stroke={snapped ? '#10B981' : '#2563EB'} strokeWidth={snapped ? 2.4 : 1.8} strokeDasharray={snapped ? undefined : '4 3'} markerEnd={snapped ? 'url(#arrow-green)' : 'url(#arrow-blue)'} />
-                    <g transform={`translate(${(d.ox + cur.x) / 2}, ${(d.oy + cur.y) / 2 - 16})`}>
-                      <rect x={-54} y={-11} width={108} height={20} rx={10} fill={snapped ? '#059669' : '#1D4ED8'} opacity={0.92} />
-                      <text x={0} y={3} fontSize="10.5" textAnchor="middle" fill="white" fontWeight="600">
-                        {snapped ? '松手完成连线' : '拖到目标节点附近'}
-                      </text>
-                    </g>
-                  </g>
-                )
-              })()}
-
-              {/* 节点 */}
-              {nodes.map((n) => {
-                const s = nodeStyle[n.type]
-                const sel = selectedId === n.id
-                const located = locateFlash === n.id
-                const dropping = dropTarget === n.id
-                const label = n.label.length > 10 ? `${n.label.slice(0, 10)}…` : n.label
-                const sub = `${n.sub} · ${typeLine[n.type]}`
-                return (
-                  <g key={n.id} className="canvas-node select-none"
-                    onPointerDown={(e) => onNodePointerDown(e, n)}
-                    onPointerEnter={() => setHoverNodeId(n.id)}
-                    onPointerLeave={() => setHoverNodeId((cur) => (cur === n.id ? null : cur))}
-                    onClick={(e) => { e.stopPropagation(); setSelectedId(n.id); setSelectedEdge(null) }}>
-                    <rect x={n.x} y={n.y} width={n.width} height={n.height} rx={10}
-                      className={cn('node-body transition-all',
-                        dropping ? 'fill-emerald-50 dark:fill-emerald-500/10'
-                          : sel ? 'fill-blue-50 dark:fill-blue-500/10'
-                            : 'fill-white dark:fill-slate-800')}
-                      stroke={located ? '#EF4444' : dropping ? '#10B981' : sel ? '#2563EB' : '#CBD5E1'}
-                      strokeWidth={located ? 2.5 : dropping || sel ? 2 : 1.2}
-                      strokeDasharray={n.type === 'decision' ? '5 3' : located ? '6 3' : undefined}
-                      style={{ cursor: mode === 'edit' ? 'move' : 'pointer' }} />
-                    {located && (
-                      <circle cx={n.x + n.width / 2} cy={n.y + n.height / 2} r={34} fill="none" stroke="#EF4444" strokeWidth="1.6" opacity="0.7">
-                        <animate attributeName="r" from="22" to="40" dur="0.9s" repeatCount="indefinite" />
-                        <animate attributeName="opacity" from="0.8" to="0" dur="0.9s" repeatCount="indefinite" />
-                      </circle>
-                    )}
-                    <circle cx={n.x + 16} cy={n.y + 17} r={5} className={s.bg} />
-                    <text x={n.x + 28} y={n.y + 21} fontSize="11.5" fontWeight="600" className="fill-slate-700 dark:fill-slate-200" pointerEvents="none">{label}</text>
-                    <text x={n.x + 16} y={n.y + 42} fontSize="9" className="fill-slate-400" pointerEvents="none">{sub.length > 20 ? `${sub.slice(0, 20)}…` : sub}</text>
-                    {located && (
-                      <text x={n.x + n.width - 8} y={n.y - 6} fontSize="9" fontWeight="600" textAnchor="end" fill="#EF4444" pointerEvents="none">问题节点</text>
-                    )}
-                    {/* 端口（编辑模式）：右侧输出；拖线接近的节点端口高亮放大提示可落点 */}
-                    {mode === 'edit' && (
-                      <>
-                        <circle cx={n.x + n.width} cy={n.y + n.height / 2} r={16} fill="transparent" className="node-port-hit" style={{ cursor: 'crosshair' }}
-                          onPointerDown={(e) => onPortPointerDown(e, n)}>
-                          <title>从这里拖出连线到目标节点（靠近会自动吸附）</title>
-                        </circle>
-                        <circle cx={n.x + n.width} cy={n.y + n.height / 2}
-                          r={dropping ? 9 : n.id === drag.current?.id ? 7.5 : 6}
-                          fill={dropping ? '#10B981' : '#2563EB'} stroke="white" strokeWidth={1.6} pointerEvents="none"
-                          className={dropping ? 'node-port animate-pulse' : 'node-port'} />
-                        <circle cx={n.x} cy={n.y + n.height / 2} r={5} fill="#CBD5E1" opacity="0.6" pointerEvents="none" />
-                      </>
-                    )}
-                    {/* 节点删除按钮（编辑模式）：选中常显，悬停节点也显示，热区放大 */}
-                    {mode === 'edit' && n.type !== 'start' && n.type !== 'end' && (sel || hoverNodeId === n.id) && (
-                      <g className="cursor-pointer" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); deleteNode(n.id) }}>
-                        <circle cx={n.x + n.width - 8} cy={n.y - 8} r={11} fill="transparent" />
-                        <circle cx={n.x + n.width - 8} cy={n.y - 8} r={9} fill={sel ? '#DC2626' : '#EF4444'} opacity={sel ? 1 : 0.75} />
-                        <path d={`M ${n.x + n.width - 12} ${n.y - 12} l 8 8 M ${n.x + n.width - 4} ${n.y - 12} l -8 8`} stroke="white" strokeWidth="1.8" strokeLinecap="round" pointerEvents="none" />
-                        <title>删除节点「{n.label}」及其关联连线（Delete）</title>
-                      </g>
-                    )}
-                  </g>
-                )
-              })}
-
-              {/* 选中边：删除按钮 + 拖弯手柄 */}
-              {mode === 'edit' && selectedEdge && (() => {
-                const key = selectedEdge
-                const [a, b] = key.startsWith('fb-')
-                  ? key.slice(3).split('-')
-                  : key.split('-')
-                const A = pos(a), B = pos(b)
-                if (!A || !B) return null
-                const cx = (A.x + A.width / 2 + B.x + B.width / 2) / 2, cy = (A.y + A.height / 2 + B.y + B.height / 2) / 2
-                const isFb = key.startsWith('fb-')
-                return (
-                  <g>
-                    <g className="cursor-pointer" onClick={(e) => { e.stopPropagation(); if (isFb) deleteFallback(key); else deleteEdge(key) }}>
-                      <rect x={cx - 16} y={cy - 16} width={32} height={32} rx={8} fill="#DC2626" />
-                      <path d={`M ${cx - 6} ${cy - 6} l 12 12 M ${cx + 6} ${cy - 6} l -12 12`} stroke="white" strokeWidth="2" strokeLinecap="round" />
-                      <title>删除选中连线（Delete）</title>
-                    </g>
-                    {!isFb && (
-                      <g className="cursor-ns-resize" onPointerDown={(e) => beginEdgeDrag(key, e)}>
-                        <circle cx={cx} cy={cy + 34} r={12} fill="transparent" />
-                        <circle cx={cx} cy={cy + 34} r={8} fill="#2563EB" stroke="white" strokeWidth="1.6" />
-                        <path d={`M ${cx - 3.5} ${cy + 32} h 7 M ${cx - 3.5} ${cy + 36} h 7`} stroke="white" strokeWidth="1.4" strokeLinecap="round" pointerEvents="none" />
-                        <title>上下拖动调整连线弯曲度（自动保存到草稿）</title>
-                      </g>
-                    )}
-                  </g>
-                )
-              })()}
-            </svg>
-
-            {/* 缩放控件 */}
-            <div className="absolute bottom-3 right-3 flex items-center gap-1 rounded-lg border border-slate-200 bg-white/95 px-1 py-1 shadow-s dark:border-slate-700 dark:bg-slate-900/95">
-              <button className="h-7 w-7 rounded-md text-[14px] font-medium text-slate-500 hover:bg-slate-100 hover:text-blue-600 dark:hover:bg-slate-800" title="缩小" onClick={() => applyZoom(1.2)}>−</button>
-              <span className="w-10 text-center text-[11px] font-medium text-slate-500">{Math.round(zoom * 100)}%</span>
-              <button className="h-7 w-7 rounded-md text-[14px] font-medium text-slate-500 hover:bg-slate-100 hover:text-blue-600 dark:hover:bg-slate-800" title="放大" onClick={() => applyZoom(1 / 1.2)}>＋</button>
-              <button className="h-7 rounded-md px-2 text-[11px] font-medium text-slate-500 hover:bg-slate-100 hover:text-blue-600 dark:hover:bg-slate-800" title="适配视图" onClick={fitView}>适配</button>
-            </div>
             {mode === 'edit' && (
-              <div className="absolute bottom-3 left-3 rounded-md bg-white/90 px-2 py-1 text-[10.5px] text-slate-400 shadow-s dark:bg-slate-900/90">
-                滚轮缩放 · 拖拽空白平移
+              <div className="absolute bottom-3 left-3 z-10 rounded-md bg-white/90 px-2 py-1 text-[10.5px] text-slate-500 shadow-s dark:bg-slate-900/90">
+                从右侧端口拖至目标左侧端口连线 · 点击边选中后按 Delete 删除 · 滚轮缩放、拖拽平移
               </div>
             )}
+
+            {/* 底边拖拽调高手柄：向下拉扩大画布，向上收起 */}
+            <div
+              title="拖动调整画布高度"
+              className="absolute bottom-0 left-0 right-0 z-10 h-2 cursor-ns-resize bg-transparent transition-colors hover:bg-blue-500/30"
+              onMouseDown={onCanvasResizeStart}
+            />
           </div>
 
           {/* 底部工具条 */}
           <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3 dark:border-slate-800">
             {mode === 'edit' ? (
               <>
-                <div className="relative">
+                <div className="relative" data-add-menu>
                   <button className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-[12.5px] font-medium text-white hover:bg-blue-700" onClick={() => setAddOpen(!addOpen)}>
                     <Plus className="h-4 w-4" />添加节点
                   </button>
@@ -984,7 +757,7 @@ export function CanvasPage() {
                   )}
                 </div>
                 <span className="text-[11.5px] text-slate-400">拖拽节点移动 · 右侧蓝点拖到目标节点创建主线 · 属性面板设置回退</span>
-                <button className="flex items-center gap-1 text-[11.5px] font-medium text-slate-500 hover:text-blue-600" title="按流转顺序分层蛇形重排" onClick={autoLayout}>
+                <button className="flex items-center gap-1 text-[11.5px] font-medium text-slate-500 hover:text-blue-600" title="按流转顺序从左到右分层排布" onClick={autoLayout}>
                   <LayoutGrid className="h-3.5 w-3.5" />自动整理
                 </button>
                 <button className="ml-auto flex items-center gap-1 text-[11.5px] font-medium text-blue-600 hover:underline" onClick={runCheck}>
@@ -994,7 +767,7 @@ export function CanvasPage() {
             ) : (
               <>
                 <span className="text-[11.5px] text-slate-400">滚轮缩放 · 拖拽空白平移 · 点击节点查看属性</span>
-                <button className="flex items-center gap-1 text-[11.5px] font-medium text-slate-500 hover:text-blue-600" title="按流转顺序分层蛇形重排" onClick={autoLayout}>
+                <button className="flex items-center gap-1 text-[11.5px] font-medium text-slate-500 hover:text-blue-600" title="按流转顺序从左到右分层排布" onClick={autoLayout}>
                   <LayoutGrid className="h-3.5 w-3.5" />自动整理
                 </button>
                 <button className="ml-auto inline-flex items-center gap-1 font-medium text-blue-600 hover:underline" onClick={enterEdit}>
@@ -1248,7 +1021,7 @@ export function CanvasPage() {
                     {fallbacks.filter(([a]) => a === selected.id).map(([a, b]) => (
                       <span key={`${a}-${b}`} className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:bg-amber-500/20 dark:text-amber-300">
                         → {nodes.find((n) => n.id === b)?.label}
-                        <button onClick={() => deleteFallback(`fb-${a}-${b}`)} className="text-amber-500 hover:text-red-500"><X className="h-3 w-3" /></button>
+                        <button onClick={() => deleteFallback(`fallback:${a}:${b}`)} className="text-amber-500 hover:text-red-500"><X className="h-3 w-3" /></button>
                       </span>
                     ))}
                     {fallbacks.filter(([a]) => a === selected.id).length === 0 && (
@@ -1424,8 +1197,8 @@ export function CanvasPage() {
               <ul className="list-inside list-disc space-y-1 text-[11.5px]">
                 <li>拖拽节点移动（自动吸附 8px 网格）</li>
                 <li>节点右侧<b className="text-blue-600 dark:text-blue-400">蓝点</b>拖到目标节点创建主线</li>
-                <li>点击边高亮后按 Delete 或点击红色 ✕ 删除</li>
-                <li>「添加节点」支持 7 种类型（任务/决策/并行/验收/闭环/定时）</li>
+                <li>点击边选中（高亮为蓝色）后按 Delete 删除</li>
+                <li>「添加节点」支持全部类型，新节点出现在现有内容右侧；开始/结束全局唯一（已存在时置灰）</li>
                 <li>属性面板可编辑名称/目的/处理主体/SLA/Schema/产出物</li>
                 <li>取消编辑恢复进入前快照，「保存草稿」暂存，「发布」自动创建新版本并发布</li>
               </ul>
@@ -1453,10 +1226,9 @@ function AddFieldRow({ onAdd }: { onAdd: (label: string, type: FormFieldType) =>
     <div className="mt-1.5 flex items-center gap-1.5">
       <input
         className="h-8 min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-2 text-[12px] outline-none focus:border-blue-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
-        placeholder="新字段名称…"
+        placeholder="新字段名称…（点右侧 + 确认添加）"
         value={label}
         onChange={(e) => setLabel(e.target.value)}
-        onKeyDown={(e) => { if (e.key === 'Enter' && label.trim()) { onAdd(label, type); setLabel('') } }}
       />
       <select
         className="h-8 flex-none rounded-md border border-slate-300 bg-white px-1.5 text-[11.5px] outline-none focus:border-blue-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"

@@ -85,7 +85,12 @@ async def run_repo_tool_loop(llm, messages: list, bundle, *, on_trace: Callable[
             response = await llm.ainvoke(transcript + [("human", "工具预算已耗尽。不要再调用工具，仅基于已收集证据给出结论；证据不足时明确说明。")])
             return str(getattr(response, "content", "") or "仓库工具调用已达到安全上限；现有证据不足，请缩小问题范围。"), used
         rounds += 1
-        response = await tool_llm.ainvoke(transcript)
+        try:
+            response = await tool_llm.ainvoke(transcript)
+        except (TypeError, NotImplementedError) as exc:
+            # 部分 OpenAI 兼容网关接受 bind_tools，却在携带 tools 的请求阶段拒绝协议。
+            # 将其归类为模型能力限制，调用方可无损回退到 Graphify 静态证据。
+            raise RepoToolLoopUnavailable(f"模型不支持仓库工具调用协议（{type(exc).__name__}）") from exc
         calls = list(getattr(response, "tool_calls", None) or [])
         if not calls:
             return str(getattr(response, "content", "") or ""), used
@@ -573,6 +578,7 @@ def build_graph(provider: LlmProvider, model: LlmProviderModel, system_prompt: s
                               "summary": f"模型不支持仓库工具调用，已回退静态代码上下文：{str(exc)[:160]}"})
                 await _emit("trace", {"kind": "tool", **trace[-1]})
             except Exception as exc:  # a tool loop must not take down ordinary Expert answers
+                logger.exception("仓库工具循环异常；已回退静态代码上下文", exc_info=exc)
                 trace.append({"tool": "flowhub.repo.tools", "status": "failed",
                               "summary": f"仓库工具循环失败，已回退静态代码上下文：{type(exc).__name__}"})
                 await _emit("trace", {"kind": "tool", **trace[-1]})
@@ -1012,6 +1018,8 @@ def build_schema_output_instruction(schema: list[dict]) -> str:
         elif ftype == "multiselect":
             opts = "；".join(f"{o.get('label')}={o.get('value')}" for o in (f.get("options") or []))
             lines.append(f"- {key}（{f.get('label')}，{required}，多选，输出 value 数组，只能取：{opts}）")
+        elif ftype == "image":
+            lines.append(f"- {key}（{f.get('label')}，{required}，多图上传）：由人工上传 PNG、JPEG 或 WebP 图片；不要生成图片说明、Markdown 或虚构文件引用。")
         elif ftype in ("textarea", "upload", "file"):
             kind = "文件产出" if ftype in ("upload", "file") else "多行文本"
             lines.append(
@@ -1099,7 +1107,7 @@ def _coerce_text(raw_value, depth: int = 0) -> str:
 def parse_schema_output(schema: list[dict], raw: str) -> tuple[dict, list[str]]:
     """解析模型输出为表单值：容错提取 JSON（围栏块优先、单引号兼容），按字段类型矫正
     （选项约束/数值/数组），嵌套 dict/list 拍平为可读文本。
-    upload/file 字段的字符串视为文档正文，由调用方转成文档引用。解析失败绝不猜测字段值。"""
+    upload/file 字段的字符串视为文档正文，由调用方转成文档引用；image 字段必须由人工上传。解析失败绝不猜测字段值。"""
     warnings: list[str] = []
     if not raw or not raw.strip():
         return {}, ["模型无输出"]
@@ -1151,6 +1159,9 @@ def parse_schema_output(schema: list[dict], raw: str) -> tuple[dict, list[str]]:
                 values[key] = float(raw_value) if not float(str(raw_value)).is_integer() else int(float(raw_value))
             except (TypeError, ValueError):
                 warnings.append(f"「{f.get('label', key)}」不是有效数字，已留空")
+        elif ftype == "image":
+            if f.get("required"):
+                warnings.append(f"「{f.get('label', key)}」需由人工上传图片")
         else:
             text = _coerce_text(raw_value)
             if ftype in ("textarea", "upload", "file"):
@@ -1182,6 +1193,7 @@ def build_normalize_prompt(schema: list[dict], raw: str) -> str:
         "- 禁止增删改任何事实与语义：不新增观点/数据/结论，不删减要点，不改写措辞。\n"
         "- 原 JSON 已含某字段时直接采用其内容做排版整理；缺字段时从产出正文中搬运对应内容，不得撰写新内容。\n"
         "- textarea、upload、file 字段的值必须是可直接渲染的纯 Markdown 正文；不要加 JSON/Markdown 代码围栏、字段名前缀或重复总标题。\n"
+        "- image 字段必须保留为空，等待人工上传 PNG、JPEG 或 WebP 图片。\n"
         "- input 字段保持单行纯文本，不加入 Markdown 标记。\n"
         "- 输出仍须严格遵守输出契约（只输出一个 JSON 对象）。\n\n"
         f"{instruction}\n\n## 原始产出\n{raw}"
@@ -1364,7 +1376,7 @@ async def generate_task_form_values(session: AsyncSession, *, task: TaskItem, sc
     if run.status != "succeeded":
         return run, {}, [run.error or "Expert 运行未成功"]
     values, warnings = parse_schema_output(schema, run.output)
-    # upload/file 字段的字符串值 = 文档正文 → 转为文档引用
+    # upload/file 字段的字符串值 = 文档正文 → 转为文档引用；图片仅能由人工上传。
     for f in schema:
         key, ftype = f.get("key", ""), f.get("type", "")
         if ftype in ("upload", "file") and isinstance(values.get(key), str) and values[key].strip():

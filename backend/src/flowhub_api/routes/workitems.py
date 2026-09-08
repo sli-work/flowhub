@@ -10,12 +10,13 @@ from sqlalchemy.orm import selectinload
 from flowhub_api.authz.authorizer import build_authorizer, get_current_user
 from flowhub_api.core.response import BizError, BizCode, ok
 from flowhub_api.db.session import get_db
-from flowhub_api.models import NotificationItem, TaskItem, User, WorkItem
+from flowhub_api.models import NotificationItem, TaskItem, User, WorkItem, WorkflowIssue
 from flowhub_api.schemas.api import CreateWorkItemReq, UpdateWorkItemPriorityReq
 from flowhub_api.seed.init import gen_id
 from flowhub_api.services.audit import AuditService
 from flowhub_api.services.work_item_creation import create_work_item as create_work_item_service
 from flowhub_api.services.task_lineage import historical_split_parent_ids_for_tasks
+from flowhub_api.services.task_issues import TaskIssueService
 from flowhub_api.services.workflow import WorkflowService
 
 router = APIRouter(prefix="/api/v1/work-items", tags=["work-items"])
@@ -33,7 +34,7 @@ def _brief(wi: WorkItem, assignees: list[str] | None = None) -> dict:
 
 async def _current_assignee_names(session: AsyncSession, wi: WorkItem, tasks: list[TaskItem]) -> list[str]:
     """返回所有活跃节点的共同处理人；并行节点会合并为一个去重名单。"""
-    open_tasks = [task for task in tasks if task.status not in ("completed", "cancelled")]
+    open_tasks = [task for task in tasks if task.status not in ("completed", "cancelled") and not (task.source or "").startswith("issue:")]
     if not open_tasks:
         return [wi.assignee] if wi.assignee and wi.assignee != "待分配" else []
     workflow = WorkflowService(session)
@@ -89,7 +90,7 @@ async def list_work_items(
 async def get_work_item(
     wi_id: str,
     session: Annotated[AsyncSession, Depends(get_db)],
-    _: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_current_user)],
 ):
     wi = (await session.execute(
         select(WorkItem).options(selectinload(WorkItem.instance)).where(WorkItem.id == wi_id)
@@ -100,20 +101,25 @@ async def get_work_item(
     tasks = (await session.execute(
         select(TaskItem).where(TaskItem.wi_id == wi_id).order_by(TaskItem.id)
     )).scalars().all()
+    from flowhub_api.services.agent_context import can_read_task
+    is_admin = any(role.id in {"system_admin", "organization_admin"} for role in user.roles)
+    if not is_admin and not any([await can_read_task(session, user, task) for task in tasks]):
+        raise BizError(BizCode.PERM_DENIED, "无权限读取该工作项", http_status=403)
     # 兼容 parent_task_id 尚未落库的历史拆分记录：审计里保存了父任务和 child IDs，
     # 在流程图响应中即时恢复关系；不按任务创建顺序猜测，避免误连普通串行任务。
+    main_tasks = [task for task in tasks if not (task.source or "").startswith("issue:")]
     historical_parents = await historical_split_parent_ids_for_tasks(
-        session, {task.id for task in tasks if not task.parent_task_id},
+        session, {task.id for task in main_tasks if not task.parent_task_id},
     )
-    parent_by_task = {task.id: task.parent_task_id or historical_parents.get(task.id) for task in tasks}
+    parent_by_task = {task.id: task.parent_task_id or historical_parents.get(task.id) for task in main_tasks}
     inst = wi.instance
     # 老实例的游标可能仍停在已完成的拆分父节点。只在游标恰好指向该父节点时，
     # 以子任务的实际下一节点作为展示位置；并行子线在这里共享同一拆分起点。
     display_current_node = inst.current_node if inst is not None else ""
     if inst is not None:
-        for child in tasks:
+        for child in main_tasks:
             parent_id = parent_by_task.get(child.id)
-            parent = next((item for item in tasks if item.id == parent_id), None)
+            parent = next((item for item in main_tasks if item.id == parent_id), None)
             if parent is not None and parent.node_id == inst.current_node:
                 display_current_node = child.node_id
                 break
@@ -124,8 +130,26 @@ async def get_work_item(
             "id": inst.id, "templateId": inst.template_id, "version": inst.version,
             "currentNode": display_current_node, "state": inst.state,
         },
-        "tasks": [{"id": t.id, "node": t.node, "nodeId": t.node_id, "status": t.status, "assignee": t.assignee, "due": t.due, "expertPending": t.expert_pending, "priority": t.priority, "title": t.title, "parentTaskId": parent_by_task.get(t.id), "lineageRootId": t.lineage_root_id} for t in tasks],
+        "tasks": [{"id": t.id, "node": t.node, "nodeId": t.node_id, "status": t.status, "assignee": t.assignee, "due": t.due, "expertPending": t.expert_pending, "priority": t.priority, "title": t.title, "parentTaskId": parent_by_task.get(t.id), "lineageRootId": t.lineage_root_id} for t in main_tasks],
+        "issueSummary": await TaskIssueService(session).summary(wi_id),
     })
+
+
+@router.get("/{wi_id}/issues")
+async def list_work_item_issues(
+    wi_id: str, session: Annotated[AsyncSession, Depends(get_db)], user: Annotated[User, Depends(get_current_user)],
+):
+    wi = await session.get(WorkItem, wi_id)
+    if wi is None:
+        raise BizError(BizCode.NOT_FOUND, "工作项不存在")
+    from flowhub_api.services.agent_context import can_read_task
+    tasks = (await session.execute(select(TaskItem).where(TaskItem.wi_id == wi_id))).scalars().all()
+    is_admin = any(role.id in {"system_admin", "organization_admin"} for role in user.roles)
+    if not is_admin and not any([await can_read_task(session, user, task) for task in tasks]):
+        raise BizError(BizCode.PERM_DENIED, "无权限读取该工作项的问题记录", http_status=403)
+    service = TaskIssueService(session)
+    rows = (await session.execute(select(WorkflowIssue).where(WorkflowIssue.wi_id == wi_id).order_by(WorkflowIssue.created_at.desc()))).scalars().all()
+    return ok({"items": [service.brief(row) for row in rows], "summary": await service.summary(wi_id)})
 
 
 @router.post("")
@@ -214,6 +238,13 @@ async def stop_work_item(
     )).scalars().all()
     for t in open_tasks:
         t.status = "cancelled"
+    open_issues = (await session.execute(select(WorkflowIssue).where(
+        WorkflowIssue.wi_id == wi_id, WorkflowIssue.status.in_(("handling", "waiting_verification")),
+    ))).scalars().all()
+    for issue in open_issues:
+        issue.status = "deferred"
+        issue.verification_notes = "工作项已停止，问题自动延期"
+        issue.updated_at = datetime.now(UTC).isoformat()
     if wi.instance is not None:
         wi.instance.state = "cancelled"
     wi.status = "cancelled"
@@ -221,7 +252,7 @@ async def stop_work_item(
     await AuditService(session).record(
         actor=user.name, action="workflow_instance:cancel",
         target=f"{wi.id} · {wi.title}", result="success",
-        after={"cancelledTasks": [t.id for t in open_tasks]},
+        after={"cancelledTasks": [t.id for t in open_tasks], "deferredIssues": [issue.id for issue in open_issues]},
     )
     await session.commit()
 

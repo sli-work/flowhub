@@ -59,6 +59,8 @@ interface AppState {
   locateCanvasNode: (nodeId: string) => void
   setCheckProblems: (problems: CheckProblem[]) => void
   openCanvas: (templateId: string, templateName: string, version: string) => void
+  /** 画布保存/发布后跟随后端返回的版本号（保存草稿可能自动创建新版本） */
+  updateCanvasVersion: (version: string) => void
   /** 打开 Expert 编辑器：不传或传 null 进入新建模式 */
   openExpertEditor: (expertId?: string | null) => void
 }
@@ -192,6 +194,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setCanvasTarget({ templateId, templateName, version })
     setPage('canvas')
   }, [])
+  const updateCanvasVersion = useCallback((version: string) => {
+    setCanvasTarget((prev) => (prev ? { ...prev, version } : prev))
+  }, [])
 
   const openExpertEditor = useCallback((expertId?: string | null) => {
     setExpertEditorTarget(expertId ?? null)
@@ -202,7 +207,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const value = useMemo(() => ({
     authed, role, page, dialog, taskCounter, orgUsers, currentUser, locateNode, checkProblems, canvasTarget, approvalTargetId, activeWiId, activeTaskId, activeTaskTitle, expertEditorTarget,
     navigate, openWorkItem, openTask, setActiveTaskTitle, login, logout, openDialog, closeDialog, openApproval, bumpTask,
-    updateUser, assignUserRoles, refreshOrgUsers, locateCanvasNode, setCheckProblems, openCanvas, openExpertEditor,
+    updateUser, assignUserRoles, refreshOrgUsers, locateCanvasNode, setCheckProblems, openCanvas, updateCanvasVersion, openExpertEditor,
   }), [authed, role, page, dialog, taskCounter, orgUsers, currentUser, locateNode, checkProblems, canvasTarget, approvalTargetId, activeWiId, activeTaskId, activeTaskTitle, expertEditorTarget, navigate, openWorkItem, openTask, login, logout, openDialog, closeDialog, openApproval, bumpTask, updateUser, assignUserRoles, refreshOrgUsers, locateCanvasNode, setCheckProblems, openCanvas, openExpertEditor])
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>

@@ -212,3 +212,57 @@ class TestAxurePreview:
         data = response.json()["data"]
         assert data["preview_type"] == "archive"
         assert [entry["path"] for entry in data["entries"]] == ["assets/logo.png", "交付说明.txt"]
+
+class TestImageUpload:
+    @staticmethod
+    def _image_bytes(image_format: str) -> bytes:
+        from PIL import Image
+
+        buf = io.BytesIO()
+        Image.new("RGB", (2, 2), "#2463eb").save(buf, format=image_format)
+        return buf.getvalue()
+
+    def test_image_upload_accepts_webp_and_rejects_non_image(self, client: TestClient, leader_headers: dict):
+        uploaded = client.post(
+            "/api/v1/documents/images/upload", headers=leader_headers,
+            files={"file": ("现场图.webp", self._image_bytes("WEBP"), "image/webp")},
+            data={"project": "订单中心", "kind": "节点表单图片"},
+        )
+        assert uploaded.status_code == 200, uploaded.text
+        uploaded_id = uploaded.json()["data"]["doc"]["id"]
+        assert uploaded.json()["data"]["doc"]["name"] == "现场图.webp"
+        listed = client.get("/api/v1/documents", headers=leader_headers).json()["data"]["items"]
+        assert uploaded_id not in {doc["id"] for doc in listed}
+
+        rejected = client.post(
+            "/api/v1/documents/images/upload", headers=leader_headers,
+            files={"file": ("说明.pdf", b"%PDF-1.4", "application/pdf")},
+        )
+        assert rejected.status_code == 400
+        assert "图片" in rejected.json()["message"]
+
+    def test_image_upload_rejects_spoofed_image_content(self, client: TestClient, leader_headers: dict):
+        rejected = client.post(
+            "/api/v1/documents/images/upload", headers=leader_headers,
+            files={"file": ("伪造.png", b"<script>alert('not-an-image')</script>", "image/png")},
+        )
+        assert rejected.status_code == 400
+        assert "图片内容" in rejected.json()["message"]
+
+    def test_image_upload_rejects_unknown_task_target(self, client: TestClient, leader_headers: dict):
+        rejected = client.post(
+            "/api/v1/documents/images/upload", headers=leader_headers,
+            files={"file": ("现场图.png", self._image_bytes("PNG"), "image/png")},
+            data={"project": "订单中心", "wi": "missing-task"},
+        )
+        assert rejected.status_code == 400
+        assert "任务或项目不匹配" in rejected.json()["message"]
+
+    def test_regular_upload_cannot_forge_image_form_kind(self, client: TestClient, leader_headers: dict):
+        rejected = client.post(
+            "/api/v1/documents/upload", headers=leader_headers,
+            files={"file": ("伪造.png", b"not an image", "image/png")},
+            data={"project": "订单中心", "kind": "节点表单图片"},
+        )
+        assert rejected.status_code == 400
+        assert "专用图片上传接口" in rejected.json()["message"]

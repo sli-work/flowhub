@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   ArrowLeft, ArrowRight, Bot, ClipboardList, FileText, Info, Layers, LoaderCircle, Users, Plus,
-  Send, Sparkles, Undo2, UserPlus, PauseCircle, ShieldAlert, ChevronRight, Trash2,
+  Send, Sparkles, Undo2, UserPlus, PauseCircle, ShieldAlert, ChevronRight, Trash2, CircleAlert, CircleCheck,
 } from 'lucide-react'
 import { useApp, toast } from '../store/app-store'
 import {
@@ -12,7 +12,7 @@ import { MarkdownView } from '../components/markdown'
 import { api, ApiError } from '../lib/api'
 import { DocumentViewerDrawer, type ViewerDoc } from '../components/document-viewer-drawer'
 import { cn } from '../lib/utils'
-import type { AcceptanceChecks, ExpertRunBrief, FormField, NodeDeliverable, TaskItem, WorkItem } from '../types'
+import type { AcceptanceChecks, ExpertRunBrief, FormField, IssueSummary, NodeDeliverable, TaskItem, WorkItem, WorkflowIssue } from '../types'
 
 interface CanvasNodeLite {
   id: string
@@ -32,6 +32,7 @@ interface FallbackTarget { id: string; label: string }
 
 interface SubtaskBrief { id: string; title: string; node: string; status: string; assignee: string; due: string }
 interface SplitRow { title: string; note: string; assignee: string }
+interface IssueTarget { taskId: string; nodeId: string; label: string; assignees: string[] }
 
 /** 画布保存顺序可能随编辑拖拽变化；进度条必须以模板边定义的拓扑顺序展示。 */
 function orderCanvasNodes(nodes: CanvasNodeLite[], edges: unknown): CanvasNodeLite[] {
@@ -105,7 +106,7 @@ function InheritedReadOnlyValue({
   onPreviewDocument: (document: DocumentRef) => void
 }) {
   const fieldType = schema?.find((field) => field.key === k)?.type
-  const documents = (fieldType === 'upload' || fieldType === 'file') ? documentRefs(v) : []
+  const documents = (fieldType === 'upload' || fieldType === 'file' || fieldType === 'image') ? documentRefs(v) : []
   if (documents.length > 0) {
     return (
       <span className="flex flex-wrap gap-1.5">
@@ -157,6 +158,14 @@ export function NodeProcessPage() {
   const [curCfg, setCurCfg] = useState<{ purpose?: string; handler?: string; sla?: string; deliverable?: NodeDeliverable; splitMode?: string }>({})
   const [acceptance, setAcceptance] = useState<AcceptanceChecks>({})
   const [fallbackTargets, setFallbackTargets] = useState<FallbackTarget[]>([])
+  const [issues, setIssues] = useState<WorkflowIssue[]>([])
+  const [issueSummary, setIssueSummary] = useState<IssueSummary>({ total: 0, open: 0, blocking: 0, waitingVerification: 0 })
+  const [issueTargets, setIssueTargets] = useState<IssueTarget[]>([])
+  const [issueOpen, setIssueOpen] = useState(false)
+  const [issueBusy, setIssueBusy] = useState(false)
+  const [issueDraft, setIssueDraft] = useState({ title: '', description: '', targetTaskId: '', priority: 'P2', blocking: false })
+  const [verifyOpen, setVerifyOpen] = useState(false)
+  const [verifyNotes, setVerifyNotes] = useState('')
   const [returnOpen, setReturnOpen] = useState(false)
   const [returnTarget, setReturnTarget] = useState('')
   const [returnReason, setReturnReason] = useState('')
@@ -249,7 +258,7 @@ export function NodeProcessPage() {
     setTask(null); setFormValues({}); setAiFilledKeys([]); setExpertRuns([])
     setUpstream([]); setSubtasks([]); setTimeline([]); setFlowSteps([]); setDocs([])
     setCandidates([]); setStartValues({}); setWi(null); setInstance(null)
-    setCurCfg({}); setCurSchema([]); setCurNodeType(''); setAcceptance({}); setFallbackTargets([])
+    setCurCfg({}); setCurSchema([]); setCurNodeType(''); setAcceptance({}); setFallbackTargets([]); setIssues([]); setIssueTargets([])
     setExpandedUp(new Set()); setSubmitBusy(false)
     setLoading(true)
     let curNodeId = ''
@@ -264,6 +273,7 @@ export function NodeProcessPage() {
       expertRuns?: ExpertRunBrief[]
       nodeCfg?: { purpose?: string; handler?: string; sla?: string; schema?: FormField[]; deliverable?: NodeDeliverable; split?: { mode?: string } }
       fallbackTargets?: FallbackTarget[]
+      issues?: WorkflowIssue[]; issueSummary?: IssueSummary; issueTargets?: IssueTarget[]
     }>(`/api/v1/tasks/${activeTaskId}`)
       .then((td) => {
         setTask(td.task)
@@ -277,6 +287,7 @@ export function NodeProcessPage() {
         else setUpstream([])
         if (td.expertRuns?.length) setExpertRuns(td.expertRuns)
         setFallbackTargets(td.fallbackTargets ?? [])
+        setIssues(td.issues ?? []); setIssueSummary(td.issueSummary ?? { total: 0, open: 0, blocking: 0, waitingVerification: 0 }); setIssueTargets(td.issueTargets ?? [])
         setSubtasks(td.subtasks ?? [])
         // 引擎视角的节点配置（最新 published 画布）：任务书/表单/拆分与流转校验同源
         if (td.nodeCfg) {
@@ -514,6 +525,40 @@ export function NodeProcessPage() {
     }
   }
 
+  const openIssue = () => {
+    if (!issueTargets.length) { toast.error('当前子线没有可投递的已完成前置节点'); return }
+    setIssueDraft({ title: '', description: '', targetTaskId: issueTargets[0].taskId, priority: 'P2', blocking: false })
+    setIssueOpen(true)
+  }
+
+  const createIssue = async () => {
+    if (!activeTaskId || !issueDraft.title.trim() || !issueDraft.description.trim() || !issueDraft.targetTaskId) return
+    setIssueBusy(true)
+    try {
+      const data = await api.post<{ issue: WorkflowIssue }>(`/api/v1/tasks/${activeTaskId}/issues`, {
+        title: issueDraft.title.trim(), description: issueDraft.description.trim(), target_task_id: issueDraft.targetTaskId,
+        priority: issueDraft.priority, blocking: issueDraft.blocking,
+      })
+      setIssues((current) => [data.issue, ...current])
+      setIssueSummary((current) => ({ ...current, total: current.total + 1, open: current.open + 1, blocking: current.blocking + (data.issue.blocking ? 1 : 0) }))
+      setIssueOpen(false)
+      toast.success(`问题已投递至「${data.issue.targetNode}」处理`)
+    } catch (e) { toast.error(e instanceof ApiError ? e.message : '创建问题失败') } finally { setIssueBusy(false) }
+  }
+
+  const verifyIssue = async (passed: boolean) => {
+    const issue = issues.find((item) => item.verificationTaskId === activeTaskId)
+    if (!issue) return
+    setIssueBusy(true)
+    try {
+      const data = await api.post<{ issue: WorkflowIssue; nextTaskId: string }>(`/api/v1/tasks/issues/${issue.id}/verify`, { passed, notes: verifyNotes })
+      setIssues((current) => current.map((item) => item.id === data.issue.id ? data.issue : item))
+      setVerifyOpen(false)
+      if (passed) toast.success('验证通过，问题已关闭')
+      else if (data.nextTaskId) { toast.success('验证未通过，已创建新的处理任务'); openTask(data.nextTaskId, task?.wiId) }
+    } catch (e) { toast.error(e instanceof ApiError ? e.message : '提交验证失败') } finally { setIssueBusy(false) }
+  }
+
   /* ---------- 子任务拆分（独立流转语义） ---------- */
   const canSplit = curNodeType === 'task' && curCfg.splitMode !== 'off' && !!activeTaskId && !task?.frozen && task?.status !== 'completed' && !task?.parentTaskId
 
@@ -598,7 +643,10 @@ export function NodeProcessPage() {
             },
         { label: '退回', icon: <Undo2 className="h-4 w-4" />, tone: 'danger' as const, disabled: !fallbackTargets.length, reason: fallbackTargets.length ? undefined : '当前节点未配置回退路径', onClick: openReturn },
         { label: '转办', icon: <ArrowRight className="h-4 w-4" />, onClick: () => openDialog('transfer') },
-        { label: '暂停流程', icon: <PauseCircle className="h-4 w-4" />, disabled: true, reason: '仅项目管理员可暂停', onClick: () => {} },
+        { label: '发起问题', icon: <CircleAlert className="h-4 w-4" />, disabled: !issueTargets.length, reason: issueTargets.length ? undefined : '暂无已完成的前置节点可处理', onClick: openIssue },
+        task?.source?.includes(':verify:')
+          ? { label: '验证结论', icon: <CircleCheck className="h-4 w-4" />, onClick: () => setVerifyOpen(true) }
+          : { label: '暂停流程', icon: <PauseCircle className="h-4 w-4" />, disabled: true, reason: '仅项目管理员可暂停', onClick: () => {} },
       ]
 
   return (
@@ -1009,7 +1057,7 @@ export function NodeProcessPage() {
                             <div className="mb-1 text-[11.5px] font-medium text-slate-400">{f.label}</div>
                             <div className="min-w-0 max-w-full break-words text-[12px] leading-relaxed text-slate-600 dark:text-slate-300">
                               {empty ? <span className="text-slate-300 dark:text-slate-600">未生成</span>
-                                : (f.type === 'upload' || f.type === 'file')
+                                : (f.type === 'upload' || f.type === 'file' || f.type === 'image')
                                   ? documentRefs(v).length > 0
                                     ? <span className="flex flex-wrap gap-1.5">{documentRefs(v).map((document) => <button key={document.id} type="button" onClick={() => openDocumentPreview(document)} className="rounded bg-violet-100 px-1.5 py-0.5 text-violet-700 hover:bg-violet-200 hover:underline dark:bg-violet-500/20 dark:text-violet-300">{document.name}</button>)}</span>
                                     : <span className="text-violet-600 dark:text-violet-300">（采纳后生成文档）</span>
@@ -1130,10 +1178,37 @@ export function NodeProcessPage() {
               幂等保护：同一节点仅可成功提交一次；重复请求返回原操作结果（PRD §12）
             </div>
           </SectionCard>
+
+          <SectionCard title="问题闭环" extra={<Badge tone={issueSummary.blocking ? 'err' : 'info'}>{issueSummary.open} 未关闭</Badge>} bodyClassName="p-4">
+            {issues.length ? <div className="space-y-2">{issues.map((issue) => (
+              <div key={issue.id} className="rounded-lg border border-slate-200 p-2.5 text-[11.5px] dark:border-slate-700">
+                <div className="flex items-center gap-1.5"><b className="min-w-0 flex-1 truncate text-slate-700 dark:text-slate-200">{issue.title}</b><Badge tone={issue.blocking ? 'err' : 'info'}>{issue.blocking ? '阻断' : '非阻断'}</Badge></div>
+                <p className="mt-1 text-slate-400">{issue.status === 'handling' ? `处理：${issue.targetNode}` : issue.status === 'waiting_verification' ? '等待验证' : issue.status === 'closed' ? '已关闭' : '已延期'} · 第 {issue.round} 轮</p>
+              </div>
+            ))}</div> : <p className="text-[11.5px] text-slate-400">暂无问题。局部问题可投递前置节点处理，不改变主流程位置。</p>}
+          </SectionCard>
         </div>
       </div>
 
       <DocumentViewerDrawer open={viewer.open} docs={docs} initialDocId={viewer.initialId} onClose={() => setViewer({ open: false })} />
+
+      {issueOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => !issueBusy && setIssueOpen(false)}>
+          <div className="w-full max-w-lg rounded-xl border border-slate-200 bg-white p-5 shadow-l dark:border-slate-700 dark:bg-slate-900" onClick={(event) => event.stopPropagation()}>
+            <div className="mb-3 flex items-center justify-between"><b className="flex items-center gap-1.5 text-sm"><CircleAlert className="h-4 w-4 text-amber-500" />发起问题</b><button onClick={() => setIssueOpen(false)}>✕</button></div>
+            <p className="mb-3 text-[11.5px] text-slate-400">问题将创建独立处理任务，不会移动主流程；阻断问题通过验证前不能提交当前节点。</p>
+            <input className="h-9 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-800" placeholder="问题标题" value={issueDraft.title} onChange={(e) => setIssueDraft((draft) => ({ ...draft, title: e.target.value }))} />
+            <textarea className="mt-2 min-h-28 w-full rounded-lg border border-slate-300 bg-white p-3 text-sm dark:border-slate-700 dark:bg-slate-800" placeholder="问题现象、复现步骤和期望结果" value={issueDraft.description} onChange={(e) => setIssueDraft((draft) => ({ ...draft, description: e.target.value }))} />
+            <div className="mt-2 grid grid-cols-2 gap-2"><select className="h-9 rounded-lg border border-slate-300 bg-white px-2 text-sm dark:border-slate-700 dark:bg-slate-800" value={issueDraft.targetTaskId} onChange={(e) => setIssueDraft((draft) => ({ ...draft, targetTaskId: e.target.value }))}>{issueTargets.map((target) => <option key={target.taskId} value={target.taskId}>{target.label} · {target.assignees.join('、') || '原处理人'}</option>)}</select><select className="h-9 rounded-lg border border-slate-300 bg-white px-2 text-sm dark:border-slate-700 dark:bg-slate-800" value={issueDraft.priority} onChange={(e) => setIssueDraft((draft) => { const priority = e.target.value as 'P0' | 'P1' | 'P2' | 'P3'; return { ...draft, priority, blocking: ['P0', 'P1'].includes(priority) ? true : draft.blocking } })}>{['P0', 'P1', 'P2', 'P3'].map((priority) => <option key={priority}>{priority}</option>)}</select></div>
+            <label className="mt-3 flex items-center gap-2 text-[12px]"><input type="checkbox" checked={issueDraft.blocking} onChange={(e) => setIssueDraft((draft) => ({ ...draft, blocking: e.target.checked }))} />阻断当前节点继续提交</label>
+            <div className="mt-4 flex justify-end gap-2"><button className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs" onClick={() => setIssueOpen(false)}>取消</button><button className="rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50" disabled={issueBusy || !issueDraft.title.trim() || !issueDraft.description.trim()} onClick={() => void createIssue()}>{issueBusy ? '创建中…' : '创建并分派'}</button></div>
+          </div>
+        </div>
+      )}
+
+      {verifyOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => !issueBusy && setVerifyOpen(false)}><div className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-5 shadow-l dark:border-slate-700 dark:bg-slate-900" onClick={(event) => event.stopPropagation()}><b className="text-sm">提交问题验证结论</b><textarea className="mt-3 min-h-24 w-full rounded-lg border border-slate-300 bg-white p-3 text-sm dark:border-slate-700 dark:bg-slate-800" placeholder="回归说明（可选）" value={verifyNotes} onChange={(e) => setVerifyNotes(e.target.value)} /><div className="mt-4 flex justify-end gap-2"><button className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs" onClick={() => setVerifyOpen(false)}>取消</button><button className="rounded-lg bg-red-600 px-3 py-1.5 text-xs text-white" onClick={() => void verifyIssue(false)}>不通过</button><button className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs text-white" onClick={() => void verifyIssue(true)}>通过</button></div></div></div>
+      )}
 
       {returnOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => { if (!returnBusy) setReturnOpen(false) }}>

@@ -10,11 +10,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from flowhub_api.authz.authorizer import build_authorizer, get_current_user
 from flowhub_api.core.response import BizCode, BizError, ok
 from flowhub_api.db.session import get_db
-from flowhub_api.models import GlobalTemplate, NodeAssignment, Project, ProjectTemplateBinding, TaskItem, User, WorkflowInstance
-from flowhub_api.schemas.api import TaskActionReq, TaskAdoptRunReq, TaskAiFillReq, TaskSplitReq
+from flowhub_api.models import GlobalTemplate, NodeAssignment, Project, ProjectTemplateBinding, TaskItem, User, WorkflowInstance, WorkflowIssue
+from flowhub_api.schemas.api import IssueCreateReq, IssueVerifyReq, TaskActionReq, TaskAdoptRunReq, TaskAiFillReq, TaskSplitReq
 from flowhub_api.services.audit import AuditService
+from flowhub_api.services.agent_context import can_read_task
 from flowhub_api.services.task_lineage import historical_split_parent_ids_for_tasks
-from flowhub_api.services.workflow import WorkflowService
+from flowhub_api.services.task_issues import TaskIssueService
+from flowhub_api.services.workflow import WorkflowService, is_empty_form_value, main_task_clause
 
 logger = logging.getLogger("flowhub_api")
 
@@ -163,11 +165,13 @@ async def list_tasks(
 async def get_task(
     task_id: str,
     session: Annotated[AsyncSession, Depends(get_db)],
-    _: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_current_user)],
 ):
     t = await session.get(TaskItem, task_id)
     if t is None:
         raise BizError(BizCode.NOT_FOUND, "任务不存在")
+    if not await can_read_task(session, user, t):
+        raise BizError(BizCode.PERM_DENIED, "无权限读取该任务", http_status=403)
     # 冻结标记：任务所属工作项已归档（项目归档冻结）→ 处理页只读提示
     from flowhub_api.models import WorkItem as _WI
 
@@ -243,7 +247,7 @@ async def get_task(
             })
         done = (await session.execute(
             select(TaskItem)
-            .where(TaskItem.wi_id == t.wi_id, TaskItem.status == "completed", TaskItem.id != task_id)
+            .where(TaskItem.wi_id == t.wi_id, TaskItem.status == "completed", TaskItem.id != task_id, main_task_clause())
             .order_by(TaskItem.id)
         )).scalars().all()
         for dt in done:
@@ -338,6 +342,9 @@ async def get_task(
         },
         # 回退目标必须来自该工作项冻结版本的画布，前端不能使用模板演示数据。
         "fallbackTargets": fallback_targets,
+        "issueTargets": await TaskIssueService(session).targets_for(t),
+        "issues": [TaskIssueService.brief(issue) for issue in await TaskIssueService(session).issues_for_task(t)],
+        "issueSummary": await TaskIssueService(session).summary(t.wi_id, t.id),
         "nextTaskId": next_task_id,
         "expertRuns": [
             {"id": r.id, "status": r.status, "output": r.output or "", "error": r.error, "startedAt": r.started_at, "context": r.context or "", "parsed": r.parsed,
@@ -345,6 +352,59 @@ async def get_task(
             for r in linked_runs
         ],
     })
+
+
+@router.post("/{task_id}/issues")
+async def create_task_issue(
+    task_id: str, body: IssueCreateReq, user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_db)],
+):
+    build_authorizer(user).require("task:submit")
+    task = (await session.execute(select(TaskItem).where(TaskItem.id == task_id).with_for_update())).scalar_one_or_none()
+    if task is None:
+        raise BizError(BizCode.NOT_FOUND, "任务不存在")
+    service = TaskIssueService(session)
+    issue, notifications = await service.create(task, target_task_id=body.target_task_id, title=body.title,
+        description=body.description, priority=body.priority, blocking=body.blocking, actor=user)
+    await session.commit()
+    if notifications:
+        from flowhub_api.routes.notifications import publish_notification
+        for notification in notifications:
+            await publish_notification(notification)
+    return ok({"issue": service.brief(issue)}, "问题已创建并分派处理")
+
+
+@router.get("/{task_id}/issues")
+async def list_task_issues(
+    task_id: str, session: Annotated[AsyncSession, Depends(get_db)], user: Annotated[User, Depends(get_current_user)],
+):
+    task = await session.get(TaskItem, task_id)
+    if task is None:
+        raise BizError(BizCode.NOT_FOUND, "任务不存在")
+    if not await can_read_task(session, user, task):
+        raise BizError(BizCode.PERM_DENIED, "无权限读取该任务的问题记录", http_status=403)
+    service = TaskIssueService(session)
+    issues = await service.issues_for_task(task)
+    return ok({"items": [service.brief(issue) for issue in issues], "summary": await service.summary(task.wi_id, task.id)})
+
+
+@router.post("/issues/{issue_id}/verify")
+async def verify_issue(
+    issue_id: str, body: IssueVerifyReq, user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_db)],
+):
+    build_authorizer(user).require("task:submit")
+    issue = (await session.execute(select(WorkflowIssue).where(WorkflowIssue.id == issue_id).with_for_update())).scalar_one_or_none()
+    if issue is None:
+        raise BizError(BizCode.NOT_FOUND, "问题不存在")
+    service = TaskIssueService(session)
+    next_task, notifications = await service.verify(issue, body.passed, body.notes, user)
+    await session.commit()
+    if notifications:
+        from flowhub_api.routes.notifications import publish_notification
+        for notification in notifications:
+            await publish_notification(notification)
+    return ok({"issue": service.brief(issue), "nextTaskId": next_task.id if next_task else ""}, "验证通过，问题已关闭" if body.passed else "验证未通过，已重新分派处理")
 
 
 @router.post("/{task_id}/appends")
@@ -391,8 +451,11 @@ async def append_task_info(
                 if node is not None:
                     schema = (node.get("cfg") or {}).get("schema") or []
     for f in schema:
-        if f.get("required") and not str(values.get(f.get("key"), "") or "").strip():
+        if f.get("required") and is_empty_form_value(values.get(f.get("key"))):
             raise BizError(BizCode.VALIDATION, f"「{f.get('label', f.get('key'))}」为必填，请补充")
+    await WorkflowService(session).validate_image_references(
+        project=t.project, wi_id=t.wi_id, schema=schema, form_values=values,
+    )
     ap = TaskAppend(
         id=gen_id("app"), task_id=t.id, node_id=t.node_id, wi_id=t.wi_id,
         appender=user.name, time=datetime.now(UTC).strftime("%m-%d %H:%M"), values=values,
@@ -474,6 +537,9 @@ async def task_action(
     if t is None:
         raise BizError(BizCode.NOT_FOUND, "任务不存在")
 
+    if (t.source or "").startswith("issue:") and body.action == "return":
+        raise BizError(BizCode.VALIDATION, "问题处理任务不能使用主流程退回，请提交修复或验证结论")
+
     # 归档项目冻结：任务所属工作项已归档（或项目已归档）→ 禁止任何流转操作（保留可查看）
     from flowhub_api.models import Project, WorkItem
 
@@ -494,6 +560,8 @@ async def task_action(
         auth.require("task:claim")
         if t.status not in ("assigned", "transferred"):
             raise BizError(BizCode.DUPLICATE_OPERATION, "任务已认领，不可重复认领", http_status=409)
+        if (t.source or "").startswith("issue:") and not await TaskIssueService(session).can_act(t, user):
+            raise BizError(BizCode.PERM_DENIED, "仅问题节点指定处理人可认领", http_status=403)
         t.status = "accepted"
         t.assignee = user.name
         await AuditService(session).record(actor=user.name, action="task:claim", target=f"{t.id} · {t.node}", result="success")
@@ -509,7 +577,9 @@ async def task_action(
             raise BizError(BizCode.NOT_FOUND, "转办用户不存在")
         t.status = "transferred"
         t.assignee = target.name
-        t.source = f"{user.name}转办"
+        # source 是问题闭环的类型标记；覆盖它会让后续 submit 误走主流程推进。
+        if not (t.source or "").startswith("issue:"):
+            t.source = f"{user.name}转办"
         await AuditService(session).record(
             actor=user.name, action="task:transfer", target=f"{t.id} → {target.name}", result="success",
         )
@@ -568,6 +638,22 @@ async def task_action(
                 "Expert 正在自动处理该节点，完成后会自动采纳并流转，无需人工提交",
                 http_status=409,
             )
+        issue_service = TaskIssueService(session)
+        if (t.source or "").startswith("issue:") and ":handling:" in (t.source or ""):
+            issue, verification_task, notifications = await issue_service.complete_handling(
+                t, body.form_values or {}, body.acceptance_checks or {}, user,
+            )
+            await session.commit()
+            if notifications:
+                from flowhub_api.routes.notifications import publish_notification
+                for notification in notifications:
+                    await publish_notification(notification)
+            return ok({"task": _brief(t), "issue": issue_service.brief(issue), "next_task_id": verification_task.id,
+                       "next_node": {"id": verification_task.node_id, "label": verification_task.node}, "next_assignees": []},
+                      "问题修复已提交，已自动创建验证任务")
+        if (t.source or "").startswith("issue:") and ":verify:" in (t.source or ""):
+            raise BizError(BizCode.VALIDATION, "问题验证请使用“验证通过/不通过”操作")
+        await issue_service.assert_origin_can_advance(t)
         t.form_values = body.form_values or {}
         # 验收清单勾选快照随提交落库（引擎在 advance 中强制全部勾选后才会流转）
         t.acceptance_checks = body.acceptance_checks or {}
@@ -678,6 +764,8 @@ async def split_task(
     t = await session.get(TaskItem, task_id)
     if t is None:
         raise BizError(BizCode.NOT_FOUND, "任务不存在")
+    if (t.source or "").startswith("issue:"):
+        raise BizError(BizCode.VALIDATION, "问题处理任务不能拆分；请提交修复结果或验证结论")
     from flowhub_api.models import WorkItem as _WI
 
     if (await session.execute(select(_WI.id).where(_WI.id == t.wi_id, _WI.status == "archived"))).first():
@@ -827,7 +915,7 @@ async def adopt_run(
     # 只接受 schema 内字段；upload 字段的人工改动与文档生成逻辑冲突（正文→文档引用由采纳流程生成），忽略之
     if body.values:
         manual = {k: v for k, v in body.values.items()
-                  if k in schema_keys and next((f.get("type") for f in schema if f.get("key") == k), "") not in ("upload", "file")}
+                  if k in schema_keys and next((f.get("type") for f in schema if f.get("key") == k), "") not in ("upload", "file", "image")}
         if manual:
             from flowhub_api.services.expert_runtime import schema_validation_issues
 

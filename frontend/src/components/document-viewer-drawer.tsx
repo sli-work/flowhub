@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { Download, FileText, LoaderCircle, PanelLeftClose, PanelLeftOpen, X } from 'lucide-react'
 import FileViewer from '@file-viewer/react'
+import type { FileViewerOptions } from '@file-viewer/core'
 import officePreset from '@file-viewer/preset-office'
 import litePreset from '@file-viewer/preset-lite'
 import { api } from '../lib/api'
@@ -78,13 +79,38 @@ export function DocumentViewerDrawer({ open, docs, initialDocId, onClose }: { op
   const current = useMemo(() => docs.find((d) => d.id === currentId) ?? null, [docs, currentId])
   const resolvedTheme: ThemeMode = themeMode
   const isZip = !!current && current.name.toLowerCase().endsWith('.zip')
+  /* FileViewer 的 options 按引用比较（变化即触发 controller.update 重载文档），
+     必须 memoize，否则父组件任意重渲染（如任务页 3s 轮询）都会让 PDF 反复刷新 */
+  const viewerOptions = useMemo<FileViewerOptions>(() => ({
+    preset: [officePreset, litePreset],
+    rendererMode: 'replace',
+    theme: resolvedTheme,
+    search: { enabled: true },
+    toolbar: { position: 'bottom-right' },
+  }), [resolvedTheme])
 
+  /* 选中记忆：仅在抽屉打开或 initialDocId 变化时重置；
+     docs 引用变化（内容相同，如父组件轮询重建数组）不打断用户当前选择 */
+  const wasOpenRef = useRef(false)
+  const lastInitRef = useRef<string | undefined>(undefined)
   useEffect(() => {
-    if (open) setCurrentId(initialDocId ?? docs[0]?.id ?? null)
+    if (!open) { wasOpenRef.current = false; return }
+    const justOpened = !wasOpenRef.current
+    wasOpenRef.current = true
+    if (justOpened || initialDocId !== lastInitRef.current) {
+      lastInitRef.current = initialDocId
+      setCurrentId(initialDocId ?? docs[0]?.id ?? null)
+      return
+    }
+    setCurrentId((prev) => (docs.some((d) => d.id === prev) ? prev : (initialDocId ?? docs[0]?.id ?? null)))
   }, [open, initialDocId, docs])
 
+  /* 加载效果以稳定原始值为依赖：docs/current 引用变化不触发重复下载 */
+  const currentDocId = current?.id ?? null
+  const currentDocName = current?.name ?? ''
   useEffect(() => {
-    if (!open || !current) { setBlobUrl(null); setPreviewUrl(null); setArchiveEntries(null); setError(''); return }
+    const doc = open ? docs.find((d) => d.id === currentDocId) : null
+    if (!open || !doc) { setBlobUrl(null); setPreviewUrl(null); setArchiveEntries(null); setError(''); return }
     let revoked = false
     const controller = new AbortController()
     setLoading(true)
@@ -92,21 +118,21 @@ export function DocumentViewerDrawer({ open, docs, initialDocId, onClose }: { op
     setPreviewUrl(null)
     setArchiveEntries(null)
     // ZIP 先读取安全目录清单：包含根 index.html 的 Axure 包走 iframe，其余显示文件浏览器。
-    const previewTask = current.name.toLowerCase().endsWith('.zip')
-      ? api.post<{ link: string }>(`/api/v1/documents/${current.id}/link`)
+    const previewTask = doc.name.toLowerCase().endsWith('.zip')
+      ? api.post<{ link: string }>(`/api/v1/documents/${doc.id}/link`)
           .then(async (d) => {
             const token = new URLSearchParams(d.link.split('?')[1] ?? '').get('token')
             if (!token) throw new Error('预览链接无效')
-            const archive = await api.get<ArchivePreview>(`/api/v1/documents/${current.id}/archive?token=${encodeURIComponent(token)}`)
+            const archive = await api.get<ArchivePreview>(`/api/v1/documents/${doc.id}/archive?token=${encodeURIComponent(token)}`)
             if (revoked) return
             if (archive.preview_type === 'axure') {
-              setPreviewUrl(`/api/v1/documents/${current.id}/preview/index.html?token=${encodeURIComponent(token)}`)
+              setPreviewUrl(`/api/v1/documents/${doc.id}/preview/index.html?token=${encodeURIComponent(token)}`)
             } else {
               setArchiveEntries(archive.entries)
             }
           })
       : Promise.resolve()
-    const blobTask = api.getBlob(`/api/v1/documents/${current.id}/download`, controller.signal)
+    const blobTask = api.getBlob(`/api/v1/documents/${doc.id}/download`, controller.signal)
       .then((blob) => {
         if (revoked) return
         const url = URL.createObjectURL(blob)
@@ -126,7 +152,8 @@ export function DocumentViewerDrawer({ open, docs, initialDocId, onClose }: { op
       controller.abort()
       if (blobRef.current) { URL.revokeObjectURL(blobRef.current); blobRef.current = null }
     }
-  }, [open, current])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, currentDocId, currentDocName])
 
   if (!open) return null
 
@@ -233,16 +260,10 @@ export function DocumentViewerDrawer({ open, docs, initialDocId, onClose }: { op
               </div>
             ) : blobUrl && current ? (
               <FileViewer
-                key={current.id}
+                key={currentDocId ?? 'none'}
                 url={blobUrl}
                 filename={current.name}
-                options={{
-                  preset: [officePreset, litePreset],
-                  rendererMode: 'replace',
-                  theme: resolvedTheme,
-                  search: { enabled: true },
-                  toolbar: { position: 'bottom-right' },
-                }}
+                options={viewerOptions}
               />
             ) : null}
           </div>

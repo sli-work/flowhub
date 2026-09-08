@@ -12,6 +12,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from PIL import Image, UnidentifiedImageError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,17 +21,21 @@ from flowhub_api.clients.minio import get_minio
 from flowhub_api.core.config import get_settings
 from flowhub_api.core.response import BizCode, BizError, ok
 from flowhub_api.db.session import get_db
-from flowhub_api.models import DocItem, User
+from flowhub_api.models import DocItem, TaskItem, User
 from flowhub_api.services.audit import AuditService
 from flowhub_api.services.document_access import create_document_content_token, document_content_link, valid_document_content_token
+from flowhub_api.services.workflow import WorkflowService
 
 router = APIRouter(prefix="/api/v1/documents", tags=["documents"])
 
-ALLOWED_EXT = {".pdf", ".md", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".fig", ".zip", ".png", ".jpg", ".yaml", ".txt"}
+ALLOWED_EXT = {".pdf", ".md", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".fig", ".zip", ".png", ".jpg", ".jpeg", ".webp", ".yaml", ".txt"}
 ALLOWED_MIME = {"application/pdf", "text/markdown", "text/plain", "application/zip",
                 "application/x-zip-compressed",  # Windows 浏览器对 .zip 的常见 MIME
                 "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                "image/png", "image/jpeg", "application/octet-stream"}
+                "image/png", "image/jpeg", "image/webp", "application/octet-stream"}
+IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp"}
+IMAGE_MIME = {"image/png", "image/jpeg", "image/webp"}
+IMAGE_FORMATS = {".png": "PNG", ".jpg": "JPEG", ".jpeg": "JPEG", ".webp": "WEBP"}
 
 
 def _brief(d: DocItem) -> dict:
@@ -64,7 +69,7 @@ async def list_documents(
     else:
         # 文档中心（不带 wi 的全量视图）不展示「节点表单附件」：它们是节点表单的
         # 采纳产物，只在对应工作项/节点文档里可见，避免 Expert 每次产出都涌入文档中心
-        stmt = stmt.where(DocItem.kind != "节点表单附件")
+        stmt = stmt.where(DocItem.kind.not_in(("节点表单附件", "节点表单图片")))
     total = len((await session.execute(stmt)).scalars().all())
     # 固定排序保证分页稳定（观察项 E 修复：原实现无 order_by，分页结果顺序不稳定）
     rows = (await session.execute(
@@ -73,30 +78,27 @@ async def list_documents(
     return ok({"items": [_brief(d) for d in rows], "total": total, "page": page, "page_size": page_size})
 
 
-@router.post("/upload")
-async def upload_document(
-    file: Annotated[UploadFile, File(...)],
-    user: Annotated[User, Depends(get_current_user)],
-    session: Annotated[AsyncSession, Depends(get_db)],
-    # 明确声明为表单字段：前端 FormData 传入的 wi/kind/project 此前被当作 query 参数忽略，
-    # 导致任务处理中上传的文档无法关联工作项
-    project: str = Form(""),
-    kind: str = Form("文档"),
-    wi: str = Form(""),
-):
-    auth = build_authorizer(user)
-    auth.require("document:upload")
+async def _save_uploaded_document(
+    file: UploadFile, user: User, session: AsyncSession, *, project: str, kind: str, wi: str,
+    image_only: bool = False,
+) -> dict:
+    """Validate and persist a document, with an optional strict image-only boundary."""
     ext = "." + (file.filename or "").rsplit(".", 1)[-1].lower()
-    # 校验链：扩展名 → MIME（docs/06 §1.1）
-    if ext not in ALLOWED_EXT:
-        hint = "（Axure 请上传「发布 → 生成 HTML 文件」导出的 zip 包）" if ext == ".rp" else ""
-        raise BizError(BizCode.VALIDATION, f"不允许的扩展名：{ext}{hint}")
     mime = file.content_type or mimetypes.guess_type(file.filename or "")[0] or ""
-    if mime and mime not in ALLOWED_MIME:
-        raise BizError(BizCode.VALIDATION, f"不允许的 MIME：{mime}")
+    if image_only:
+        if ext not in IMAGE_EXT or mime not in IMAGE_MIME:
+            raise BizError(BizCode.VALIDATION, "仅支持 PNG、JPEG、WebP 图片")
+    else:
+        if ext not in ALLOWED_EXT:
+            hint = "（Axure 请上传「发布 → 生成 HTML 文件」导出的 zip 包）" if ext == ".rp" else ""
+            raise BizError(BizCode.VALIDATION, f"不允许的扩展名：{ext}{hint}")
+        if mime and mime not in ALLOWED_MIME:
+            raise BizError(BizCode.VALIDATION, f"不允许的 MIME：{mime}")
     data = await file.read()
     if len(data) > 50 * 1024 * 1024:
         raise BizError(BizCode.VALIDATION, "文件过大（疑似压缩炸弹，上限 50MB）")
+    if image_only:
+        _validate_image_bytes(data, ext)
 
     doc = DocItem(
         id=f"d{uuid4().hex[:8]}", name=file.filename or "未命名", project=project or "未归档",
@@ -104,19 +106,73 @@ async def upload_document(
         size=f"{len(data) / 1024 / 1024:.1f}MB" if len(data) > 1024 * 1024 else f"{len(data) // 1024}KB",
         time="刚刚", kind=kind, wi=wi or None,
     )
-    # MinIO 存储（未配置时跳过，仅入库元数据）
     minio = get_minio()
     if minio:
         bucket = get_settings().minio_bucket
         doc.object_name = f"{doc.id}/{file.filename}"
         minio.put_object(bucket, doc.object_name, __import__("io").BytesIO(data), len(data))
     session.add(doc)
-    await AuditService(session).record(
-        actor=user.name, action="document:upload", target=f"{doc.name} · {doc.project}", result="success",
-    )
+    await AuditService(session).record(actor=user.name, action="document:upload", target=f"{doc.name} · {doc.project}", result="success")
     await session.commit()
-    return ok({"doc": _brief(doc)}, "上传成功：扩展名/MIME/大小校验通过")
+    return _brief(doc)
 
+
+def _validate_image_bytes(data: bytes, ext: str) -> None:
+    """Verify decoded image content, not merely untrusted filename/MIME metadata."""
+    try:
+        with Image.open(BytesIO(data)) as image:
+            image_format = image.format
+            image.verify()
+    except (UnidentifiedImageError, OSError, ValueError) as exc:
+        raise BizError(BizCode.VALIDATION, "图片内容无效或已损坏") from exc
+    if image_format != IMAGE_FORMATS[ext]:
+        raise BizError(BizCode.VALIDATION, "图片内容与文件类型不匹配")
+
+
+async def _validate_image_upload_target(session: AsyncSession, user: User, project: str, wi: str) -> None:
+    """Bind work-item-scoped uploads to a visible active task before saving bytes."""
+    if not wi:
+        return
+    tasks = (await session.execute(select(TaskItem).where(
+        TaskItem.wi_id == wi,
+        TaskItem.status.not_in(("completed", "cancelled")),
+    ))).scalars().all()
+    if not tasks or any(task.project != project for task in tasks):
+        raise BizError(BizCode.VALIDATION, "图片上传任务或项目不匹配")
+    is_admin = any(role.id in {"system_admin", "organization_admin"} for role in user.roles)
+    if not is_admin:
+        recipient_ids = {
+            candidate.id
+            for task in tasks
+            for candidate in await WorkflowService(session).resolve_task_recipients(task)
+        }
+        if user.id not in recipient_ids:
+            raise BizError(BizCode.FORBIDDEN, "仅当前节点处理人可上传图片")
+
+
+@router.post("/upload")
+async def upload_document(
+    file: Annotated[UploadFile, File(...)], user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_db)], project: str = Form(""), kind: str = Form("文档"), wi: str = Form(""),
+):
+    build_authorizer(user).require("document:upload")
+    # 保留分类只能由专用端点写入；否则客户端可伪造 kind 绕过图片内容/归属校验。
+    if kind == "节点表单图片":
+        raise BizError(BizCode.VALIDATION, "节点表单图片请使用专用图片上传接口")
+    doc = await _save_uploaded_document(file, user, session, project=project, kind=kind, wi=wi)
+    return ok({"doc": doc}, "上传成功：扩展名/MIME/大小校验通过")
+
+
+@router.post("/images/upload")
+async def upload_image(
+    file: Annotated[UploadFile, File(...)], user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_db)], project: str = Form(""), wi: str = Form(""),
+):
+    """Image-only endpoint for image schema fields; callers cannot loosen its type policy."""
+    build_authorizer(user).require("document:upload")
+    await _validate_image_upload_target(session, user, project, wi)
+    doc = await _save_uploaded_document(file, user, session, project=project, kind="节点表单图片", wi=wi, image_only=True)
+    return ok({"doc": doc}, "图片上传成功")
 
 @router.post("/{doc_id}/link")
 async def create_link(

@@ -247,3 +247,32 @@ def test_schema_validation_accepts_complete_typed_output():
         schema,
         {"conclusion": "证据充分", "verdict": "pass", "tags": ["p0"], "due": "2026-09-04"},
     ) == []
+
+@pytest.mark.asyncio
+async def test_repo_tool_loop_classifies_model_type_errors_as_unsupported_tool_protocol():
+    """OpenAI-compatible gateway may accept bind_tools but reject the tool request at invoke time."""
+    from flowhub_api.services.expert_runtime import RepoToolLoopUnavailable, run_repo_tool_loop
+
+    class Model:
+        def bind_tools(self, tools):
+            return self
+
+        async def ainvoke(self, messages):
+            raise TypeError("unsupported tools payload")
+
+    with pytest.raises(RepoToolLoopUnavailable, match="工具调用协议"):
+        await run_repo_tool_loop(
+            Model(), [("human", "分析代码")], SimpleNamespace(tools=[SimpleNamespace(name="repo_search")]),
+        )
+
+
+def test_ai_output_never_turns_image_field_text_into_a_document_candidate():
+    from flowhub_api.services.expert_runtime import parse_schema_output
+
+    values, warnings = parse_schema_output(
+        [{"key": "photos", "label": "现场图片", "type": "image", "required": True}],
+        '{"photos": "模型不能生成的图片说明"}',
+    )
+
+    assert values == {}
+    assert warnings == ["「现场图片」需由人工上传图片"]

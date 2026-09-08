@@ -16,6 +16,7 @@ TASK_STATUS = (
     "pending_confirmation", "submitted", "returned", "transferred",
     "completed", "cancelled",
 )
+ISSUE_STATUS = ("handling", "waiting_verification", "closed", "deferred")
 INSTANCE_STATE = ("running", "paused", "cancelled", "closed", "archived")
 
 
@@ -104,3 +105,30 @@ class TaskAppend(Base):
     appender: Mapped[str] = mapped_column(String(64))
     time: Mapped[str] = mapped_column(String(32), default="")
     values: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class WorkflowIssue(Base):
+    """A local rework loop created by any workflow node without moving the main cursor."""
+
+    __tablename__ = "workflow_issues"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    wi_id: Mapped[str] = mapped_column(ForeignKey("work_items.id", ondelete="CASCADE"), index=True)
+    source_task_id: Mapped[str] = mapped_column(ForeignKey("tasks.id", ondelete="CASCADE"), index=True)
+    source_node_id: Mapped[str] = mapped_column(String(32), default="")
+    source_node: Mapped[str] = mapped_column(String(64), default="")
+    target_task_id: Mapped[str] = mapped_column(String(40), default="")
+    target_node_id: Mapped[str] = mapped_column(String(32), default="")
+    target_node: Mapped[str] = mapped_column(String(64), default="")
+    handler_task_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    verification_task_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    title: Mapped[str] = mapped_column(String(255))
+    description: Mapped[str] = mapped_column(Text, default="")
+    priority: Mapped[str] = mapped_column(Enum(*PRIORITY, name="issue_priority"), default="P2")
+    blocking: Mapped[bool] = mapped_column(Boolean, default=False)
+    status: Mapped[str] = mapped_column(Enum(*ISSUE_STATUS, name="workflow_issue_status"), default="handling")
+    reporter: Mapped[str] = mapped_column(String(64))
+    verification_notes: Mapped[str] = mapped_column(Text, default="")
+    round: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[str] = mapped_column(String(40), default="")
+    updated_at: Mapped[str] = mapped_column(String(40), default="")

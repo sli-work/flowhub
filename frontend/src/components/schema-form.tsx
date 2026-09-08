@@ -1,7 +1,7 @@
-import { useDeferredValue, useRef, useState, type Dispatch, type SetStateAction } from 'react'
-import { Upload, Paperclip, Calendar, AlertCircle, LoaderCircle } from 'lucide-react'
+import { useDeferredValue, useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react'
+import { Upload, Paperclip, Calendar, AlertCircle, Image, LoaderCircle } from 'lucide-react'
 import { cn } from '../lib/utils'
-import { getToken } from '../lib/api'
+import { api, getToken } from '../lib/api'
 import type { FormField } from '../types'
 import { Badge } from './common'
 import { MarkdownView } from './markdown'
@@ -17,7 +17,7 @@ function asUploadedFileRef(value: UploadValue): UploadedFileRef {
 /* 字段类型 → 中文标签 */
 export const fieldTypeLabel: Record<string, string> = {
   input: '单行文本', textarea: '多行文本', select: '下拉单选', multiselect: '下拉多选',
-  radio: '单选按钮', date: '日期', number: '数字', upload: '文件上传', file: '附件多选',
+  radio: '单选按钮', date: '日期', number: '数字', upload: '文件上传', file: '附件多选', image: '图片上传',
 }
 
 /* 必填校验：返回缺失字段的 key 列表 */
@@ -166,9 +166,11 @@ function FieldControl({ field, value, onChange, error, workItemId, project, onPr
         </div>
       )
     case 'upload':
-    case 'file': {
-      const multiple = field.type === 'file'
-      return <UploadWidget value={arr} multiple={multiple} onChange={onChange} error={error} workItemId={workItemId} project={project} onPreviewDocument={onPreviewDocument} />
+    case 'file':
+    case 'image': {
+      const imageOnly = field.type === 'image'
+      const multiple = field.type === 'file' || imageOnly
+      return <UploadWidget value={arr} multiple={multiple} imageOnly={imageOnly} onChange={onChange} error={error} workItemId={workItemId} project={project} onPreviewDocument={onPreviewDocument} />
     }
     default:
       return (
@@ -184,9 +186,10 @@ function FieldControl({ field, value, onChange, error, workItemId, project, onPr
 }
 
 /* 上传/附件控件：真实文件选择 → 上传后端 → 记录文档 ID + 名称。 */
-function UploadWidget({ value, multiple, onChange, error, workItemId, project, onPreviewDocument }: {
+function UploadWidget({ value, multiple, imageOnly = false, onChange, error, workItemId, project, onPreviewDocument }: {
   value: UploadValue[]
   multiple: boolean
+  imageOnly?: boolean
   onChange: (v: unknown) => void
   error?: boolean
   workItemId?: string
@@ -197,6 +200,29 @@ function UploadWidget({ value, multiple, onChange, error, workItemId, project, o
   const [dragOver, setDragOver] = useState(false)
   const [busy, setBusy] = useState(false)
   const [errMsg, setErrMsg] = useState('')
+  const [previewUrls, setPreviewUrls] = useState<Record<string, string>>({})
+
+  useEffect(() => {
+    if (!imageOnly || !value.length) { setPreviewUrls({}); return }
+    let disposed = false
+    const urls: string[] = []
+    const controller = new AbortController()
+    void Promise.all(value.map(async (entry) => {
+      const ref = asUploadedFileRef(entry)
+      const blob = await api.getBlob(`/api/v1/documents/${ref.id}/download`, controller.signal)
+      if (disposed) return null
+      const url = URL.createObjectURL(blob)
+      if (disposed) {
+        URL.revokeObjectURL(url)
+        return null
+      }
+      urls.push(url)
+      return [ref.id, url] as const
+    })).then((entries) => {
+      if (!disposed) setPreviewUrls(Object.fromEntries(entries.filter((entry): entry is readonly [string, string] => entry !== null)))
+    }).catch(() => { if (!disposed) setPreviewUrls({}) })
+    return () => { disposed = true; controller.abort(); urls.forEach((url) => URL.revokeObjectURL(url)) }
+  }, [imageOnly, value])
 
   const uploadFiles = async (files: File[]) => {
     if (!files.length || busy) return
@@ -207,11 +233,11 @@ function UploadWidget({ value, multiple, onChange, error, workItemId, project, o
       for (const f of files) {
         const fd = new FormData()
         fd.append('file', f)
-        fd.append('kind', '节点表单附件')
+        fd.append('kind', imageOnly ? '节点表单图片' : '节点表单附件')
         if (workItemId) fd.append('wi', workItemId)
         if (project) fd.append('project', project)
         const token = getToken()
-        const r = await fetch('/api/v1/documents/upload', {
+        const r = await fetch(imageOnly ? '/api/v1/documents/images/upload' : '/api/v1/documents/upload', {
           method: 'POST',
           headers: token ? { Authorization: `Bearer ${token}` } : {},
           body: fd,
@@ -235,7 +261,7 @@ function UploadWidget({ value, multiple, onChange, error, workItemId, project, o
   return (
     <div>
       <input
-        ref={fileRef} type="file" className="hidden" multiple={multiple}
+        ref={fileRef} type="file" className="hidden" multiple={multiple} accept={imageOnly ? 'image/png,image/jpeg,image/webp' : undefined}
         onChange={(e) => {
           const fs = e.target.files ? Array.from(e.target.files) : []
           uploadFiles(fs)
@@ -257,28 +283,33 @@ function UploadWidget({ value, multiple, onChange, error, workItemId, project, o
           {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : multiple ? <Paperclip className="h-4 w-4" /> : <Upload className="h-4 w-4" />}
         </span>
         <span className="text-[12px] font-medium text-slate-500 dark:text-slate-400">
-          {busy ? '上传中…' : `点击或拖拽${multiple ? '选择附件' : '上传文件'}`}
+          {busy ? '上传中…' : imageOnly ? '图片上传（可多选）' : `点击或拖拽${multiple ? '选择附件' : '上传文件'}`}
         </span>
-        <span className="text-[10.5px] text-slate-400">扩展名 / MIME / 大小校验后入库（上限 50MB）</span>
+        <span className="text-[10.5px] text-slate-400">{imageOnly ? '仅 PNG、JPEG、WebP；单文件上限 50MB' : '扩展名 / MIME / 大小校验后入库（上限 50MB）'}</span>
       </div>
       {errMsg && (
         <p className="mt-1.5 flex items-center gap-1 text-[11.5px] text-red-500">
           <AlertCircle className="h-3.5 w-3.5" />{errMsg}
         </p>
       )}
-      {value.length > 0 && (
-        <div className="mt-1.5 flex flex-wrap gap-1.5">
+      {value.length > 0 && (imageOnly ? (
+        <div className="mt-2 grid grid-cols-3 gap-2 sm:grid-cols-4">
           {value.map((item) => {
             const ref = asUploadedFileRef(item)
-            return <span key={ref.id} className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300">
-              <button type="button" onClick={(event) => { event.stopPropagation(); onPreviewDocument?.(ref) }}
-                className="max-w-44 truncate hover:text-blue-600 hover:underline" title={`预览 ${ref.name}`}>{ref.name}</button>
-              <button type="button" onClick={(event) => { event.stopPropagation(); onChange(value.filter((entry) => (typeof entry === 'string' ? entry : entry.id) !== ref.id)) }}
-                className="text-slate-400 hover:text-red-500" aria-label={`移除 ${ref.name}`}>×</button>
-            </span>
+            return <div key={ref.id} className="group relative overflow-hidden rounded-lg border border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800">
+              <button type="button" onClick={() => onPreviewDocument?.(ref)} className="flex aspect-square w-full items-center justify-center overflow-hidden" title={`预览 ${ref.name}`}>
+                {previewUrls[ref.id] ? <img src={previewUrls[ref.id]} alt={ref.name} className="h-full w-full object-cover" /> : <Image className="h-5 w-5 text-slate-400" />}
+              </button>
+              <div className="flex items-center gap-1 px-1.5 py-1"><span className="min-w-0 flex-1 truncate text-[10px] text-slate-500">{ref.name}</span><button type="button" onClick={() => onChange(value.filter((entry) => (typeof entry === 'string' ? entry : entry.id) !== ref.id))} className="text-slate-400 hover:text-red-500" aria-label={`移除 ${ref.name}`}>×</button></div>
+            </div>
           })}
         </div>
-      )}
+      ) : (
+        <div className="mt-1.5 flex flex-wrap gap-1.5">{value.map((item) => {
+          const ref = asUploadedFileRef(item)
+          return <span key={ref.id} className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300"><button type="button" onClick={(event) => { event.stopPropagation(); onPreviewDocument?.(ref) }} className="max-w-44 truncate hover:text-blue-600 hover:underline" title={`预览 ${ref.name}`}>{ref.name}</button><button type="button" onClick={(event) => { event.stopPropagation(); onChange(value.filter((entry) => (typeof entry === 'string' ? entry : entry.id) !== ref.id)) }} className="text-slate-400 hover:text-red-500" aria-label={`移除 ${ref.name}`}>×</button></span>
+        })}</div>
+      ))}
     </div>
   )
 }
