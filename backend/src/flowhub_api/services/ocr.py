@@ -31,20 +31,31 @@ class RapidOcrAdapter(OcrAdapter):
 
     def __init__(self) -> None:
         self._engine = None
+        self._failed = False
         self._lock = asyncio.Lock()
 
     async def _engine_or_none(self):
         if self._engine is not None:
             return self._engine
+        if self._failed:
+            return None
         async with self._lock:
             if self._engine is not None:
                 return self._engine
+            if self._failed:
+                return None
             try:
                 import rapidocr_onnxruntime
             except ImportError:
                 logger.warning("rapidocr-onnxruntime 未安装，OCR 不可用")
+                self._failed = True
                 return None
-            self._engine = rapidocr_onnxruntime.RapidOCR()
+            try:
+                self._engine = await asyncio.to_thread(rapidocr_onnxruntime.RapidOCR)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("RapidOCR 引擎初始化失败，OCR 不可用：%s", exc)
+                self._failed = True
+                return None
             return self._engine
 
     async def extract_text(self, image_bytes: bytes, page_no: int) -> str:
@@ -65,6 +76,9 @@ def get_ocr_adapter() -> OcrAdapter:
     """按运行时配置 + 依赖可用性返回 OCR 适配器；不可用时永远返回 Noop，不抛错。"""
     from flowhub_api.services import runtime_config
 
+    # 直接读 _values 内存快照而非 settings()：settings() 对 bool 字段做
+    # type(annotation)(value)，bool("false") == True（runtime_config.py:23-25 bug），
+    # 会把存了 "false" 的管理员开关误判为启用；此处按字符串 "true" 判定。
     try:
         raw = runtime_config._values.get("attachment_ocr_enabled", "")
         enabled = str(raw).strip().lower() == "true"
