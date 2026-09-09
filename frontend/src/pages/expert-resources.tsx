@@ -71,7 +71,7 @@ export function ResourceCenterPage({ kind }: { kind: ResourceKind }) {
     <DetailDrawer open={!!selected && kind !== 'provider'} title={selected && 'name' in selected ? selected.name : ''} eyebrow={meta.title} onClose={() => setSelected(null)}>{selected && <div className="space-y-3 text-sm"><p className="text-slate-500">{'description' in selected ? selected.description : '资源详情'}</p>{kind === 'skill' && <div className="grid grid-cols-2 gap-2 text-xs"><span>文件：{(selected as SkillRecord).filename ?? '—'}</span><span>类型：{(selected as SkillRecord).packageType ?? '—'}</span>{!(selected as SkillRecord).builtin && <button className="col-span-2 mt-2 rounded-lg border border-red-200 px-3 py-2 text-red-600 hover:bg-red-50" onClick={() => void removeSkill(selected as SkillRecord)}>删除 Skill</button>}</div>}{kind === 'mcp' && <>{(selected as McpServerRecord).id === 'builtin-confluence' ? <button className="rounded-lg border border-blue-200 px-3 py-2 text-xs text-blue-600 hover:bg-blue-50" onClick={() => setConfluenceOpen(true)}>配置 Confluence</button> : <button className="rounded-lg border border-blue-200 px-3 py-2 text-xs text-blue-600 hover:bg-blue-50" onClick={() => { setEditingMcp(selected as McpServerRecord); setMcpOpen(true) }}>编辑 JSON 配置</button>}<McpToolList server={selected as McpServerRecord} onUpdate={updateMcpTool} /></>}</div>}</DetailDrawer>
     {kind === 'provider' && <ProviderDialog open={providerOpen} provider={editingProvider} onClose={() => setProviderOpen(false)} onSave={async (input) => { await addProvider(input) }} />}
     {kind === 'mcp' && <McpServerDialog open={mcpOpen} server={editingMcp} onClose={() => setMcpOpen(false)} onSave={async (input) => { if (editingMcp) await updateMcpServer(editingMcp.id, input); else await createMcpServer(input); setMcpOpen(false); setSelected(null); toast.success(editingMcp ? 'MCP Server 已更新' : 'MCP Server 已创建') }} />}
-    <ConfluenceDialog open={confluenceOpen} onClose={() => setConfluenceOpen(false)} onSaved={() => window.location.reload()} />
+    <ConfluenceDialog open={confluenceOpen} server={state.mcpServers.find((item) => item.id === 'builtin-confluence')} onClose={() => setConfluenceOpen(false)} onSaved={() => window.location.reload()} />
   </div>
 }
 
@@ -80,13 +80,14 @@ function McpToolList({ server, onUpdate }: { server: McpServerRecord; onUpdate: 
   return <div className="space-y-2"><h3 className="text-sm font-semibold">Tools（{tools.length}）</h3>{tools.length ? tools.map((tool) => <div key={tool.id} className="flex items-center gap-2 rounded-lg border border-slate-200 p-2 text-xs dark:border-slate-700"><span className="min-w-0 flex-1"><b className="block truncate">{tool.name}</b><span className="text-slate-400">{tool.risk} · {tool.approval}</span></span><button className="rounded border px-2 py-1" onClick={() => void onUpdate(tool.id, { status: tool.status === 'disabled' ? 'approved' : 'disabled', enabled: tool.status === 'disabled' })}>{tool.status === 'disabled' ? '启用' : '禁用'}</button></div>) : <p className="text-xs text-slate-400">暂无已发现 Tool</p>}</div>
 }
 
-function ConfluenceDialog({ open, onClose, onSaved }: { open: boolean; onClose: () => void; onSaved: () => void }) {
+function ConfluenceDialog({ open, server, onClose, onSaved }: { open: boolean; server?: McpServerRecord; onClose: () => void; onSaved: () => void }) {
   const [baseUrl, setBaseUrl] = useState('')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [verifySsl, setVerifySsl] = useState(true)
   const [timeoutSeconds, setTimeoutSeconds] = useState('30')
   const [busy, setBusy] = useState(false)
+  useEffect(() => { if (open) setVerifySsl(server?.verifySsl ?? true) }, [open, server?.verifySsl])
   const save = async () => {
     if (!baseUrl.trim() || !username.trim() || !password) { toast.error('请填写地址、账号和密码'); return }
     setBusy(true)

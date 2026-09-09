@@ -31,7 +31,14 @@ def _tool_brief(tool: McpTool) -> dict:
 
 
 def _server_brief(server: McpServer, tools: list[McpTool]) -> dict:
-    return {"id": server.id, "name": server.name, "description": server.description, "direction": server.direction, "transport": server.transport, "endpoint": server.endpoint, "authType": server.auth_type, "status": server.status, "health": server.health, "builtin": server.builtin, "configured": bool(server.credentials), "tools": [_tool_brief(tool) for tool in tools], "approvedTools": sum(tool.status == "approved" for tool in tools), "createdAt": server.created_at, "updatedAt": server.updated_at}
+    verify_ssl = True
+    if server.id == "builtin-confluence" and server.credentials:
+        try:
+            verify_ssl = bool(json.loads(decrypt_secret(server.credentials)).get("verify_ssl", True))
+        except Exception:  # noqa: BLE001
+            # A broken legacy credential must not expose configuration details.
+            verify_ssl = True
+    return {"id": server.id, "name": server.name, "description": server.description, "direction": server.direction, "transport": server.transport, "endpoint": server.endpoint, "authType": server.auth_type, "status": server.status, "health": server.health, "builtin": server.builtin, "configured": bool(server.credentials), "verifySsl": verify_ssl, "tools": [_tool_brief(tool) for tool in tools], "approvedTools": sum(tool.status == "approved" for tool in tools), "createdAt": server.created_at, "updatedAt": server.updated_at}
 
 
 @router.get("/mcp-servers")

@@ -146,6 +146,7 @@ def test_builtin_confluence_resources_are_listed_and_protected(client, org_heade
     servers = client.get("/api/v1/mcp-servers", headers=org_headers).json()["data"]["items"]
     server = next(item for item in servers if item["id"] == "builtin-confluence")
     assert server["builtin"] is True
+    assert server["verifySsl"] is True
     assert len(server["tools"]) >= 20
     assert client.delete("/api/v1/expert-skills/builtin-confluence-routing", headers=org_headers).status_code == 400
     assert client.delete("/api/v1/mcp-servers/builtin-confluence", headers=org_headers).status_code == 400

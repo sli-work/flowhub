@@ -381,7 +381,7 @@ export interface McpToolRecord {
 
 export interface McpServerRecord {
   id: string; name: string; direction: 'native' | 'inbound' | 'outbound'; transport: string
-  endpoint: string; status: 'active' | 'unhealthy' | 'disabled'; tools: McpToolRecord[] | number; approvedTools: number; health: string; description?: string; authType?: string; updatedAt?: string; builtin?: boolean; configured?: boolean
+  endpoint: string; status: 'active' | 'unhealthy' | 'disabled'; tools: McpToolRecord[] | number; approvedTools: number; health: string; description?: string; authType?: string; updatedAt?: string; builtin?: boolean; configured?: boolean; verifySsl?: boolean
 }
 
 export interface ProviderRecord {
