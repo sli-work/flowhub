@@ -276,3 +276,9 @@ def test_ai_output_never_turns_image_field_text_into_a_document_candidate():
 
     assert values == {}
     assert warnings == ["「现场图片」需由人工上传图片"]
+
+
+def test_quality_review_accepts_json_wrapped_by_gateway_text():
+    from flowhub_api.services.expert_runtime import parse_quality_review
+
+    assert parse_quality_review('核验结果如下：\n{"pass": true, "issues": []}\n以上。') == (True, [], 'passed')

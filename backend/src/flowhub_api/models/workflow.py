@@ -123,7 +123,11 @@ class WorkflowIssue(Base):
     handler_task_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
     verification_task_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
     title: Mapped[str] = mapped_column(String(255))
+    # Tiptap JSON 是问题正文的权威格式；description 保留给存量记录及旧客户端。
+    description_doc: Mapped[dict] = mapped_column(JSON, default=dict)
+    description_text: Mapped[str] = mapped_column(Text, default="")
     description: Mapped[str] = mapped_column(Text, default="")
+    attachments: Mapped[list] = mapped_column(JSON, default=list)
     priority: Mapped[str] = mapped_column(Enum(*PRIORITY, name="issue_priority"), default="P2")
     blocking: Mapped[bool] = mapped_column(Boolean, default=False)
     status: Mapped[str] = mapped_column(Enum(*ISSUE_STATUS, name="workflow_issue_status"), default="handling")

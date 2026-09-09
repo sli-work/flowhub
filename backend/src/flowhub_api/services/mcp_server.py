@@ -19,7 +19,8 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
 from flowhub_api.db.session import SessionFactory
-from flowhub_api.models import DocItem, TaskItem, User, WorkItem, WorkflowIssue
+from flowhub_api.models import DocItem, McpServer, TaskItem, User, WorkItem, WorkflowIssue
+from flowhub_api.services.crypto import decrypt_secret
 from flowhub_api.services.time import now_iso
 
 _current_user: contextvars.ContextVar[User] = contextvars.ContextVar("flowhub_mcp_user")
@@ -38,9 +39,10 @@ _INSTRUCTIONS = """FlowHub 流程协同平台外部接入服务。
 1. list_my_tasks —— 查看我当前有哪些任务；
 2. get_task <task_id> —— 查看任务详情、待填表单 Schema 与验收标准；
 3. get_task_context <task_id> —— 获取完整上下文（含前序节点与文档）；
-4. create_document —— 把 Markdown 产出保存为文档（upload 字段用）；
-5. submit_task <task_id> —— 填充表单并提交，自动流转到下一节点。
-6. create_work_item —— 在有创建权限的项目中启动一个新的工作项流程。
+4. attachment_list → attachment_inspect → attachment_read / attachment_find → attachment_render（视觉模型）—— 按需理解附件；需要原文件时使用 attachment_download 获取 5 分钟有效的受控下载链接；
+5. create_document —— 把 Markdown 产出保存为文档（upload 字段用）；
+6. submit_task <task_id> —— 填充表单并提交，自动流转到下一节点。
+7. create_work_item —— 在有创建权限的项目中启动一个新的工作项流程。
 """
 
 mcp = FastMCP(
@@ -79,6 +81,57 @@ async def _task_summary(session: AsyncSession, t: TaskItem) -> dict:
 async def _can_read_task(session: AsyncSession, user: User, task: TaskItem) -> bool:
     from flowhub_api.services.agent_context import can_read_task
     return await can_read_task(session, user, task)
+
+
+async def _confluence_call(method: str, endpoint: str, *, params: dict | None = None, body: dict | list | None = None) -> dict | list:
+    """Use the encrypted MCP-center configuration; credentials never leave this process."""
+    async with SessionFactory() as session:
+        server = await session.get(McpServer, "builtin-confluence")
+        if server is None or not server.credentials:
+            return {"ok": False, "error": "Confluence MCP 未配置，请在 MCP 中心填写地址、账号和密码"}
+        try:
+            config = json.loads(decrypt_secret(server.credentials))
+            from flowhub_api.integrations.confluence import ConfluenceClient
+            client = ConfluenceClient(**config)
+            try:
+                result = await client.request(method, endpoint, params=params, json=body)
+            finally:
+                await client.close()
+            return result
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": f"Confluence 调用失败：{str(exc)[:500]}"}
+
+
+@mcp.tool()
+async def confluence_ping() -> dict:
+    """检测内置 Confluence MCP 是否已配置且可访问。"""
+    result = await _confluence_call("GET", "/rest/api/space", params={"limit": 1})
+    return {"ok": not (isinstance(result, dict) and result.get("ok") is False), "sample": result}
+
+
+@mcp.tool()
+async def confluence_request(method: Literal["GET", "POST", "PUT", "DELETE"], endpoint: str, params: dict | None = None, body: dict | list | None = None) -> dict | list:
+    """调用内置 Confluence Server REST API。写操作由 FlowHub MCP 策略记录并需按工具风险审批。"""
+    if not endpoint.startswith("/rest/api/"):
+        return {"ok": False, "error": "仅允许调用 /rest/api/ 下的 Confluence Server API"}
+    return await _confluence_call(method, endpoint, params=params, body=body)
+
+
+@mcp.tool()
+async def confluence_quick_search(query: str, limit: int = 20, space_key: str = "") -> dict | list:
+    """按关键词搜索 Confluence 页面；优先使用此工具而不是手写 CQL。"""
+    q = query.strip().replace('"', '\\"')
+    if not q:
+        return {"ok": False, "error": "query is required"}
+    cql = f'type=page AND text ~ "{q}"'
+    if space_key.strip(): cql += f' AND space="{space_key.strip()}"'
+    return await _confluence_call("GET", "/rest/api/content/search", params={"cql": cql, "limit": min(max(limit, 1), 100), "expand": "space"})
+
+
+@mcp.tool()
+async def confluence_get_page_by_id(page_id: str, expand: str = "body.storage,version,space") -> dict | list:
+    """按页面 ID 读取 Confluence 页面内容。"""
+    return await _confluence_call("GET", f"/rest/api/content/{page_id}", params={"expand": expand})
 
 
 @mcp.tool()
@@ -269,7 +322,8 @@ async def submit_task(task_id: str, form_values: dict, acceptance_checks: dict |
 
 @mcp.tool()
 async def create_task_issue(task_id: str, target_task_id: str, title: str, description: str,
-                            priority: Literal["P0", "P1", "P2", "P3"] = "P2", blocking: bool | None = None) -> dict:
+                            priority: Literal["P0", "P1", "P2", "P3"] = "P2", blocking: bool | None = None,
+                            description_doc: dict | None = None, attachments: list[dict] | None = None) -> dict:
     """从任意当前任务创建局部返工问题，投递到本工作项已完成的前置任务。
 
     问题处理不会推动主流程；blocking=true 时，原任务在验证通过前不能提交。
@@ -285,7 +339,8 @@ async def create_task_issue(task_id: str, target_task_id: str, title: str, descr
         service = TaskIssueService(session)
         try:
             issue, notifications = await service.create(task, target_task_id=target_task_id, title=title,
-                description=description, priority=priority, blocking=blocking, actor=user)
+                description=description, description_doc=description_doc, attachments=attachments,
+                priority=priority, blocking=blocking, actor=user)
             await session.commit()
         except Exception as exc:  # noqa: BLE001
             return {"error": getattr(exc, "detail", None) or str(exc)}
@@ -344,6 +399,94 @@ async def get_task_context(task_id: str) -> str:
             return await build_task_context(session, user, task, include_docs=True)
         except Exception as exc:  # noqa: BLE001
             return f"无权限或读取失败：{exc}"
+
+
+async def _attachment_tool(task_id: str, name: str, args: dict):
+    user = _current_user.get()
+    from flowhub_api.services.attachment_tools import create_attachment_tool_bundle
+
+    async with SessionFactory() as session:
+        task = await session.get(TaskItem, task_id)
+        if task is None:
+            return "任务不存在"
+        try:
+            bundle = await create_attachment_tool_bundle(session, task, user)
+            tool = next(item for item in bundle.tools if item.name == name)
+            return await tool.ainvoke(args)
+        except Exception as exc:  # noqa: BLE001
+            return f"附件工具失败：{exc}"
+
+
+@mcp.tool()
+async def attachment_list(task_id: str):
+    """列出任务可访问附件；涉及附件内容时必须先调用。"""
+    return await _attachment_tool(task_id, "flowhub_attachment_list", {})
+
+
+@mcp.tool()
+async def attachment_inspect(task_id: str, doc_id: str, offset: int = 0, limit: int = 100):
+    """分页查看指定附件的可读取结构和 location/seq；正文请再调用 attachment_read。"""
+    return await _attachment_tool(task_id, "flowhub_attachment_inspect", {"doc_id": doc_id, "offset": offset, "limit": limit})
+
+
+@mcp.tool()
+async def attachment_read(task_id: str, doc_id: str, location: str, seq: int | None = None, max_chars: int = 4000):
+    """按 inspect 返回的精确 location 和 seq 读取附件正文或表格。"""
+    return await _attachment_tool(task_id, "flowhub_attachment_read", {"doc_id": doc_id, "location": location, "seq": seq, "max_chars": max_chars})
+
+
+@mcp.tool()
+async def attachment_find(task_id: str, doc_id: str, text: str, max_results: int = 10):
+    """在指定附件中做字面文本匹配，返回可继续读取的 location。"""
+    return await _attachment_tool(task_id, "flowhub_attachment_find", {"doc_id": doc_id, "text": text, "max_results": max_results})
+
+@mcp.tool()
+async def attachment_render(task_id: str, doc_id: str):
+    """向配置了视觉能力的模型提供 PNG/JPEG/WebP 原图；其他格式请使用 inspect/read。"""
+    return await _attachment_tool(task_id, "flowhub_attachment_render", {"doc_id": doc_id})
+
+
+@mcp.tool()
+async def attachment_download(task_id: str, doc_id: str) -> dict:
+    """生成当前任务附件的 5 分钟受控下载链接。
+
+    仅能下载 attachment_list 返回的当前任务可见附件。结果中的 downloadUrl 是
+    相对 FlowHub 服务地址的链接；配置了 PUBLIC_BASE_URL 时同时返回绝对地址。
+    """
+    user = _current_user.get()
+    from flowhub_api.core.config import get_settings
+    from flowhub_api.services.agent_context import can_read_task
+    from flowhub_api.services.attachment_evidence import _collect_attachments
+    from flowhub_api.services.audit import AuditService
+    from flowhub_api.services.document_access import document_content_link
+
+    async with SessionFactory() as session:
+        task = await session.get(TaskItem, task_id)
+        if task is None:
+            return {"error": "任务不存在"}
+        if not await can_read_task(session, user, task):
+            return {"error": "无权限读取该任务附件"}
+        doc = next((item for item in await _collect_attachments(session, task) if item.id == doc_id), None)
+        if doc is None:
+            return {"error": "附件不存在、不可下载或当前任务无权读取"}
+
+        path = document_content_link(doc.id)
+        public_base_url = get_settings().public_base_url.rstrip("/")
+        await AuditService(session).record(
+            actor=user.name,
+            action="document:mcp_download",
+            target=f"{doc.name} · 外部 MCP 短时链接",
+            result="success",
+        )
+        await session.commit()
+        return {
+            "id": doc.id,
+            "name": doc.name,
+            "size": doc.size,
+            "expiresIn": "5 分钟",
+            "downloadPath": path,
+            "downloadUrl": f"{public_base_url}{path}" if public_base_url else path,
+        }
 
 
 @mcp.tool()

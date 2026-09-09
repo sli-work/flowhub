@@ -32,6 +32,7 @@ class LlmProviderModel(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     max_context_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     max_output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    supports_vision: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class ExpertSkill(Base):
@@ -48,6 +49,7 @@ class ExpertSkill(Base):
     object_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(Enum("draft", "testing", "published", "archived", name="expert_skill_status"), default="draft")
     deleted: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    builtin: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     owner_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
     created_at: Mapped[str] = mapped_column(String(40), default="")
     updated_at: Mapped[str] = mapped_column(String(40), default="")
@@ -67,6 +69,7 @@ class McpServer(Base):
     status: Mapped[str] = mapped_column(String(16), default="unhealthy")
     health: Mapped[str] = mapped_column(String(64), default="未检测")
     deleted: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    builtin: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     created_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[str] = mapped_column(String(40), default="")
     updated_at: Mapped[str] = mapped_column(String(40), default="")

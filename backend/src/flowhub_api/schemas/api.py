@@ -167,6 +167,7 @@ class ProviderReq(BaseModel):
     base_url: str = Field(min_length=1, max_length=255)
     api_key: str = ""
     models: list[str] = []
+    vision_models: list[str] = []
     model_limits: dict[str, ModelLimitsReq] = Field(default_factory=dict)
     max_context_tokens: int = Field(default=32_000, ge=8_000, le=10_000_000)  # 模型最大上下文窗口（token），压缩预算取 80%
 
@@ -237,6 +238,14 @@ class McpToolUpdateReq(BaseModel):
     approval: str | None = None
 
 
+class ConfluenceConfigReq(BaseModel):
+    base_url: str = Field(min_length=1, max_length=512)
+    username: str = Field(min_length=1, max_length=255)
+    password: str = Field(min_length=1, max_length=1024)
+    verify_ssl: bool = True
+    timeout_seconds: float = Field(default=30, ge=1, le=120)
+
+
 class ApprovalDecisionReq(BaseModel):
     note: str = ""
 
@@ -295,7 +304,10 @@ class RepoBindingUpdateReq(BaseModel):
 # ---------- 通用问题闭环 ----------
 class IssueCreateReq(BaseModel):
     title: str = Field(min_length=1, max_length=255)
-    description: str = Field(min_length=1, max_length=8000)
+    # 字符串参数保留给旧版 REST 客户端；description_doc 为新编辑器的权威正文。
+    description: str = Field(default="", max_length=16000)
+    description_doc: dict | None = None
+    attachments: list[dict] = Field(default_factory=list, max_length=20)
     target_task_id: str = Field(min_length=1, max_length=40)
     priority: Literal["P0", "P1", "P2", "P3"] = "P2"
     # 未显式选择时，紧急问题默认阻断；调用方仍可明确设为 false。

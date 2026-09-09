@@ -11,6 +11,8 @@ import { SchemaForm, validateSchema, type SchemaValues } from '../components/sch
 import { MarkdownView } from '../components/markdown'
 import { api, ApiError } from '../lib/api'
 import { DocumentViewerDrawer, type ViewerDoc } from '../components/document-viewer-drawer'
+import { AttachmentEvidencePanel } from '../components/attachment-evidence-panel'
+import { IssueRichTextEditor, IssueRichTextView, issueDocumentText, legacyIssueDocument, type IssueDocument } from '../components/issue-rich-text'
 import { cn } from '../lib/utils'
 import type { AcceptanceChecks, ExpertRunBrief, FormField, IssueSummary, NodeDeliverable, TaskItem, WorkItem, WorkflowIssue } from '../types'
 
@@ -163,7 +165,7 @@ export function NodeProcessPage() {
   const [issueTargets, setIssueTargets] = useState<IssueTarget[]>([])
   const [issueOpen, setIssueOpen] = useState(false)
   const [issueBusy, setIssueBusy] = useState(false)
-  const [issueDraft, setIssueDraft] = useState({ title: '', description: '', targetTaskId: '', priority: 'P2', blocking: false })
+  const [issueDraft, setIssueDraft] = useState({ title: '', descriptionDoc: legacyIssueDocument('') as IssueDocument, targetTaskId: '', priority: 'P2', blocking: false })
   const [verifyOpen, setVerifyOpen] = useState(false)
   const [verifyNotes, setVerifyNotes] = useState('')
   const [returnOpen, setReturnOpen] = useState(false)
@@ -470,10 +472,12 @@ export function NodeProcessPage() {
       const d = await api.post<{ values: Record<string, unknown>; warnings: string[] }>(`/api/v1/tasks/${activeTaskId}/adopt-run`, { run_id: runId })
       applyExpertValues(d.values, d.warnings, '已采纳 Expert 产出，请审核后提交')
     } catch (e) {
-      if (e instanceof ApiError && e.message.includes('事实质量校验未通过') && window.confirm('该产出未通过事实核验。仅当你已逐项人工复核并补全当前表单后，才可覆盖采纳；继续吗？')) {
+      const needsQualityOverride = e instanceof ApiError && (e.message.includes('事实质量校验未通过') || e.message.includes('质量校验服务不可用'))
+      if (needsQualityOverride && window.confirm('质量核验未完成。仅当你已逐项人工复核当前产出后，才可覆盖采纳；继续吗？')) {
         try {
+          const runValues = expertRuns.find((item) => item.id === runId)?.parsed?.values
           const d = await api.post<{ values: Record<string, unknown>; warnings: string[] }>(`/api/v1/tasks/${activeTaskId}/adopt-run`, {
-            run_id: runId, values: formValues, approve_quality_override: true,
+            run_id: runId, values: runValues ?? formValues, approve_quality_override: true,
           })
           applyExpertValues(d.values, d.warnings, '已记录人工复核并采纳，请审核后提交')
           return
@@ -527,16 +531,17 @@ export function NodeProcessPage() {
 
   const openIssue = () => {
     if (!issueTargets.length) { toast.error('当前子线没有可投递的已完成前置节点'); return }
-    setIssueDraft({ title: '', description: '', targetTaskId: issueTargets[0].taskId, priority: 'P2', blocking: false })
+    setIssueDraft({ title: '', descriptionDoc: legacyIssueDocument(''), targetTaskId: issueTargets[0].taskId, priority: 'P2', blocking: false })
     setIssueOpen(true)
   }
 
   const createIssue = async () => {
-    if (!activeTaskId || !issueDraft.title.trim() || !issueDraft.description.trim() || !issueDraft.targetTaskId) return
+    const descriptionText = issueDocumentText(issueDraft.descriptionDoc)
+    if (!activeTaskId || !issueDraft.title.trim() || !descriptionText || !issueDraft.targetTaskId) return
     setIssueBusy(true)
     try {
       const data = await api.post<{ issue: WorkflowIssue }>(`/api/v1/tasks/${activeTaskId}/issues`, {
-        title: issueDraft.title.trim(), description: issueDraft.description.trim(), target_task_id: issueDraft.targetTaskId,
+        title: issueDraft.title.trim(), description: descriptionText, description_doc: issueDraft.descriptionDoc, target_task_id: issueDraft.targetTaskId,
         priority: issueDraft.priority, blocking: issueDraft.blocking,
       })
       setIssues((current) => [data.issue, ...current])
@@ -1080,6 +1085,9 @@ export function NodeProcessPage() {
                       {latestRun.parsed.warnings.map((w, i) => <p key={i} className="text-[11.5px] text-amber-600 dark:text-amber-300">⚠ {w}</p>)}
                     </div>
                   )}
+                  {latestRun.parsed?.attachmentEvidence && (
+                    <AttachmentEvidencePanel taskId={activeTaskId ?? ''} evidence={latestRun.parsed.attachmentEvidence} />
+                  )}
                   <div className="mt-1.5 text-[11px] text-slate-400">
                     {latestRun.startedAt}
                     {latestRun.parsed?.codeAnalysis?.mode && <span className="ml-1.5">· 代码分析：{latestRun.parsed.codeAnalysis.mode === 'reused' ? '复用当前 commit 证据' : latestRun.parsed.codeAnalysis.mode === 'fresh' ? '本轮重新分析' : '未绑定可用仓库'}</span>}
@@ -1184,6 +1192,7 @@ export function NodeProcessPage() {
               <div key={issue.id} className="rounded-lg border border-slate-200 p-2.5 text-[11.5px] dark:border-slate-700">
                 <div className="flex items-center gap-1.5"><b className="min-w-0 flex-1 truncate text-slate-700 dark:text-slate-200">{issue.title}</b><Badge tone={issue.blocking ? 'err' : 'info'}>{issue.blocking ? '阻断' : '非阻断'}</Badge></div>
                 <p className="mt-1 text-slate-400">{issue.status === 'handling' ? `处理：${issue.targetNode}` : issue.status === 'waiting_verification' ? '等待验证' : issue.status === 'closed' ? '已关闭' : '已延期'} · 第 {issue.round} 轮</p>
+                <IssueRichTextView value={issue.descriptionDoc ?? legacyIssueDocument(issue.descriptionText ?? issue.description, issue.attachments ?? [])} onPreview={openDocumentPreview} />
               </div>
             ))}</div> : <p className="text-[11.5px] text-slate-400">暂无问题。局部问题可投递前置节点处理，不改变主流程位置。</p>}
           </SectionCard>
@@ -1198,10 +1207,10 @@ export function NodeProcessPage() {
             <div className="mb-3 flex items-center justify-between"><b className="flex items-center gap-1.5 text-sm"><CircleAlert className="h-4 w-4 text-amber-500" />发起问题</b><button onClick={() => setIssueOpen(false)}>✕</button></div>
             <p className="mb-3 text-[11.5px] text-slate-400">问题将创建独立处理任务，不会移动主流程；阻断问题通过验证前不能提交当前节点。</p>
             <input className="h-9 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-800" placeholder="问题标题" value={issueDraft.title} onChange={(e) => setIssueDraft((draft) => ({ ...draft, title: e.target.value }))} />
-            <textarea className="mt-2 min-h-28 w-full rounded-lg border border-slate-300 bg-white p-3 text-sm dark:border-slate-700 dark:bg-slate-800" placeholder="问题现象、复现步骤和期望结果" value={issueDraft.description} onChange={(e) => setIssueDraft((draft) => ({ ...draft, description: e.target.value }))} />
+            {wi && <div className="mt-2"><IssueRichTextEditor value={issueDraft.descriptionDoc} onChange={(descriptionDoc) => setIssueDraft((draft) => ({ ...draft, descriptionDoc }))} project={wi.project} workItemId={wi.id} onPreview={openDocumentPreview} /></div>}
             <div className="mt-2 grid grid-cols-2 gap-2"><select className="h-9 rounded-lg border border-slate-300 bg-white px-2 text-sm dark:border-slate-700 dark:bg-slate-800" value={issueDraft.targetTaskId} onChange={(e) => setIssueDraft((draft) => ({ ...draft, targetTaskId: e.target.value }))}>{issueTargets.map((target) => <option key={target.taskId} value={target.taskId}>{target.label} · {target.assignees.join('、') || '原处理人'}</option>)}</select><select className="h-9 rounded-lg border border-slate-300 bg-white px-2 text-sm dark:border-slate-700 dark:bg-slate-800" value={issueDraft.priority} onChange={(e) => setIssueDraft((draft) => { const priority = e.target.value as 'P0' | 'P1' | 'P2' | 'P3'; return { ...draft, priority, blocking: ['P0', 'P1'].includes(priority) ? true : draft.blocking } })}>{['P0', 'P1', 'P2', 'P3'].map((priority) => <option key={priority}>{priority}</option>)}</select></div>
             <label className="mt-3 flex items-center gap-2 text-[12px]"><input type="checkbox" checked={issueDraft.blocking} onChange={(e) => setIssueDraft((draft) => ({ ...draft, blocking: e.target.checked }))} />阻断当前节点继续提交</label>
-            <div className="mt-4 flex justify-end gap-2"><button className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs" onClick={() => setIssueOpen(false)}>取消</button><button className="rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50" disabled={issueBusy || !issueDraft.title.trim() || !issueDraft.description.trim()} onClick={() => void createIssue()}>{issueBusy ? '创建中…' : '创建并分派'}</button></div>
+            <div className="mt-4 flex justify-end gap-2"><button className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs" onClick={() => setIssueOpen(false)}>取消</button><button className="rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50" disabled={issueBusy || !issueDraft.title.trim() || !issueDocumentText(issueDraft.descriptionDoc)} onClick={() => void createIssue()}>{issueBusy ? '创建中…' : '创建并分派'}</button></div>
           </div>
         </div>
       )}

@@ -15,6 +15,9 @@ ARG PIP_INDEX_URL=http://192.168.239.230:8887/repository/mc-group-pypi/simple/
 ARG PIP_TRUSTED_HOST=192.168.239.230
 COPY pyproject.toml README.md ./
 COPY src ./src
+# 附件 OCR（rapidocr/onnxruntime）的大 wheel（~70MB+）下载需要更长 HTTP 超时；
+# uv 默认 30s 会在大文件上 operation timed out
+ENV UV_HTTP_TIMEOUT=600
 # uv 安装依赖（并行下载/硬链接缓存，比 pip 快很多）；uv 本身也取自内网仓库
 RUN pip install --no-cache-dir --index-url=${PIP_INDEX_URL} --trusted-host ${PIP_TRUSTED_HOST} uv \
     && uv pip install --system --no-cache --index-url=${PIP_INDEX_URL} --allow-insecure-host=${PIP_TRUSTED_HOST} .

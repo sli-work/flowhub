@@ -68,7 +68,7 @@ scp "${SSH_OPTS[@]}" /tmp/flowhub-code-${STAMP}.tgz /tmp/flowhub-dist-${STAMP}.t
 
 # ---------- 3. 远端：备份 + 替换 ----------
 log "远端备份当前版本并替换代码（.env / 数据卷不受影响）"
-ssh_t "set -e
+ssh_t "set -euo pipefail
 cd ${REMOTE_DIR}
 tar czf /opt/flowhub-backup-${STAMP}.tgz --exclude='backend/.venv' --exclude='__pycache__' backend/frontend_backup_marker backend frontend 2>/dev/null || tar czf /opt/flowhub-backup-${STAMP}.tgz backend frontend
 echo \"备份: /opt/flowhub-backup-${STAMP}.tgz\"
@@ -82,7 +82,7 @@ echo REPLACE_OK"
 
 # ---------- 4. 远端：重建容器 ----------
 log "重建 backend 镜像并重启 frontend（compose 项目 ${REMOTE_PROJECT}）"
-ssh_t "set -e
+ssh_t "set -euo pipefail
 cd ${REMOTE_DIR}/backend
 docker-compose -p ${REMOTE_PROJECT} -f deploy/docker-compose.yml up -d --build backend 2>&1 | tail -3
 docker-compose -p ${REMOTE_PROJECT} -f deploy/docker-compose.yml up -d --force-recreate frontend 2>&1 | tail -1"

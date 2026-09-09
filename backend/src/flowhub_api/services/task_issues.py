@@ -5,12 +5,14 @@ to the current work item for visibility, while the main workflow cursor stays
 where the issue was raised.
 """
 from datetime import UTC, datetime, timedelta
+import re
+from typing import Any
 
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from flowhub_api.core.response import BizCode, BizError
-from flowhub_api.models import NotificationItem, TaskItem, User, WorkItem, WorkflowIssue, WorkflowInstance
+from flowhub_api.models import DocItem, NotificationItem, TaskItem, User, WorkItem, WorkflowIssue, WorkflowInstance
 from flowhub_api.services.workflow import WorkflowService, is_empty_form_value
 from flowhub_api.seed.init import gen_id
 from flowhub_api.services.audit import AuditService
@@ -18,6 +20,59 @@ from flowhub_api.services.notify import deliver_channels
 
 
 OPEN_ISSUE_STATUSES = ("handling", "waiting_verification")
+_RICH_NODES = {"doc", "paragraph", "text", "hardBreak", "bulletList", "orderedList", "listItem", "blockquote", "codeBlock", "heading", "flowhubImage"}
+_RICH_MARKS = {"bold", "italic", "strike", "code"}
+
+
+def _description_text(description: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]*>", " ", description or "")).strip()
+
+
+def _legacy_doc(text: str, attachments: list[dict] | None = None) -> dict:
+    content: list[dict] = [{"type": "paragraph", "content": [{"type": "text", "text": line}]} for line in text.splitlines() if line.strip()]
+    content.extend({"type": "flowhubImage", "attrs": {"documentId": item["id"], "name": item.get("name", "截图")}} for item in (attachments or []))
+    return {"type": "doc", "content": content or [{"type": "paragraph"}]}
+
+
+def _validate_rich_doc(value: dict | None, legacy_text: str, attachments: list[dict]) -> tuple[dict, str, set[str]]:
+    """Validate the narrow Tiptap subset persisted by issue descriptions and derive safe plain text."""
+    doc = value if isinstance(value, dict) and value else _legacy_doc(legacy_text, attachments)
+    if doc.get("type") != "doc" or not isinstance(doc.get("content", []), list):
+        raise BizError(BizCode.VALIDATION, "问题正文格式无效")
+    texts: list[str] = []
+    image_ids: set[str] = set()
+
+    def visit(node: Any, parent: str = "") -> None:
+        if not isinstance(node, dict) or not isinstance(node.get("type"), str):
+            raise BizError(BizCode.VALIDATION, "问题正文包含无效节点")
+        kind = node["type"]
+        if kind not in _RICH_NODES:
+            raise BizError(BizCode.VALIDATION, f"问题正文不支持节点：{kind}")
+        marks = node.get("marks", [])
+        if not isinstance(marks, list) or any(not isinstance(mark, dict) or mark.get("type") not in _RICH_MARKS for mark in marks):
+            raise BizError(BizCode.VALIDATION, "问题正文包含不支持的格式")
+        if kind == "text":
+            text = node.get("text")
+            if not isinstance(text, str): raise BizError(BizCode.VALIDATION, "问题正文文本无效")
+            texts.append(text)
+        elif kind == "flowhubImage":
+            attrs = node.get("attrs", {})
+            image_id = attrs.get("documentId") if isinstance(attrs, dict) else None
+            if not isinstance(image_id, str) or not image_id:
+                raise BizError(BizCode.VALIDATION, "正文图片缺少文档引用")
+            image_ids.add(image_id)
+        children = node.get("content", [])
+        if children is not None and not isinstance(children, list): raise BizError(BizCode.VALIDATION, "问题正文子节点无效")
+        for child in children or []: visit(child, kind)
+        if kind in {"paragraph", "listItem", "blockquote", "codeBlock", "heading"}: texts.append("\n")
+
+    visit(doc)
+    plain = re.sub(r"\s+", " ", "".join(texts)).strip()
+    if not plain:
+        raise BizError(BizCode.VALIDATION, "问题描述不能为空")
+    if len(plain) > 16000:
+        raise BizError(BizCode.VALIDATION, "问题描述不能超过 16000 字")
+    return doc, plain, image_ids
 
 
 class TaskIssueService:
@@ -32,7 +87,9 @@ class TaskIssueService:
             "sourceNode": issue.source_node, "targetNode": issue.target_node,
             "targetTaskId": issue.target_task_id, "handlerTaskId": issue.handler_task_id,
             "verificationTaskId": issue.verification_task_id, "title": issue.title,
-            "description": issue.description, "priority": issue.priority, "blocking": issue.blocking,
+            "description": issue.description_text or _description_text(issue.description),
+            "descriptionDoc": issue.description_doc or _legacy_doc(issue.description, list(issue.attachments or [])),
+            "descriptionText": issue.description_text or _description_text(issue.description), "attachments": list(issue.attachments or []), "priority": issue.priority, "blocking": issue.blocking,
             "status": issue.status, "reporter": issue.reporter, "verificationNotes": issue.verification_notes,
             "round": issue.round, "createdAt": issue.created_at, "updatedAt": issue.updated_at,
         }
@@ -112,8 +169,8 @@ class TaskIssueService:
         if blocking:
             raise BizError(BizCode.DUPLICATE_OPERATION, "存在未关闭的阻断问题，完成验证后才能提交该节点", http_status=409)
 
-    async def create(self, source: TaskItem, *, target_task_id: str, title: str, description: str,
-                     priority: str, blocking: bool | None, actor: User) -> tuple[WorkflowIssue, list[NotificationItem]]:
+    async def create(self, source: TaskItem, *, target_task_id: str, title: str, description: str, attachments: list[dict] | None,
+                     priority: str, blocking: bool | None, actor: User, description_doc: dict | None = None) -> tuple[WorkflowIssue, list[NotificationItem]]:
         source = (await self.session.execute(select(TaskItem).where(TaskItem.id == source.id).with_for_update())).scalar_one_or_none() or source
         await self._assert_active_work_item(source.wi_id)
         if source.status in ("completed", "cancelled"):
@@ -126,6 +183,16 @@ class TaskIssueService:
             raise BizError(BizCode.VALIDATION, "只能选择当前工作项已完成的前置节点")
         if source.lineage_root_id != target.lineage_root_id:
             raise BizError(BizCode.VALIDATION, "只能选择当前并行子线已完成的前置节点")
+        attachments = attachments or []
+        rich_doc, description_text, image_ids = _validate_rich_doc(description_doc, description, attachments)
+        attachment_ids = ({str(item.get("id") or "") for item in attachments if isinstance(item, dict)} - {""}) | image_ids
+        if len(attachment_ids) != len(attachments):
+            raise BizError(BizCode.VALIDATION, "问题截图引用无效")
+        if attachment_ids:
+            docs = (await self.session.execute(select(DocItem).where(DocItem.id.in_(attachment_ids), DocItem.wi == source.wi_id, DocItem.deleted == False))).scalars().all()  # noqa: E712
+            valid = {doc.id for doc in docs if doc.name.rsplit(".", 1)[-1].lower() in {"png", "jpg", "jpeg", "webp"}}
+            if valid != attachment_ids:
+                raise BizError(BizCode.VALIDATION, "问题截图必须是当前工作项已上传的图片")
         # P0/P1 默认会保护主流程；提报人仍能明确改成非阻断问题。
         effective_blocking = priority in {"P0", "P1"} if blocking is None else blocking
         now = datetime.now(UTC).isoformat()
@@ -133,7 +200,8 @@ class TaskIssueService:
             id=gen_id("iss"), wi_id=source.wi_id, source_task_id=source.id,
             source_node_id=source.node_id, source_node=source.node,
             target_task_id=target.id, target_node_id=target.node_id, target_node=target.node,
-            title=title, description=description, priority=priority, blocking=effective_blocking,
+            title=title, description_doc=rich_doc, description_text=description_text, description=description_text,
+            attachments=[{"id": d.id, "name": d.name} for d in docs] if attachment_ids else [], priority=priority, blocking=effective_blocking,
             status="handling", reporter=actor.name, created_at=now, updated_at=now,
         )
         self.session.add(issue)
@@ -152,7 +220,7 @@ class TaskIssueService:
             node=target.node, node_id=target.node_id, type=source.type, priority=issue.priority,
             status="assigned", assignee=assignee or "待分配", due=(datetime.now(UTC) + timedelta(hours=48)).strftime("%m-%d %H:%M"),
             sla_hours=48, source=f"issue:{issue.id}:handling:{issue.round}", parent_task_id=source.id,
-            lineage_root_id=source.lineage_root_id, brief=f"问题 #{issue.id}\n来源节点：{source.node}\n问题描述：{issue.description}",
+            lineage_root_id=source.lineage_root_id, brief=f"问题 #{issue.id}\n来源节点：{source.node}\n问题描述：{issue.description_text or _description_text(issue.description)}\n截图：{'、'.join(item.get('name', '截图') for item in (issue.attachments or [])) or '无'}",
             created_at=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
         )
         self.session.add(task)
