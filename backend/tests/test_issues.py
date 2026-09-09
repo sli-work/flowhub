@@ -21,16 +21,29 @@ def test_task_can_create_a_blocking_issue_for_completed_predecessor(client: Test
     targets = detail.json()["data"].get("issueTargets", [])
     assert targets, "seed test task must expose completed predecessor targets"
 
+    invalid_screenshot = client.post(
+        f"/api/v1/tasks/{source}/issues", headers=org_headers,
+        json={"title": "无效截图", "description": "截图必须来自当前工作项", "target_task_id": targets[0]["taskId"], "attachments": [{"id": "not-a-document", "name": "fake.png"}]},
+    )
+    assert invalid_screenshot.status_code == 400
+    assert "截图" in invalid_screenshot.json()["message"]
+
     created = client.post(
         f"/api/v1/tasks/{source}/issues", headers=org_headers,
         # P1 未显式选择阻断时，采用紧急问题的阻断默认值。
-        json={"title": "接口返回字段错误", "description": "复现：调用创建接口后字段缺失", "target_task_id": targets[0]["taskId"], "priority": "P1"},
+        json={"title": "接口返回字段错误", "description": "复现：调用创建接口后字段缺失", "description_doc": {
+            "type": "doc", "content": [{"type": "paragraph", "content": [
+                {"type": "text", "text": "复现："}, {"type": "text", "marks": [{"type": "bold"}], "text": "调用创建接口后字段缺失"},
+            ]}],
+        }, "target_task_id": targets[0]["taskId"], "priority": "P1"},
     )
     assert created.status_code == 200, created.text
     issue = created.json()["data"]["issue"]
     assert issue["status"] == "handling"
     assert issue["blocking"] is True
     assert issue["handlerTaskId"]
+    assert issue["descriptionText"] == "复现：调用创建接口后字段缺失"
+    assert issue["descriptionDoc"]["type"] == "doc"
     # 返工子任务只能在问题闭环中观察，绝不能插入主流程图。
     main_task_ids = {row["id"] for row in client.get(f"/api/v1/work-items/{wi}", headers=org_headers).json()["data"]["tasks"]}
     assert issue["handlerTaskId"] not in main_task_ids

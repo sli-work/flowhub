@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from flowhub_api.core.config import get_settings
 from flowhub_api.models import (
     AuditRow, DocItem, GlobalTemplate,
-    NodeAssignment, NotificationItem, Project, ProjectTemplateBinding,
+    ExpertSkill, McpServer, McpTool, NodeAssignment, NotificationItem, Project, ProjectTemplateBinding,
     Role, TaskItem, User, WorkItem, WorkflowInstance,
 )
 from flowhub_api.seed.data import GLOBAL_TEMPLATES, PERM_MATRIX, ROLE_META, ROLE_ORDER, SEED_USERS
@@ -51,7 +51,38 @@ async def seed_all(session: AsyncSession) -> None:
         # 干净模式：仅引导一个 bootstrap admin（登录后可在组织管理创建其他用户）
         await _seed_bootstrap_admin(session)
         logger.info("Seed 干净模式：角色 %d / 模板 %d / bootstrap admin 已引导（演示数据已禁用）", len(ROLE_ORDER), len(GLOBAL_TEMPLATES))
+    await _seed_builtin_expert_resources(session)
     await session.commit()
+
+
+async def _seed_builtin_expert_resources(session: AsyncSession) -> None:
+    """Built-ins live in source control and are idempotently surfaced in resource centers."""
+    owner = (await session.execute(select(User).order_by(User.id).limit(1))).scalar_one_or_none()
+    if owner is None:
+        return
+    if await session.get(ExpertSkill, "builtin-confluence-routing") is None:
+        session.add(ExpertSkill(
+            id="builtin-confluence-routing", name="Confluence 查询路由", slug="confluence-query-routing",
+            description="Confluence 查询、联系人、案例与知识页面的检索策略", version="v1.0.0", package_type="builtin",
+            filename="SKILL.md", size_bytes=0, object_name="builtin:confluence_skill", status="published", builtin=True,
+            owner_id=owner.id, created_at="builtin", updated_at="builtin",
+        ))
+    server = await session.get(McpServer, "builtin-confluence")
+    if server is None:
+        server = McpServer(id="builtin-confluence", name="Confluence Server", description="内置 Confluence Server REST MCP", direction="native", transport="builtin", endpoint="", auth_type="basic", credentials="", status="unhealthy", health="未配置", builtin=True, created_by=owner.id, created_at="builtin", updated_at="builtin")
+        session.add(server)
+    tool_specs = [
+        ("ping", "检测 Confluence 连接", "read", "none"), ("confluence_request", "通用 Confluence REST 请求", "write_commit", "required"),
+        ("list_spaces", "列出空间", "read", "none"), ("get_space", "获取空间", "read", "none"), ("search_content", "CQL 搜索内容", "read", "none"), ("quick_search", "关键词搜索内容", "read", "none"),
+        ("list_pages_by_space", "列出空间页面", "read", "none"), ("get_page_by_id", "按 ID 获取页面", "read", "none"), ("get_page_by_title", "按标题获取页面", "read", "none"),
+        ("create_page", "创建页面", "write_commit", "required"), ("update_page", "更新页面", "write_commit", "required"), ("delete_content", "删除内容", "critical", "required"),
+        ("list_children_pages", "列出子页面", "read", "none"), ("list_attachments", "列出附件", "read", "none"), ("upload_attachment", "上传附件", "write_commit", "required"),
+        ("list_comments", "列出评论", "read", "none"), ("add_comment", "新增评论", "write_commit", "required"), ("get_labels", "获取标签", "read", "none"), ("add_label", "新增标签", "write_commit", "required"), ("remove_label", "移除标签", "write_commit", "required"), ("get_user", "获取用户", "read", "none"), ("search_users", "搜索用户", "read", "none"),
+    ]
+    existing = set((await session.execute(select(McpTool.name).where(McpTool.server_id == "builtin-confluence"))).scalars().all())
+    for name, description, risk, approval in tool_specs:
+        if name not in existing:
+            session.add(McpTool(id=f"bct-{name}", server_id="builtin-confluence", name=name, description=description, input_schema={}, risk=risk, approval=approval, status="approved", enabled=True, created_at="builtin", updated_at="builtin"))
 
 
 async def _seed_bootstrap_admin(session: AsyncSession) -> None:

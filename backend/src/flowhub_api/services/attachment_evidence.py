@@ -155,29 +155,31 @@ def render_evidence_section(result: EvidenceResult) -> str:
 
 
 async def _parse_or_load(doc: DocItem, cache, ocr) -> tuple[ParsedAttachment, bool]:
+    started = time.monotonic()
     key = cache_key(doc, PARSER_VERSION)
     cached = await cache.get(key)
     if cached is not None:
-        return replace(cached, cache_hit=True), True
+        return replace(cached, cache_hit=True, duration_ms=0), True
     try:
         data = _load_bytes(doc)
         if inspect.isawaitable(data):
             data = await data
     except ValueError as exc:
         return ParsedAttachment(doc_id=doc.id, status="failed", parser="unknown",
-                                error=str(exc)[:200]), False
+                                duration_ms=round((time.monotonic() - started) * 1000), error=str(exc)[:200]), False
     except Exception as exc:
         logger.warning("读取附件 %s 失败：%s", doc.id, exc)
         return ParsedAttachment(doc_id=doc.id, status="failed", parser="unknown",
+                                duration_ms=round((time.monotonic() - started) * 1000),
                                 error=f"读取失败：{str(exc)[:200]}"), False
     if not data:
         parsed = ParsedAttachment(doc_id=doc.id, status="failed", parser="unknown",
-                                  error="文档内容不可读")
+                                  duration_ms=round((time.monotonic() - started) * 1000), error="文档内容不可读")
         return parsed, False
     parsed = await parse_attachment(doc, data, ocr)
-    # 只缓存成功索引结果：failed/needs_ocr/skipped 不写缓存，保证修复原因后重试会真实重新解析
-    if parsed.status == "indexed":
-        await cache.set(key, parsed)
+    parsed = replace(parsed, duration_ms=round((time.monotonic() - started) * 1000))
+    # 同一对象版本的解析失败也缓存，避免每次模型读取都重复下载；文件更新会改变缓存键。
+    await cache.set(key, parsed)
     return parsed, False
 
 
@@ -229,9 +231,10 @@ async def build_attachment_evidence(
 async def retrieve_more_evidence(
     session, task: TaskItem, user, query: str, exclude_chunk_seq: set[int] | None = None,
     depth: int = 1, *, limit_docs: int = 3, limit_chunks: int = 10, limit_chars: int = 4000,
-    cache=None, ocr=None,
+    cache=None, ocr=None, timeout_ms: int = 10_000,
 ) -> EvidenceResult:
-    """模型二次检索：只重检索已缓存解析结果，不重新下载对象；深度超限拒绝。"""
+    """按需检索附件；缓存未命中时以受限预算解析，保证外部 MCP 首次调用可用。"""
+    started = time.monotonic()
     if depth < 1 or depth > MAX_RETRIEVAL_DEPTH:
         raise ValueError(f"检索深度超限（最大 {MAX_RETRIEVAL_DEPTH}）")
     if not await can_read_task(session, user, task):
@@ -243,20 +246,26 @@ async def retrieve_more_evidence(
     exclude = set(exclude_chunk_seq or [])
     docs = await _collect_attachments(session, task)
     keywords = _extract_keywords(query)
-    candidates = [AttachmentCandidate(doc=d, selected=False, reason="", score=0.0) for d in docs]
+    candidates = [AttachmentCandidate(doc=d, selected=False, reason="", score=_score_attachment(d, keywords)) for d in docs]
     parsed_list: list[ParsedAttachment] = []
     chunks_by_doc: dict[str, list[EvidenceChunk]] = {}
-    for doc in docs[:limit_docs]:
+    ranked_docs = sorted(docs, key=lambda d: _score_attachment(d, keywords), reverse=True)[:limit_docs]
+    deadline = time.monotonic() + timeout_ms / 1000
+    for doc in ranked_docs:
+        if time.monotonic() > deadline:
+            break
         key = cache_key(doc, PARSER_VERSION)
         parsed = await cache.get(key)
         if parsed is None:
-            logger.debug("二次检索：缓存未命中，跳过 %s（不重新下载）", doc.id)
-            continue
-        parsed_list.append(replace(parsed, cache_hit=True))
+            parsed, _ = await _parse_or_load(doc, cache, ocr)
+        else:
+            parsed = replace(parsed, cache_hit=True, duration_ms=0)
+        parsed_list.append(parsed)
         if parsed.status == "indexed":
             chunks_by_doc[parsed.doc_id] = [
                 c for c in parsed.chunks if c.seq not in exclude
             ]
     injected = _rank_chunks(chunks_by_doc, keywords, limit_chunks, limit_chars)
     return EvidenceResult(candidates=candidates, parsed=parsed_list, injected=injected,
-                          total_chars=sum(len(c.text) for c in injected), duration_ms=0)
+                          total_chars=sum(len(c.text) for c in injected),
+                          duration_ms=round((time.monotonic() - started) * 1000))

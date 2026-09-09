@@ -365,7 +365,7 @@ async def create_task_issue(
         raise BizError(BizCode.NOT_FOUND, "任务不存在")
     service = TaskIssueService(session)
     issue, notifications = await service.create(task, target_task_id=body.target_task_id, title=body.title,
-        description=body.description, priority=body.priority, blocking=body.blocking, actor=user)
+        description=body.description, description_doc=body.description_doc, attachments=body.attachments, priority=body.priority, blocking=body.blocking, actor=user)
     await session.commit()
     if notifications:
         from flowhub_api.routes.notifications import publish_notification

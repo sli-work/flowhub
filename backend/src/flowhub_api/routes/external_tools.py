@@ -71,7 +71,9 @@ async def download_skill_markdown(_: Annotated[User, Depends(get_current_user)])
 
 - `list_my_tasks`: list the caller's tasks; administrators can see all tasks.
 - `get_task`: read an authorized task, current-node form values, **form schema** and acceptance checklist.
-- `get_task_context`: retrieve authorized workflow context (previous-node forms + documents).
+- `get_task_context`: retrieve authorized workflow context (previous-node forms + document metadata).
+- `attachment_list` / `attachment_inspect` / `attachment_read` / `attachment_find`: inspect and read task attachments step by step.
+- `attachment_download`: generate a 5-minute download link for an attachment returned by `attachment_list`; use it for the original PDF, ZIP, Axure package, or other binary file.
 - `get_work_item`: read an authorized work item and task summary.
 - `list_documents`: list authorized document metadata.
 - `get_downstream_summary`: view downstream task summaries.
@@ -87,7 +89,7 @@ async def download_skill_markdown(_: Annotated[User, Depends(get_current_user)])
 
 1. `list_my_tasks` 找到 assigned/transferred 状态的任务（转办来的任务为 transferred）;
 1.5. transferred 任务先 `claim_task <task_id>` 认领；
-2. `get_task_context <task_id>` 获取完整上下文（工作项信息 + 前序节点表单明细 + 文档）；
+2. `get_task_context <task_id>` 获取完整上下文（工作项信息 + 前序节点表单明细 + 文档元数据）；涉及附件时先 `attachment_list`，再 `attachment_inspect` 和按 location 的 `attachment_read`/`attachment_find`；需要原始文件时调用 `attachment_download`，其下载链接只在 5 分钟内有效；
 3. `get_task <task_id>` 查看当前节点的 `formSchema`（待填字段：key/type/required）与 `acceptance`（验收标准）；
 4. upload 类型字段：用 `create_document(name, content, wi_id)` 把 Markdown 产出保存为文档，拿到 `{{id, name}}` 引用；
 5. `submit_task(task_id, form_values, acceptance_checks)` 提交：

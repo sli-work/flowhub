@@ -144,7 +144,8 @@ async def migrate(conn: AsyncConnection) -> None:
     for table, additions in {
         "expert_runs": {"config_snapshot": "JSON NOT NULL DEFAULT '{}'", "quality_result": "JSON NOT NULL DEFAULT '{}'", "execution_generation": "INTEGER NOT NULL DEFAULT 1"},
         "expert_chat_sessions": {"compaction_version": "INTEGER NOT NULL DEFAULT 0"},
-        "llm_provider_models": {"max_context_tokens": "INTEGER", "max_output_tokens": "INTEGER"},
+        "llm_provider_models": {"max_context_tokens": "INTEGER", "max_output_tokens": "INTEGER", "supports_vision": "BOOLEAN DEFAULT FALSE"},
+        "workflow_issues": {"attachments": "JSON NOT NULL DEFAULT '[]'", "description_doc": "JSON NOT NULL DEFAULT '{}'", "description_text": "TEXT NOT NULL DEFAULT ''"},
     }.items():
         existing = await _existing_columns(conn, table)
         for column, ddl in additions.items():
@@ -165,6 +166,9 @@ async def migrate(conn: AsyncConnection) -> None:
     if skill_columns and "deleted" not in skill_columns:
         await conn.execute(text('ALTER TABLE expert_skills ADD COLUMN "deleted" BOOLEAN DEFAULT FALSE'))
         logger.info("migrate: expert_skills.deleted added")
+    if skill_columns and "builtin" not in skill_columns:
+        await conn.execute(text('ALTER TABLE expert_skills ADD COLUMN "builtin" BOOLEAN DEFAULT FALSE'))
+        logger.info("migrate: expert_skills.builtin added")
     mcp_columns = await _existing_columns(conn, "mcp_servers")
     mcp_columns_to_add = {
         "description": "TEXT DEFAULT ''",
@@ -176,6 +180,7 @@ async def migrate(conn: AsyncConnection) -> None:
         "status": "VARCHAR(16) DEFAULT 'unhealthy'",
         "health": "VARCHAR(64) DEFAULT '未检测'",
         "deleted": "BOOLEAN DEFAULT FALSE",
+        "builtin": "BOOLEAN DEFAULT FALSE",
         "created_by": "VARCHAR(32) DEFAULT ''",
         "created_at": "VARCHAR(40) DEFAULT ''",
         "updated_at": "VARCHAR(40) DEFAULT ''",

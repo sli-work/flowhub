@@ -48,13 +48,13 @@ export function AttachmentEvidencePanel({ taskId, evidence }: { taskId: string; 
     }
   }
 
-  if (!state || (!state.parsed?.length && !state.injected?.length)) return null
+  if (!state || (!state.parsed?.length && !state.injected?.length && !state.operations?.length)) return null
 
   return (
     <div className="mt-2.5 rounded-lg border border-slate-200 bg-white/60 px-2.5 py-2 dark:border-slate-700 dark:bg-slate-900/40">
       <div className="flex flex-wrap items-center gap-2 text-[11.5px]">
         <span className="font-semibold text-slate-600 dark:text-slate-300">附件证据</span>
-        <span className="text-slate-400">本轮送入 {state.injected?.length ?? 0} 片段 · {state.totalChars ?? 0} 字 · {(state.durationMs ?? 0) / 1000}s</span>
+        <span className="text-slate-400">本轮读取 {state.injected?.length ?? 0} 片段 · {state.totalChars ?? 0} 字 · {(state.durationMs ?? 0) / 1000}s</span>
         {failed && (
           <button className="ml-auto inline-flex items-center gap-1 rounded-md border border-violet-300 px-2 py-0.5 font-medium text-violet-600 transition-colors hover:bg-violet-50 disabled:opacity-50 dark:border-violet-500/40 dark:text-violet-300"
             disabled={busy} onClick={() => void reparse()}>
@@ -65,6 +65,11 @@ export function AttachmentEvidencePanel({ taskId, evidence }: { taskId: string; 
       <details className="mt-1.5">
         <summary className="cursor-pointer text-[11px] font-medium text-slate-500 hover:text-slate-700 dark:hover:text-slate-200">展开证据片段与来源定位</summary>
         <div className="mt-2 space-y-1.5">
+          {(state.operations ?? []).map((operation, index) => (
+            <div key={`${operation.tool}:${operation.docId ?? ''}:${index}`} className="text-[11px] text-slate-500 dark:text-slate-400">
+              {operation.status === 'succeeded' ? '✓' : '•'} {operation.tool.replace('flowhub_attachment_', '')}{operation.docId ? ` · ${operation.docId}` : ''}{operation.location ? ` · ${operation.location}` : ''}{operation.durationMs ? ` · ${operation.durationMs}ms` : ''}
+            </div>
+          ))}
           {(state.candidates ?? []).map((c) => {
             const parsedEntry = state.parsed?.find((p) => p.id === c.id)
             const used = !!parsedEntry || c.selected === true

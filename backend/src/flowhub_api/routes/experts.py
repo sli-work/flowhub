@@ -15,11 +15,11 @@ from flowhub_api.authz.authorizer import build_authorizer, get_current_user
 from flowhub_api.core.response import BizCode, BizError, ok
 from flowhub_api.db.session import get_db
 from flowhub_api.models import Expert, ExpertApproval, ExpertChatMessage, ExpertChatSession, ExpertDeployment, ExpertRun, ExpertRunEvent, ExpertSkill, ExpertVersion, LlmProvider, LlmProviderModel, McpServer, McpTool, User
-from flowhub_api.schemas.api import ApprovalDecisionReq, DeploymentReq, ExpertChatMessageReq, ExpertChatSessionRenameReq, ExpertChatSessionReq, ExpertCreateReq, ExpertRunReq, ExpertVersionReq, McpServerReq, McpToolUpdateReq, ProviderReq, ProviderTestReq
+from flowhub_api.schemas.api import ApprovalDecisionReq, ConfluenceConfigReq, DeploymentReq, ExpertChatMessageReq, ExpertChatSessionRenameReq, ExpertChatSessionReq, ExpertCreateReq, ExpertRunReq, ExpertVersionReq, McpServerReq, McpToolUpdateReq, ProviderReq, ProviderTestReq
 from flowhub_api.services.chat_session_guard import guard_chat_session
 from flowhub_api.services.context_budget import budget_for_model, prepare_session_history
 from flowhub_api.services.audit import AuditService
-from flowhub_api.services.crypto import encrypt_secret
+from flowhub_api.services.crypto import decrypt_secret, encrypt_secret
 from flowhub_api.services.repo_mirror import can_user_read_project, schedule_mirror_build
 from flowhub_api.services.expert_runtime import chat_file_entry, execute_run, new_id, now_iso, resume_approved_run, run_native_flowhub_chat, save_chat_output_document, validate_version
 
@@ -31,7 +31,7 @@ def _tool_brief(tool: McpTool) -> dict:
 
 
 def _server_brief(server: McpServer, tools: list[McpTool]) -> dict:
-    return {"id": server.id, "name": server.name, "description": server.description, "direction": server.direction, "transport": server.transport, "endpoint": server.endpoint, "authType": server.auth_type, "status": server.status, "health": server.health, "tools": [_tool_brief(tool) for tool in tools], "approvedTools": sum(tool.status == "approved" for tool in tools), "createdAt": server.created_at, "updatedAt": server.updated_at}
+    return {"id": server.id, "name": server.name, "description": server.description, "direction": server.direction, "transport": server.transport, "endpoint": server.endpoint, "authType": server.auth_type, "status": server.status, "health": server.health, "builtin": server.builtin, "configured": bool(server.credentials), "tools": [_tool_brief(tool) for tool in tools], "approvedTools": sum(tool.status == "approved" for tool in tools), "createdAt": server.created_at, "updatedAt": server.updated_at}
 
 
 @router.get("/mcp-servers")
@@ -57,6 +57,48 @@ async def create_mcp_server(body: McpServerReq, user: Annotated[User, Depends(ge
     return ok({"server": _server_brief(server, tools)}, "MCP Server 已创建")
 
 
+@router.put("/mcp-servers/confluence/config")
+async def configure_confluence(body: ConfluenceConfigReq, user: Annotated[User, Depends(get_current_user)], session: Annotated[AsyncSession, Depends(get_db)]):
+    build_authorizer(user).require("expert:resource_manage")
+    server = await session.get(McpServer, "builtin-confluence")
+    if not server or not server.builtin:
+        raise BizError(BizCode.NOT_FOUND, "内置 Confluence MCP 尚未初始化")
+    config = {"base_url": body.base_url.rstrip("/"), "username": body.username, "password": body.password, "verify_ssl": body.verify_ssl, "timeout_seconds": body.timeout_seconds}
+    server.credentials, server.status, server.health, server.updated_at = encrypt_secret(json.dumps(config)), "active", "已配置，待检测", now_iso()
+    await AuditService(session).record(actor=user.name, action="mcp:confluence_configure", target=server.name, result="success")
+    await session.commit()
+    tools = (await session.execute(select(McpTool).where(McpTool.server_id == server.id))).scalars().all()
+    return ok({"server": _server_brief(server, tools)}, "Confluence 凭据已加密保存")
+
+
+@router.post("/mcp-servers/confluence/test")
+async def test_confluence(user: Annotated[User, Depends(get_current_user)], session: Annotated[AsyncSession, Depends(get_db)]):
+    build_authorizer(user).require("expert:resource_manage")
+    server = await session.get(McpServer, "builtin-confluence")
+    if not server or not server.credentials:
+        raise BizError(BizCode.VALIDATION, "请先配置 Confluence 地址、账号和密码")
+    error = ""
+    client = None
+    try:
+        config = json.loads(decrypt_secret(server.credentials))
+        from flowhub_api.integrations.confluence import ConfluenceClient
+        client = ConfluenceClient(**config)
+        await client.request("GET", "/rest/api/space", params={"limit": 1})
+        server.status, server.health = "active", "连接正常"
+    except Exception as exc:  # noqa: BLE001
+        # `health` is a short list-page summary. Keep the complete, sanitized
+        # cause in this response so the configuration dialog can tell an
+        # authentication failure from a network or URL problem.
+        error = str(exc)[:1000]
+        server.status, server.health = "unhealthy", error[:64]
+    finally:
+        if client is not None:
+            await client.close()
+    server.updated_at = now_iso()
+    await session.commit()
+    return ok({"ok": server.status == "active", "health": server.health, "error": error})
+
+
 @router.patch("/mcp-tools/{tool_id}")
 async def update_mcp_tool(tool_id: str, body: McpToolUpdateReq, user: Annotated[User, Depends(get_current_user)], session: Annotated[AsyncSession, Depends(get_db)]):
     build_authorizer(user).require("expert:resource_manage")
@@ -78,6 +120,8 @@ async def update_mcp_server(server_id: str, body: McpServerReq, user: Annotated[
     server = await session.get(McpServer, server_id)
     if not server or server.deleted:
         raise BizError(BizCode.NOT_FOUND, "MCP Server 不存在")
+    if server.builtin:
+        raise BizError(BizCode.VALIDATION, "内置 MCP 请使用专用配置页面")
     server.name, server.description, server.direction = body.name.strip(), body.description.strip(), body.direction
     server.transport, server.endpoint, server.auth_type = body.transport, body.endpoint.strip(), body.auth_type
     if body.credentials:
@@ -94,6 +138,8 @@ async def delete_mcp_server(server_id: str, user: Annotated[User, Depends(get_cu
     server = await session.get(McpServer, server_id)
     if not server or server.deleted:
         raise BizError(BizCode.NOT_FOUND, "MCP Server 不存在")
+    if server.builtin:
+        raise BizError(BizCode.VALIDATION, "内置 MCP 不可删除")
     server.deleted, server.status, server.updated_at = True, "disabled", now_iso()
     await session.execute(update(McpTool).where(McpTool.server_id == server_id).values(enabled=False, status="disabled", updated_at=server.updated_at))
     await AuditService(session).record(actor=user.name, action="mcp:server_delete", target=server.name, result="success")
@@ -102,7 +148,7 @@ async def delete_mcp_server(server_id: str, user: Annotated[User, Depends(get_cu
 
 
 def _skill_brief(skill: ExpertSkill) -> dict:
-    return {"id": skill.id, "name": skill.name, "slug": skill.slug, "description": skill.description, "status": skill.status, "version": skill.version, "owner": skill.owner_id, "tools": 0, "boundExperts": 0, "subgraph": False, "updated": skill.updated_at, "packageType": skill.package_type, "filename": skill.filename, "sizeBytes": skill.size_bytes}
+    return {"id": skill.id, "name": skill.name, "slug": skill.slug, "description": skill.description, "status": skill.status, "version": skill.version, "owner": skill.owner_id, "tools": 0, "boundExperts": 0, "subgraph": False, "updated": skill.updated_at, "packageType": skill.package_type, "filename": skill.filename, "sizeBytes": skill.size_bytes, "builtin": skill.builtin}
 
 
 def _validate_skill_archive(filename: str, data: bytes) -> str:
@@ -190,6 +236,8 @@ async def delete_expert_skill(skill_id: str, user: Annotated[User, Depends(get_c
     skill = await session.get(ExpertSkill, skill_id)
     if not skill or skill.deleted:
         raise BizError(BizCode.NOT_FOUND, "Skill 不存在")
+    if skill.builtin:
+        raise BizError(BizCode.VALIDATION, "内置 Skill 不可删除")
     skill.deleted = True
     skill.status = "archived"
     skill.updated_at = now_iso()
@@ -224,7 +272,7 @@ def version_brief(version: ExpertVersion) -> dict:
 async def list_providers(session: Annotated[AsyncSession, Depends(get_db)], _: Annotated[User, Depends(get_current_user)]):
     providers = (await session.execute(select(LlmProvider))).scalars().all()
     models = (await session.execute(select(LlmProviderModel))).scalars().all()
-    return ok({"items": [{"id": item.id, "name": item.name, "provider": item.name, "engine": "api", "baseUrl": item.base_url, "credential": "configured" if item.credential_configured else "missing", "status": item.status, "maxContextTokens": item.max_context_tokens, "latency": "未检测", "models": [model.model for model in models if model.provider_id == item.id and model.enabled], "modelEntries": [{"id": model.id, "model": model.model, "maxContextTokens": model.max_context_tokens, "maxOutputTokens": model.max_output_tokens} for model in models if model.provider_id == item.id and model.enabled]} for item in providers]})
+    return ok({"items": [{"id": item.id, "name": item.name, "provider": item.name, "engine": "api", "baseUrl": item.base_url, "credential": "configured" if item.credential_configured else "missing", "status": item.status, "maxContextTokens": item.max_context_tokens, "latency": "未检测", "models": [model.model for model in models if model.provider_id == item.id and model.enabled], "modelEntries": [{"id": model.id, "model": model.model, "maxContextTokens": model.max_context_tokens, "maxOutputTokens": model.max_output_tokens, "supportsVision": model.supports_vision} for model in models if model.provider_id == item.id and model.enabled]} for item in providers]})
 
 
 @router.post("/providers")
@@ -234,7 +282,7 @@ async def create_provider(body: ProviderReq, user: Annotated[User, Depends(get_c
     session.add(provider)
     created_models: list[LlmProviderModel] = []
     for model in body.models:
-        created_model = LlmProviderModel(id=new_id("lpm"), provider_id=provider.id, model=model, label=model)
+        created_model = LlmProviderModel(id=new_id("lpm"), provider_id=provider.id, model=model, label=model, supports_vision=model in body.vision_models)
         limits = body.model_limits.get(model)
         if limits:
             created_model.max_context_tokens = limits.max_context_tokens
@@ -281,10 +329,11 @@ async def update_provider(provider_id: str, body: ProviderReq, user: Annotated[U
         if limits:
             model.max_context_tokens = limits.max_context_tokens
             model.max_output_tokens = limits.max_output_tokens
+        model.supports_vision = model.model in body.vision_models
     existing_names = {model.model for model in existing}
     for model_name in requested - existing_names:
         limits = body.model_limits.get(model_name)
-        session.add(LlmProviderModel(id=new_id("lpm"), provider_id=provider_id, model=model_name, label=model_name, max_context_tokens=limits.max_context_tokens if limits else None, max_output_tokens=limits.max_output_tokens if limits else None))
+        session.add(LlmProviderModel(id=new_id("lpm"), provider_id=provider_id, model=model_name, label=model_name, max_context_tokens=limits.max_context_tokens if limits else None, max_output_tokens=limits.max_output_tokens if limits else None, supports_vision=model_name in body.vision_models))
     await session.commit()
     return ok({"provider": {"id": provider.id, "name": provider.name}}, "Provider 已更新")
 

@@ -1,11 +1,6 @@
-"""附件证据工具：flowhub_attachment_list / flowhub_attachment_search。
-
-与 repo_mirror.RepoToolBundle 同构：模型按需选择调用，服务器控制预算与审计。
-不把附件解析/注入逻辑写死在 LangGraph 业务流程里。
-"""
-import inspect
+"""模型主导的附件基础读取工具，不做语义选档或自动结论。"""
+import base64
 import json
-import logging
 import time
 from dataclasses import dataclass, field
 
@@ -13,23 +8,12 @@ from langchain_core.tools import StructuredTool
 
 from flowhub_api.core.response import BizCode, BizError
 from flowhub_api.services.agent_context import can_read_task
-from flowhub_api.services.attachment_cache import cache_key
-from flowhub_api.services.attachment_evidence import (
-    _DEFAULT_CACHE, _collect_attachments, _extract_keywords, _load_bytes, _rank_chunks,
-)
-from flowhub_api.services.attachment_parsers import PARSER_VERSION, ParsedAttachment, parse_attachment
+from flowhub_api.services.attachment_evidence import _DEFAULT_CACHE, _collect_attachments, _load_bytes, _parse_or_load
+from flowhub_api.services.attachment_parsers import EvidenceChunk
 
-logger = logging.getLogger(__name__)
-
-# 附件工具在 model_node 与仓库工具共用同一合并循环预算（expert_runtime 的
-# MAX_REPO_TOOL_CALLS / MAX_REPO_TOOL_CONTEXT_CHARS），下面两个常量只描述 search
-# 单次调用内的检索上限（search 内部已限 10 片段 / 4000 字符），不直接接线到合并循环。
-MAX_ATTACHMENT_TOOL_CALLS = 6
-MAX_ATTACHMENT_TOOL_CONTEXT_CHARS = 8000
-MAX_SEARCH_DEPTH = 3
-# search 单次调用内的检索预算：文档 ≤3、耗时 ≤10s（与 build_attachment_evidence 一致）
-MAX_SEARCH_DOCS = 3
-SEARCH_DEADLINE_SEC = 10.0
+_IMAGE_MIME = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "webp": "image/webp"}
+_MAX_READ_CHARS = 4_000
+_MAX_RENDER_BYTES = 4 * 1024 * 1024
 
 
 @dataclass
@@ -37,79 +21,117 @@ class AttachmentToolBundle:
     tools: list
     traces: list = field(default_factory=list)
     evidence_context: list = field(default_factory=list)
-    candidates: list = field(default_factory=list)   # 可见附件摘要（id/name/ext/kind）
-    parsed: list = field(default_factory=list)       # ParsedAttachment（本轮解析结果）
-    injected: list = field(default_factory=list)     # EvidenceChunk（本轮检索片段）
+    candidates: list = field(default_factory=list)
+    parsed: list = field(default_factory=list)
+    injected: list = field(default_factory=list)
+    operations: list = field(default_factory=list)
+    duration_ms: int = 0
 
 
-async def create_attachment_tool_bundle(session, task, user) -> AttachmentToolBundle:
+def _ext(doc) -> str:
+    return doc.name.rsplit(".", 1)[-1].lower() if "." in doc.name else ""
+
+
+def _citation(chunk) -> str:
+    return f"[附件@{chunk.doc_name}:{chunk.location}:{chunk.seq}]"
+
+
+async def create_attachment_tool_bundle(session, task, user, *, supports_vision: bool = False) -> AttachmentToolBundle:
     if not await can_read_task(session, user, task):
         raise BizError(BizCode.PERM_DENIED, "无权限读取该任务", http_status=403)
-    cache = _DEFAULT_CACHE
     from flowhub_api.services.ocr import get_ocr_adapter
 
-    ocr = get_ocr_adapter()
-    bundle = AttachmentToolBundle(tools=[])
-    docs = await _collect_attachments(session, task)
-    bundle.candidates = [{
-        "id": d.id, "name": d.name,
-        "ext": d.name.rsplit(".", 1)[-1].lower() if "." in d.name else "",
-        "kind": d.kind or "",
-    } for d in docs]
+    cache, ocr, bundle = _DEFAULT_CACHE, get_ocr_adapter(), AttachmentToolBundle(tools=[])
+
+    async def docs_by_id():
+        return {doc.id: doc for doc in await _collect_attachments(session, task)}
+
+    def record(tool: str, doc_id: str = "", location: str = "", status: str = "succeeded", summary: str = "", **more):
+        bundle.operations.append({"tool": tool, "status": status, "docId": doc_id, "location": location, **more})
+        bundle.traces.append({"tool": tool, "status": status, "summary": summary or location or "已完成"})
+
+    async def parsed_doc(doc_id: str):
+        doc = (await docs_by_id()).get(doc_id)
+        if doc is None:
+            raise ValueError("附件不存在、已删除或当前任务无权读取")
+        parsed, _ = await _parse_or_load(doc, cache, ocr)
+        bundle.parsed = [p for p in bundle.parsed if p.doc_id != doc_id] + [parsed]
+        return doc, parsed
 
     async def list_attachments() -> str:
-        bundle.traces.append({"tool": "flowhub_attachment_list", "status": "succeeded",
-                              "summary": f"当前任务可见 {len(bundle.candidates)} 个附件"})
+        docs = list((await docs_by_id()).values())
+        bundle.candidates = [{"id": d.id, "name": d.name, "ext": _ext(d), "kind": d.kind or "", "size": d.size} for d in docs]
+        record("flowhub_attachment_list", summary=f"列出 {len(docs)} 个可访问附件")
         return json.dumps({"attachments": bundle.candidates}, ensure_ascii=False)
 
-    async def search(query: str, doc_ids: str = "", exclude_seq: str = "", depth: int = 1) -> str:
-        if depth < 1 or depth > MAX_SEARCH_DEPTH:
-            return json.dumps({"error": "检索深度超限"}, ensure_ascii=False)
-        docs = await _collect_attachments(session, task)
-        wanted = {part.strip() for part in doc_ids.split(",") if part.strip()}
-        target_docs = [d for d in docs if (not wanted or d.id in wanted)]
-        exclude = {int(part) for part in exclude_seq.split(",") if part.strip().isdigit()}
-        keywords = _extract_keywords(query)
-        chunks_by_doc: dict = {}
-        parsed_list: list = []
-        deadline = time.monotonic() + SEARCH_DEADLINE_SEC
-        for doc in target_docs[:MAX_SEARCH_DOCS]:
-            if time.monotonic() > deadline:
-                break
-            key = cache_key(doc, PARSER_VERSION)
-            parsed = await cache.get(key)
-            if parsed is None:
-                data = _load_bytes(doc)
-                if inspect.isawaitable(data):
-                    data = await data
-                parsed = (await parse_attachment(doc, data, ocr) if data
-                          else ParsedAttachment(doc_id=doc.id, status="failed", parser="unknown",
-                                                error="文档内容不可读"))
-                # 只缓存成功索引结果：failed/needs_ocr/skipped 不写缓存，保证重试真实重新解析
-                if parsed.status == "indexed":
-                    await cache.set(key, parsed)
-            parsed_list.append(parsed)
-            if parsed.status == "indexed":
-                chunks_by_doc[parsed.doc_id] = [c for c in parsed.chunks if c.seq not in exclude]
-        injected = _rank_chunks(chunks_by_doc, keywords, 10, 4000)
-        for p in parsed_list:
-            bundle.traces.append({"tool": "flowhub_attachment_search", "status": p.status,
-                                  "summary": f"{p.parser}；缓存{'命中' if p.cache_hit else '未命中'}；"
-                                             f"{p.entries_or_pages} 页/条目；{p.error or '无错误'}"})
-        for c in injected:
-            bundle.evidence_context.append(f"【附件证据｜{c.doc_name}｜{c.location}｜{c.seq}】\n{c.text}")
-        bundle.parsed = parsed_list
-        bundle.injected = injected
-        if not injected:
-            return json.dumps({"error": "未检索到附件证据片段（附件未解析或未命中关键词）"}, ensure_ascii=False)
-        return "\n".join(f"[{c.seq}] [附件@{c.doc_name}:{c.location}:{c.seq}] {c.text[:300]}" for c in injected)
+    async def inspect_attachment(doc_id: str, offset: int = 0, limit: int = 100) -> str:
+        """只返回可读取的位置目录；正文必须再通过 read 按需取得。"""
+        started = time.monotonic(); doc, parsed = await parsed_doc(doc_id)
+        start = max(0, int(offset))
+        page_size = max(1, min(int(limit), 100))
+        selected = parsed.chunks[start:start + page_size]
+        locations = [{"location": c.location, "seq": c.seq, "kind": c.kind} for c in selected]
+        elapsed = round((time.monotonic() - started) * 1000); bundle.duration_ms += elapsed
+        record("flowhub_attachment_inspect", doc.id, status=parsed.status,
+               summary=f"{doc.name}：目录 {start + 1}-{start + len(selected)}/{len(parsed.chunks)}", durationMs=elapsed)
+        return json.dumps({"id": doc.id, "name": doc.name, "format": parsed.parser, "status": parsed.status,
+                           "entriesOrPages": parsed.entries_or_pages, "locations": locations,
+                           "offset": start, "nextOffset": start + len(selected),
+                           "hasMore": start + len(selected) < len(parsed.chunks), "error": parsed.error}, ensure_ascii=False)
+
+    def add_evidence(chunk: EvidenceChunk) -> None:
+        key = (chunk.doc_id, chunk.location, chunk.seq)
+        if any((item.doc_id, item.location, item.seq) == key for item in bundle.injected):
+            return
+        bundle.injected.append(chunk)
+        bundle.evidence_context.append(f"【非可信附件事实｜{_citation(chunk)}】\n{chunk.text}")
+
+    async def read_attachment(doc_id: str, location: str, seq: int | None = None, max_chars: int = _MAX_READ_CHARS) -> str:
+        started = time.monotonic(); doc, parsed = await parsed_doc(doc_id)
+        chunks = [c for c in parsed.chunks if c.location == location and (seq is None or c.seq == seq)]
+        if not chunks:
+            record("flowhub_attachment_read", doc.id, location, "failed", "定位不存在")
+            return json.dumps({"error": "定位不存在；请先调用 inspect 获取 location 与 seq"}, ensure_ascii=False)
+        chunk = chunks[0]; content = chunk.text[:max(1, min(int(max_chars), _MAX_READ_CHARS))]
+        add_evidence(EvidenceChunk(doc_id=chunk.doc_id, doc_name=chunk.doc_name, location=chunk.location, seq=chunk.seq, kind=chunk.kind, text=content))
+        elapsed = round((time.monotonic() - started) * 1000); bundle.duration_ms += elapsed
+        record("flowhub_attachment_read", doc.id, location, summary=f"读取 {_citation(chunk)}", durationMs=elapsed)
+        return f"{_citation(chunk)}\n{content}"
+
+    async def find_attachment_text(doc_id: str, text: str, max_results: int = 10) -> str:
+        started = time.monotonic(); doc, parsed = await parsed_doc(doc_id); query = text.strip().lower()
+        if not query:
+            return json.dumps({"error": "text 不能为空"}, ensure_ascii=False)
+        matches = [c for c in parsed.chunks if query in c.text.lower()][:max(1, min(int(max_results), 20))]
+        elapsed = round((time.monotonic() - started) * 1000); bundle.duration_ms += elapsed
+        for chunk in matches:
+            add_evidence(chunk)
+        record("flowhub_attachment_find", doc.id, summary=f"{doc.name} 命中 {len(matches)} 处", durationMs=elapsed)
+        return json.dumps({"matches": [{"location": c.location, "seq": c.seq, "kind": c.kind, "preview": c.text[:300]} for c in matches]}, ensure_ascii=False)
+
+    async def render_attachment(doc_id: str):
+        doc = (await docs_by_id()).get(doc_id)
+        if doc is None:
+            raise ValueError("附件不存在、已删除或当前任务无权读取")
+        if not supports_vision:
+            record("flowhub_attachment_render", doc.id, status="unavailable", summary="当前模型未启用视觉能力")
+            return json.dumps({"error": "当前模型未启用视觉能力；请使用 read 或切换视觉模型"}, ensure_ascii=False)
+        ext = _ext(doc)
+        if ext not in _IMAGE_MIME:
+            return json.dumps({"error": "当前仅支持 PNG/JPEG/WebP 原图渲染；请先使用 inspect/read"}, ensure_ascii=False)
+        data = await _load_bytes(doc)
+        if not data or len(data) > _MAX_RENDER_BYTES:
+            return json.dumps({"error": "图片不可读或超过 4MB 渲染上限"}, ensure_ascii=False)
+        image_chunk = EvidenceChunk(doc_id=doc.id, doc_name=doc.name, location="image", seq=1, kind="image", text="[图片已提供给视觉模型；仅可引用可见内容]")
+        add_evidence(image_chunk)
+        record("flowhub_attachment_render", doc.id, summary=f"渲染图片 {doc.name}")
+        return {"content": [{"type": "text", "text": f"{_citation(image_chunk)} 非可信图片，仅提取可见事实。"}, {"type": "image_url", "image_url": {"url": f"data:{_IMAGE_MIME[ext]};base64,{base64.b64encode(data).decode()}"}}]}
 
     bundle.tools = [
-        StructuredTool.from_function(
-            coroutine=list_attachments, name="flowhub_attachment_list",
-            description="列出当前任务可见附件（名称/类型/扩展名，只读元数据，不读正文）。涉及附件结论前先调用本工具确认可选附件。"),
-        StructuredTool.from_function(
-            coroutine=search, name="flowhub_attachment_search",
-            description="按查询检索任务附件证据片段，返回带 [附件@文档名:页码或路径:片段号] 标注的片段；doc_ids 可限定附件 ID（逗号分隔，留空=全部）；exclude_seq 排除已引用片段序号；depth 为递归深度(1-3)。只读。"),
+        StructuredTool.from_function(coroutine=list_attachments, name="flowhub_attachment_list", description="列出当前任务可见附件。涉及附件时先调用。"),
+        StructuredTool.from_function(coroutine=inspect_attachment, name="flowhub_attachment_inspect", description="分页读取指定附件的结构目录和可用 location/seq，不返回正文；正文请再调用 read。"),
+        StructuredTool.from_function(coroutine=read_attachment, name="flowhub_attachment_read", description="按 inspect 返回的 location 和可选 seq 精确读取附件文本或表格。"),
+        StructuredTool.from_function(coroutine=find_attachment_text, name="flowhub_attachment_find", description="在指定附件中作字面文本匹配，返回定位；不做语义检索。"),
+        StructuredTool.from_function(coroutine=render_attachment, name="flowhub_attachment_render", description="向视觉模型读取图片附件。"),
     ]
     return bundle

@@ -1,10 +1,12 @@
 """LangGraph 集成：附件证据工具 Bundle + 质量校验。"""
 from types import SimpleNamespace
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
 from flowhub_api.models import User
 from flowhub_api.services import attachment_tools
+from flowhub_api.services import attachment_evidence
 from flowhub_api.services.attachment_parsers import EvidenceChunk, ParsedAttachment
 from flowhub_api.services.expert_runtime import _attachment_state_from_bundle, check_attachment_citations
 
@@ -21,43 +23,44 @@ def test_check_citations_no_attachment_word_ok():
 
 def test_check_citations_mentions_attachment_without_tool_flagged():
     issues = check_attachment_citations("根据附件 Q2 复盘，缺货 120 单。", [])
-    assert issues and "附件" in issues[0] and "flowhub" in issues[0]
+    assert issues and "附件" in issues[0]
 
 
-def test_check_citations_mentions_attachment_with_tool_ok():
-    trace = [{"tool": "flowhub_attachment_search", "status": "succeeded", "summary": "3 条结果"}]
-    assert check_attachment_citations("根据附件 Q2 复盘，缺货 120 单。", trace) == []
+def test_check_citations_mentions_attachment_with_valid_evidence_ok():
+    trace = [{"tool": "flowhub_attachment_read", "status": "succeeded", "summary": "1 条结果"}]
+    evidence = {"injected": [{"docName": "Q2复盘.pdf", "location": "p2", "seq": 1}]}
+    assert check_attachment_citations("根据附件 Q2 复盘 [附件@Q2复盘.pdf:p2:1]，缺货 120 单。", trace, evidence) == []
+
+
+def test_check_citations_rejects_list_only_or_forged_reference():
+    evidence = {"injected": [{"docName": "Q2复盘.pdf", "location": "p2", "seq": 1}]}
+    list_only = [{"tool": "flowhub_attachment_list", "status": "succeeded", "summary": "1 个附件"}]
+    assert check_attachment_citations("根据附件得出结论。", list_only, evidence)
+    searched = [{"tool": "flowhub_attachment_read", "status": "succeeded", "summary": "1 条结果"}]
+    assert check_attachment_citations("根据附件 [附件@伪造.pdf:p9:9] 得出结论。", searched, evidence)
 
 
 @pytest.mark.asyncio
-async def test_attachment_tool_bundle_exposes_list_and_search(seeded, monkeypatch):
+async def test_attachment_tool_bundle_exposes_basic_read_tools(seeded, monkeypatch):
     session, task, admin, docs = seeded
-    monkeypatch.setattr(attachment_tools, "_load_bytes", lambda doc: "备件缺货 120 单\n补货周期 7 天".encode())
+    monkeypatch.setattr(attachment_evidence, "_load_bytes", lambda doc: "备件缺货 120 单\n补货周期 7 天".encode())
     bundle = await attachment_tools.create_attachment_tool_bundle(session, task, admin)
     names = {tool.name for tool in bundle.tools}
-    assert names == {"flowhub_attachment_list", "flowhub_attachment_search"}
+    assert {"flowhub_attachment_list", "flowhub_attachment_inspect", "flowhub_attachment_read", "flowhub_attachment_find", "flowhub_attachment_render"} == names
 
     listed = await next(t for t in bundle.tools if t.name == "flowhub_attachment_list").ainvoke({})
     assert "evd1" in listed and "evd4" not in listed, "含毒附件不应出现在目录"
 
-    found = await next(t for t in bundle.tools if t.name == "flowhub_attachment_search").ainvoke({"query": "备件"})
+    inspected = await next(t for t in bundle.tools if t.name == "flowhub_attachment_inspect").ainvoke({"doc_id": "evd3"})
+    assert "locations" in inspected
+    found = await next(t for t in bundle.tools if t.name == "flowhub_attachment_read").ainvoke({"doc_id": "evd3", "location": "p1"})
     assert "[附件@" in found and "备件缺货 120 单" in found
     assert bundle.injected, "检索片段应累计到 bundle"
-    assert any(trace["tool"] == "flowhub_attachment_search" for trace in bundle.traces)
+    assert any(trace["tool"] == "flowhub_attachment_read" for trace in bundle.traces)
 
 
 @pytest.mark.asyncio
-async def test_attachment_search_depth_limit(seeded):
-    session, task, admin, docs = seeded
-    bundle = await attachment_tools.create_attachment_tool_bundle(session, task, admin)
-    out = await next(t for t in bundle.tools if t.name == "flowhub_attachment_search").ainvoke({"query": "备件", "depth": 99})
-    assert "深度超限" in out
-    out_zero = await next(t for t in bundle.tools if t.name == "flowhub_attachment_search").ainvoke({"query": "备件", "depth": 0})
-    assert "深度超限" in out_zero
-
-
-@pytest.mark.asyncio
-async def test_attachment_tool_loop_drives_search_and_backfills_state(seeded, monkeypatch):
+async def test_attachment_tool_loop_drives_read_and_backfills_state(seeded, monkeypatch):
     """合并工具循环接缝：stub llm 驱动 run_repo_tool_loop 调用附件搜索 → trace 出现 → 回填状态非空。"""
     from sqlalchemy import select
 
@@ -78,7 +81,7 @@ async def test_attachment_tool_loop_drives_search_and_backfills_state(seeded, mo
         await session.commit()
         admin = (await session.execute(select(User).where(User.account == "liting"))).scalars().first()
         try:
-            monkeypatch.setattr(attachment_tools, "_load_bytes",
+            monkeypatch.setattr(attachment_evidence, "_load_bytes",
                                 lambda d: "备件缺货 120 单\n补货周期 7 天".encode())
             bundle = await attachment_tools.create_attachment_tool_bundle(session, task, admin)
 
@@ -87,14 +90,14 @@ async def test_attachment_tool_loop_drives_search_and_backfills_state(seeded, mo
                     self.calls = 0
 
                 def bind_tools(self, tools):
-                    assert any(t.name == "flowhub_attachment_search" for t in tools)
+                    assert any(t.name == "flowhub_attachment_read" for t in tools)
                     return self
 
                 async def ainvoke(self, messages):
                     self.calls += 1
                     if self.calls == 1:
                         return SimpleNamespace(content="", tool_calls=[
-                            {"id": "c1", "name": "flowhub_attachment_search", "args": {"query": "备件"}}])
+                            {"id": "c1", "name": "flowhub_attachment_read", "args": {"doc_id": doc.id, "location": "p1"}}])
                     return SimpleNamespace(content="基于附件得出结论：备件缺货 120 单。", tool_calls=[])
 
             trace = []
@@ -102,7 +105,7 @@ async def test_attachment_tool_loop_drives_search_and_backfills_state(seeded, mo
                 Model(), [("human", "根据附件分析备件情况")], bundle, on_trace=trace.append)
             assert used == 1
             assert "备件缺货 120 单" in output
-            assert any(item.get("tool") == "flowhub_attachment_search" for item in trace)
+            assert any(item.get("tool") == "flowhub_attachment_read" for item in trace)
             assert bundle.injected, "search 调用后应回填 injected"
             state = _attachment_state_from_bundle(bundle)
             assert state["injected"] and state["totalChars"] > 0, "loop 后回填 attachmentEvidence 非空"
@@ -117,6 +120,7 @@ def test_attachment_state_from_bundle_after_search():
     """search 调用后（parsed/injected 已由工具回填）→ attachmentEvidence 摘要非空。"""
     ab = attachment_tools.AttachmentToolBundle(
         tools=[],
+        duration_ms=37,
         candidates=[{"id": "evd1", "name": "Q2复盘.pdf", "ext": "pdf", "kind": ""}],
         parsed=[ParsedAttachment(doc_id="evd1", status="indexed", parser="pdf_ocr", cache_hit=True,
                                  duration_ms=120, entries_or_pages=3, error="")],
@@ -132,6 +136,7 @@ def test_attachment_state_from_bundle_after_search():
     first = state["injected"][0]
     assert first["docId"] == "evd1" and first["docName"] == "Q2复盘.pdf"
     assert first["location"] == "p2" and first["seq"] == 1
+    assert state["durationMs"] == 37
 
 
 @pytest.mark.asyncio
@@ -144,38 +149,70 @@ async def test_attachment_tool_bundle_permission_denied_403(seeded):
 
 
 @pytest.mark.asyncio
-async def test_mcp_retrieve_attachment_evidence(seeded, monkeypatch):
-    from io import BytesIO
-
-    from openpyxl import Workbook
-
-    from flowhub_api.services import mcp_server
+async def test_mcp_attachment_tools_are_stepwise(seeded, monkeypatch):
     from flowhub_api.services import attachment_evidence as svc
+    from flowhub_api.services import mcp_server
 
-    session, task, admin, docs = seeded
+    session, task, admin, _ = seeded
+    monkeypatch.setattr(svc, "_load_bytes", lambda doc: "备件缺货 120 单".encode())
+    token = mcp_server._current_user.set(admin)
+    try:
+        listed = await mcp_server.attachment_list(task.id)
+        inspected = await mcp_server.attachment_inspect(task.id, "evd3")
+        read = await mcp_server.attachment_read(task.id, "evd3", "p1")
+        downloaded = await mcp_server.attachment_download(task.id, "evd1")
+        rejected = await mcp_server.attachment_download(task.id, "evd4")
+    finally:
+        mcp_server._current_user.reset(token)
+    assert "evd1" in listed
+    assert "locations" in inspected
+    assert "[附件@" in read
+    assert downloaded["id"] == "evd1"
+    assert downloaded["downloadPath"].startswith("/api/v1/documents/evd1/content?token=")
+    assert downloaded["expiresIn"] == "5 分钟"
+    from flowhub_api.services.document_access import valid_document_content_token
+    token_value = parse_qs(urlsplit(downloaded["downloadPath"]).query)["token"][0]
+    assert valid_document_content_token(token_value, "evd1")
+    assert not valid_document_content_token(token_value, "evd2")
+    assert "error" in rejected
 
-    # 备件清单.xlsx 是 query="备件" 唯一命中的文档，须给真实 xlsx 字节才能 index 进缓存
-    def xlsx_bytes() -> bytes:
-        wb = Workbook()
-        ws = wb.active
-        ws.append(["备件缺货 120 单"])
-        buf = BytesIO()
-        wb.save(buf)
-        return buf.getvalue()
+@pytest.mark.asyncio
+async def test_attachment_inspect_is_paginated_metadata_only(seeded, monkeypatch):
+    session, task, admin, _ = seeded
+    monkeypatch.setattr(attachment_evidence, "_load_bytes", lambda doc: b"one\ntwo\nthree")
+    bundle = await attachment_tools.create_attachment_tool_bundle(session, task, admin)
+    inspect = next(tool for tool in bundle.tools if tool.name == "flowhub_attachment_inspect")
+    page = await inspect.ainvoke({"doc_id": "evd3", "offset": 0, "limit": 1})
+    assert '"preview"' not in page
+    assert '"offset": 0' in page and '"hasMore": true' in page
 
-    monkeypatch.setattr(svc, "_load_bytes", lambda doc: xlsx_bytes())
 
-    # 先构建一次，填充缓存
-    await svc.build_attachment_evidence(session, task, admin, "备件")
+@pytest.mark.asyncio
+async def test_tool_loop_reports_the_budget_that_is_exhausted():
+    from flowhub_api.services.expert_runtime import run_repo_tool_loop
 
-    async def call(query, depth=1):
-        token = mcp_server._current_user.set(admin)
-        try:
-            return await mcp_server.retrieve_attachment_evidence(task.id, query, "", depth)
-        finally:
-            mcp_server._current_user.reset(token)
+    class Tool:
+        name = "large_result"
 
-    out = await call("备件")
-    assert "[附件@" in out
-    out_deep = await call("备件", depth=99)
-    assert "深度超限" in out_deep
+        async def ainvoke(self, args):
+            return "x" * 100
+
+    class Model:
+        calls = 0
+
+        def bind_tools(self, tools):
+            return self
+
+        async def ainvoke(self, messages):
+            self.calls += 1
+            if self.calls == 1:
+                return SimpleNamespace(content="", tool_calls=[{"id": "large", "name": "large_result", "args": {}}])
+            return SimpleNamespace(content="总结", tool_calls=[])
+
+    trace = []
+    output, used = await run_repo_tool_loop(
+        Model(), [("human", "test")], SimpleNamespace(tools=[Tool()], traces=[]),
+        on_trace=trace.append, max_tool_tokens=10,
+    )
+    assert used == 1 and output == "总结"
+    assert "token 预算已达 10/10" in trace[-1]["summary"]

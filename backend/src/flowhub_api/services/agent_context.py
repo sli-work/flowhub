@@ -161,9 +161,7 @@ async def build_task_context(session: AsyncSession, user: User, task: TaskItem, 
         if docs:
             for d in docs:
                 lines.append(_fmt_doc(d))
-                body = await _doc_body(d)
-                if body:
-                    lines.append(f"      文档内容片段：{body[:300]}")
+            lines.append("  （正文需通过附件基础工具按需读取；不得依据文件名推断内容）")
         else:
             lines.append("  （该工作项暂无关联文档）")
 

@@ -14,7 +14,7 @@ from flowhub_api.core.response import BizCode, BizError
 
 logger = logging.getLogger(__name__)
 
-PARSER_VERSION = "1"
+PARSER_VERSION = "2"
 
 TEXT_EXT = {"txt", "md", "yaml", "yml", "json", "csv"}
 
@@ -53,6 +53,7 @@ _SYNC_PARSERS = {
 
 _OCR_MAX_PAGES = 5
 _OCR_TIMEOUT_SEC = 8.0
+_PDF_MAX_PAGES = 100
 
 
 async def parse_attachment(doc, data: bytes, ocr=None) -> ParsedAttachment:
@@ -66,7 +67,7 @@ async def parse_attachment(doc, data: bytes, ocr=None) -> ParsedAttachment:
             return ParsedAttachment(doc_id=doc.id, status="failed", parser="pdf", error=str(exc)[:200])
     if ext == "zip":
         try:
-            return await _parse_zip(doc, data)
+            return await asyncio.to_thread(_parse_zip, doc, data)
         except BizError as exc:
             return ParsedAttachment(doc_id=doc.id, status="failed", parser="zip", error=str(exc.detail)[:200])
         except Exception as exc:  # noqa: BLE001
@@ -161,51 +162,62 @@ def _parse_pptx(doc, data: bytes) -> ParsedAttachment:
                             chunks=chunks, entries_or_pages=len(prs.slides._sldIdLst))
 
 
-async def _parse_pdf(doc, data: bytes, ocr=None) -> ParsedAttachment:
-    import asyncio
+def _extract_pdf_pages(data: bytes) -> tuple[int, list[tuple[int, str, bytes | None]]]:
+    """Extract text and at most five OCR images outside the event loop."""
     import fitz  # PyMuPDF
 
     pdf = fitz.open(stream=data, filetype="pdf")
-    if len(pdf) == 0:
-        pdf.close()
-        return ParsedAttachment(doc_id=doc.id, status="failed", parser="pdf", error="PDF 无页面")
-    chunks = []
-    ocr_pages = 0
-    has_text = False
+    page_count = len(pdf)
+    pages: list[tuple[int, str, bytes | None]] = []
     try:
         for page_no, page in enumerate(pdf, start=1):
+            if page_no > _PDF_MAX_PAGES:
+                break
             text = page.get_text("text") or ""
-            lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-            if lines:
-                has_text = True
-                title = max(lines, key=len)[:200]
-                chunks.append(_chunk(doc, f"p{page_no}", len(chunks) + 1,
-                                     "title" if len(lines) > 1 else "text", title))
-                chunks.append(_chunk(doc, f"p{page_no}", len(chunks) + 1, "text",
-                                     "\n".join(lines)[:4000]))
-                continue
-            marker = _chunk(doc, f"p{page_no}", len(chunks) + 1, "ocr_marker", "[无文本层，需 OCR 识别]")
-            if ocr is not None and getattr(ocr, "available", False) and ocr_pages < _OCR_MAX_PAGES:
-                try:
-                    pix = page.get_pixmap(dpi=200)
-                    png = pix.tobytes("png")
-                    ocr_text = await asyncio.wait_for(
-                        ocr.extract_text(png, page_no), timeout=_OCR_TIMEOUT_SEC,
-                    )
-                except Exception:  # noqa: BLE001 — OCR 失败降级为标记
-                    ocr_text = ""
-                if ocr_text.strip():
-                    ocr_pages += 1
-                    has_text = True
-                    chunks.append(_chunk(doc, f"p{page_no}", len(chunks) + 1, "text",
-                                         f"[OCR] {ocr_text.strip()[:2000]}"))
-                    continue
-            chunks.append(marker)
+            image = None
+            if not text.strip() and len([p for p in pages if p[2] is not None]) < _OCR_MAX_PAGES:
+                image = page.get_pixmap(dpi=150, alpha=False).tobytes("png")
+            pages.append((page_no, text, image))
     finally:
         pdf.close()
+    return page_count, pages
+
+
+async def _parse_pdf(doc, data: bytes, ocr=None) -> ParsedAttachment:
+    page_count, pages = await asyncio.to_thread(_extract_pdf_pages, data)
+    if page_count == 0:
+        return ParsedAttachment(doc_id=doc.id, status="failed", parser="pdf", error="PDF 无页面")
+    chunks = []
+    has_text = False
+    for page_no, text, image in pages:
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        if lines:
+            has_text = True
+            title = max(lines, key=len)[:200]
+            chunks.append(_chunk(doc, f"p{page_no}", len(chunks) + 1,
+                                 "title" if len(lines) > 1 else "text", title))
+            chunks.append(_chunk(doc, f"p{page_no}", len(chunks) + 1, "text",
+                                 "\n".join(lines)[:4000]))
+            continue
+        marker = _chunk(doc, f"p{page_no}", len(chunks) + 1, "ocr_marker", "[无文本层，需 OCR 识别]")
+        ocr_text = ""
+        if image is not None and ocr is not None and getattr(ocr, "available", False):
+            try:
+                ocr_text = await asyncio.wait_for(ocr.extract_text(image, page_no), timeout=_OCR_TIMEOUT_SEC)
+            except Exception:  # noqa: BLE001 — OCR 失败降级为标记
+                pass
+        if ocr_text.strip():
+            has_text = True
+            chunks.append(_chunk(doc, f"p{page_no}", len(chunks) + 1, "text",
+                                 f"[OCR] {ocr_text.strip()[:2000]}"))
+        else:
+            chunks.append(marker)
+    if page_count > _PDF_MAX_PAGES:
+        chunks.append(_chunk(doc, f"p{_PDF_MAX_PAGES + 1}+", len(chunks) + 1, "truncated",
+                             f"[PDF 共 {page_count} 页，仅解析前 {_PDF_MAX_PAGES} 页]"))
     status = "indexed" if has_text else "needs_ocr"
     return ParsedAttachment(doc_id=doc.id, status=status, parser="pdf",
-                            chunks=chunks, entries_or_pages=len(chunks))
+                            chunks=chunks, entries_or_pages=page_count)
 
 
 _ZIP_MAX_TOTAL = 200 * 1024 * 1024
@@ -279,7 +291,7 @@ def _is_axure(entries: list[tuple[str, zipfile.ZipInfo]]) -> bool:
         return f"{root}/index.html" in paths and all(name.startswith(f"{root}/") for name in paths)
 
 
-async def _parse_zip(doc, data: bytes) -> ParsedAttachment:
+def _parse_zip(doc, data: bytes) -> ParsedAttachment:
     entries = _zip_safe_entries(data)
     prefix = _zip_wrapper_prefix([name for name, _ in entries])
     chunks = []

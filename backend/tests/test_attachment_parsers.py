@@ -144,6 +144,29 @@ async def test_pdf_no_text_with_ocr_extracts_text():
     assert any("OCR 识别内容" in c.text for c in parsed.chunks)
 
 
+async def test_pdf_ocr_attempts_are_bounded_when_ocr_fails():
+    import fitz
+
+    pdf = fitz.open()
+    for _ in range(7):
+        pdf.new_page()
+    data = pdf.tobytes()
+    pdf.close()
+
+    class FailingOcr:
+        available = True
+        calls = 0
+
+        async def extract_text(self, image_bytes, page_no):
+            self.calls += 1
+            raise RuntimeError("OCR 不可用")
+
+    ocr = FailingOcr()
+    parsed = await parse_attachment(_doc("scan.pdf"), data, ocr=ocr)
+    assert ocr.calls == 5
+    assert parsed.status == "needs_ocr"
+
+
 def _zip_bytes(entries: dict[str, bytes]) -> bytes:
     buf = BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:

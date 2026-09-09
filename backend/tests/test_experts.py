@@ -136,6 +136,19 @@ def test_mcp_center_manages_servers_and_tools(client, org_headers):
     assert changed.json()["data"]["tool"]["status"] == "disabled"
 
 
+def test_builtin_confluence_resources_are_listed_and_protected(client, org_headers):
+    skills = client.get("/api/v1/expert-skills", headers=org_headers).json()["data"]["items"]
+    skill = next(item for item in skills if item["id"] == "builtin-confluence-routing")
+    assert skill["builtin"] is True
+    assert skill["status"] == "published"
+    servers = client.get("/api/v1/mcp-servers", headers=org_headers).json()["data"]["items"]
+    server = next(item for item in servers if item["id"] == "builtin-confluence")
+    assert server["builtin"] is True
+    assert len(server["tools"]) >= 20
+    assert client.delete("/api/v1/expert-skills/builtin-confluence-routing", headers=org_headers).status_code == 400
+    assert client.delete("/api/v1/mcp-servers/builtin-confluence", headers=org_headers).status_code == 400
+
+
 def test_default_chat_exposes_only_executed_tool_trace(client, org_headers):
     chat = client.post("/api/v1/expert-chat/sessions", headers=org_headers, json={"title": "轨迹对话"}).json()["data"]["session"]
     response = client.post(f"/api/v1/expert-chat/sessions/{chat['id']}/messages", headers=org_headers, json={"content": "我有哪些任务？"})
@@ -158,3 +171,41 @@ def test_chat_stream_emits_trace_tokens_and_done(client, org_headers):
         assert "event: token" in body
         assert "event: done" in body
         assert body.index('"status":"running"') < body.index("event: token")
+
+
+def test_confluence_connection_test_returns_full_diagnostic_and_closes_client(client, org_headers, monkeypatch):
+    """The configuration dialog needs a useful failure cause, not a truncated health label."""
+    import flowhub_api.integrations.confluence as confluence
+
+    closed = False
+
+    class FailingClient:
+        def __init__(self, **_config):
+            pass
+
+        async def request(self, *_args, **_kwargs):
+            raise RuntimeError("Confluence authentication failed (401): verify account credentials")
+
+        async def close(self):
+            nonlocal closed
+            closed = True
+
+    monkeypatch.setattr(confluence, "ConfluenceClient", FailingClient)
+    configured = client.put(
+        "/api/v1/mcp-servers/confluence/config",
+        headers=org_headers,
+        json={
+            "base_url": "https://confluence.example.test",
+            "username": "test-user",
+            "password": "test-password",
+        },
+    )
+    assert configured.status_code == 200, configured.text
+
+    tested = client.post("/api/v1/mcp-servers/confluence/test", headers=org_headers)
+    assert tested.status_code == 200, tested.text
+    result = tested.json()["data"]
+    assert result["ok"] is False
+    assert result["health"] == "Confluence authentication failed (401): verify account credentia"
+    assert result["error"] == "Confluence authentication failed (401): verify account credentials"
+    assert closed is True

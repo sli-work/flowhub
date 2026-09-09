@@ -121,19 +121,37 @@ async def test_oversized_attachment_degrades_to_failed(seeded, monkeypatch):
 @pytest.mark.asyncio
 async def test_retrieve_more_evidence_no_redownload(seeded, monkeypatch):
     session, task, admin, docs = seeded
-    calls = {"n": 0}
+    calls: dict[str, int] = {}
 
     def counting_load(doc):
-        calls["n"] += 1
+        calls[doc.id] = calls.get(doc.id, 0) + 1
         return "备件内容".encode()
 
     monkeypatch.setattr(svc, "_load_bytes", counting_load)
     cache = svc.ProcessLRUAttachmentCache()
     await svc.build_attachment_evidence(
         session, task, admin, "分析备件库存，参考 Q2 复盘与备件清单", cache=cache)
-    n_build = calls["n"]
+    before = dict(calls)
     await svc.retrieve_more_evidence(session, task, admin, "备件", cache=cache)
-    assert calls["n"] == n_build, "二次检索缓存未命中应跳过，不重新下载"
+    assert calls.get("evd1", 0) == before.get("evd1", 0)
+    assert calls.get("evd2", 0) == before.get("evd2", 0), "已解析附件不应重复下载"
+
+
+@pytest.mark.asyncio
+async def test_retrieve_more_evidence_cold_cache_parses_for_external_mcp(seeded, monkeypatch):
+    """外部 MCP 没有 Expert 预热缓存时，首次检索仍必须可用。"""
+    session, task, admin, _ = seeded
+    calls = {"n": 0}
+
+    def load(doc):
+        calls["n"] += 1
+        return "备件缺货 120 单\n补货周期 7 天".encode()
+
+    monkeypatch.setattr(svc, "_load_bytes", load)
+    result = await svc.retrieve_more_evidence(
+        session, task, admin, "备件", cache=svc.ProcessLRUAttachmentCache())
+    assert calls["n"] > 0
+    assert result.injected and any("备件缺货" in item.text for item in result.injected)
 
 
 @pytest.mark.asyncio

@@ -90,6 +90,10 @@ export interface WorkflowIssue {
   verificationTaskId?: string | null
   title: string
   description: string
+  /** Tiptap JSON 是可编辑正文；description 保留给旧接口。 */
+  descriptionDoc?: { type: 'doc'; content?: Array<Record<string, unknown>> }
+  descriptionText?: string
+  attachments?: Array<{ id: string; name: string }>
   priority: 'P0' | 'P1' | 'P2' | 'P3'
   blocking: boolean
   status: 'handling' | 'waiting_verification' | 'closed' | 'deferred'
@@ -366,7 +370,7 @@ export interface ExpertOsState {
 export interface SkillRecord {
   id: string; name: string; slug: string; description: string; status: SkillStatus
   version: string; owner: string; tools: number; boundExperts: number; subgraph: boolean; updated: string
-  packageType?: 'tar' | 'zip'; filename?: string; sizeBytes?: number
+  packageType?: 'tar' | 'zip' | 'builtin'; filename?: string; sizeBytes?: number; builtin?: boolean
 }
 
 export interface McpToolRecord {
@@ -377,14 +381,14 @@ export interface McpToolRecord {
 
 export interface McpServerRecord {
   id: string; name: string; direction: 'native' | 'inbound' | 'outbound'; transport: string
-  endpoint: string; status: 'active' | 'unhealthy' | 'disabled'; tools: McpToolRecord[] | number; approvedTools: number; health: string; description?: string; authType?: string; updatedAt?: string
+  endpoint: string; status: 'active' | 'unhealthy' | 'disabled'; tools: McpToolRecord[] | number; approvedTools: number; health: string; description?: string; authType?: string; updatedAt?: string; builtin?: boolean; configured?: boolean
 }
 
 export interface ProviderRecord {
   id: string; name: string; engine: 'opencode' | 'api'; provider: string; baseUrl: string
   status: 'healthy' | 'degraded' | 'disabled'; models: string[]
   /** 与模型列表同序的具体条目（id = LlmProviderModel id），用于按 providerModelId 反查归属 */
-  modelEntries?: { id: string; model: string; maxContextTokens?: number | null; maxOutputTokens?: number | null }[]
+  modelEntries?: { id: string; model: string; maxContextTokens?: number | null; maxOutputTokens?: number | null; supportsVision?: boolean }[]
   credential: 'configured' | 'missing'; latency: string
   maxContextTokens?: number
 }
@@ -505,6 +509,7 @@ export interface AttachmentEvidence {
   injected: Array<{ docId: string; docName: string; location: string; seq: number; kind: string; text: string }>
   totalChars: number
   durationMs: number
+  operations?: Array<{ tool: string; status: string; docId?: string; location?: string; durationMs?: number }>
 }
 
 /** 任务详情内联展示的 Expert Run 摘要（GET /tasks/{id} 的 expertRuns 项） */
