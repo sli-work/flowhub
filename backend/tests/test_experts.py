@@ -1,6 +1,8 @@
 """Expert Runtime API contract tests."""
 import io
 
+import pytest
+
 from flowhub_api.services.expert_runtime import (
     MAX_QUALITY_ATTEMPTS, evidence_review_prompt, quality_policy, should_refine_answer,
 )
@@ -209,3 +211,27 @@ def test_confluence_connection_test_returns_full_diagnostic_and_closes_client(cl
     assert result["health"] == "Confluence authentication failed (401): verify account credentia"
     assert result["error"] == "Confluence authentication failed (401): verify account credentials"
     assert closed is True
+
+
+@pytest.mark.asyncio
+async def test_confluence_client_keeps_tls_cause_when_curl_fallback_fails(monkeypatch):
+    import httpx
+    from flowhub_api.integrations.confluence import ConfluenceClient, ConfluenceError
+
+    for name in ("ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY", "all_proxy", "https_proxy", "http_proxy"):
+        monkeypatch.delenv(name, raising=False)
+    client = ConfluenceClient(base_url="https://confluence.example.test", username="user", password="secret")
+
+    async def connect_error(*_args, **_kwargs):
+        raise httpx.ConnectError("certificate verify failed")
+
+    async def fallback_error(*_args, **_kwargs):
+        raise ConfluenceError("curl not available for fallback transport")
+
+    monkeypatch.setattr(client._client, "request", connect_error)
+    monkeypatch.setattr(client, "_curl_request", fallback_error)
+    try:
+        with pytest.raises(ConfluenceError, match="certificate verify failed.*curl fallback failed"):
+            await client.request("GET", "/rest/api/space")
+    finally:
+        await client.close()

@@ -5,7 +5,7 @@ FROM python:3.13-slim
 # 依赖统一走内网 PyPI 仓库（直连），不再通过 HTTP 代理构建
 # git 供仓库镜像 bare clone 使用
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates git \
+        ca-certificates curl git \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

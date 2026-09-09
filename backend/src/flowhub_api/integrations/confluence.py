@@ -67,10 +67,18 @@ class ConfluenceClient:
                 files=files,
                 headers=headers,
             )
-        except httpx.ConnectError:
-            return await self._curl_request(
-                method, path, params, json, data, files, headers
-            )
+        except httpx.ConnectError as exc:
+            try:
+                return await self._curl_request(
+                    method, path, params, json, data, files, headers
+                )
+            except ConfluenceError as fallback_exc:
+                # Do not hide the HTTP client's TLS/network cause when the
+                # optional compatibility transport is unavailable or fails.
+                raise ConfluenceError(
+                    f"{method.upper()} {path} connection failed: {exc}; "
+                    f"curl fallback failed: {fallback_exc}"
+                ) from exc
         except httpx.TimeoutException as exc:
             raise ConfluenceError(
                 f"{method.upper()} {path} timed out after {self._timeout:g}s; "
