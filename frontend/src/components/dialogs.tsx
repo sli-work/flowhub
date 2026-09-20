@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Bot } from 'lucide-react'
+import { Bot, LoaderCircle } from 'lucide-react'
 import {
   Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,
 } from '../components/ui/dialog'
@@ -813,7 +813,8 @@ export function CreateWorkItemDialog({ onClose }: { onClose: () => void }) {
         <DialogFooter className="gap-2">
           <Button variant="outline" onClick={onClose}>取消</Button>
           <Button disabled={!canSubmit} onClick={submit} title={missing.length > 0 ? `还有 ${missing.length} 个必填项未填写` : undefined}>
-            创建并启动流程
+            {busy && <LoaderCircle className="mr-1.5 h-4 w-4 animate-spin" aria-hidden="true" />}
+            {busy ? '创建并启动中…' : '创建并启动流程'}
           </Button>
         </DialogFooter>
       </DialogContent>

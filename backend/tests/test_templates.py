@@ -3,6 +3,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from conftest import auth_headers
+from flowhub_api.routes.templates import _canvas_nodes_with_start_schema
 
 REQ_V3_CANVAS = {
     "nodes": [
@@ -61,6 +62,13 @@ class TestTemplateVersions:
 
 
 class TestCanvas:
+    def test_legacy_issue_start_node_is_presented_with_actual_form_schema(self):
+        original = [{"id": "i1", "label": "问题提报", "type": "start", "cfg": {"schema": []}}]
+        schema = [{"key": "title", "label": "问题标题", "type": "input", "required": True}]
+        rendered = _canvas_nodes_with_start_schema(original, schema)
+        assert rendered[0]["cfg"]["schema"] == schema
+        assert original[0]["cfg"]["schema"] == [], "只修复展示快照，不得改写已发布画布"
+
     def test_get_default_canvas_req_v3(self, client: TestClient, leader_headers: dict):
         """需求流程 v3 默认画布：10 节点 10 边（自动生成）。"""
         r = client.get("/api/v1/templates/tpl-req/versions/v3/canvas", headers=leader_headers)
@@ -71,10 +79,15 @@ class TestCanvas:
         assert len(data["fallbacks"]) >= 4
 
     def test_get_default_canvas_issue_v1(self, client: TestClient, leader_headers: dict):
+        """问题提报节点的画布字段必须与新建问题的硬性表单同源。"""
         r = client.get("/api/v1/templates/tpl-issue/versions/v1/canvas", headers=leader_headers)
         assert r.status_code == 200
         data = r.json()["data"]
         assert len(data["nodes"]) == 8
+        start = next(node for node in data["nodes"] if node["type"] == "start")
+        assert [field["key"] for field in start["cfg"]["schema"]] == [
+            "title", "occurredAt", "env", "severity", "reproduce", "expected", "actual", "logs",
+        ]
 
     def test_get_empty_canvas(self, client: TestClient, leader_headers: dict):
         r = client.get("/api/v1/templates/tpl-req/versions/v1/canvas", headers=leader_headers)
@@ -345,6 +358,15 @@ class TestStartSchema:
         # 表单字段结构：key/label/type/required
         first = d["schema"][0]
         assert "key" in first and "label" in first and "required" in first
+
+    def test_issue_start_schema_comes_from_canvas_start_node(self, client: TestClient, org_headers: dict):
+        r = client.get("/api/v1/templates/tpl-issue/start-schema?version=v1", headers=org_headers)
+        assert r.status_code == 200
+        data = r.json()["data"]
+        assert data["fallback"] is False
+        assert [field["key"] for field in data["schema"]] == [
+            "title", "occurredAt", "env", "severity", "reproduce", "expected", "actual", "logs",
+        ]
 
     def test_start_schema_not_found(self, client: TestClient, org_headers: dict):
         r = client.get("/api/v1/templates/tpl-ghost/start-schema", headers=org_headers)

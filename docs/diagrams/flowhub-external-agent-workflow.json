@@ -1,0 +1,42 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "FlowHub 外部 Agent 受控接入流程",
+    "subtitle": "把任意外部 Agent 接入现有业务流程：最小授权、上下文交接、风险门控、审计闭环",
+    "locale": "zh-CN",
+    "animation": "trace",
+    "visual_preset": "signal-flow",
+    "quality_profile": "showcase",
+    "output": "docs/diagrams/flowhub-external-agent-workflow.html",
+    "legend": { "mode": "hidden" },
+    "views": [
+      { "id": "main", "label": "受控接入主路径", "focus": ["agent_request", "task_package", "agent_execute", "business_close"], "note": "Agent 只获得当前授权任务与必要上下文，结果必须回到流程控制和审计闭环。" },
+      { "id": "governance", "label": "治理控制点", "focus": ["task_package", "business_close"], "note": "权限、风险等级、人工确认和 Trace 由 FlowHub 统一控制。" }
+    ]
+  },
+  "lanes": [{ "id": "flow", "label": "FlowHub 外部 Agent 受控业务闭环" }],
+  "phases": [
+    { "id": "trigger", "label": "① 接入", "fromCol": 0, "toCol": 0 },
+    { "id": "handoff", "label": "② 授权与上下文", "fromCol": 1, "toCol": 1, "variant": "security" },
+    { "id": "execute", "label": "③ Agent 执行", "fromCol": 2, "toCol": 2, "variant": "emphasis" },
+    { "id": "close", "label": "④ 风险与闭环", "fromCol": 3, "toCol": 3, "variant": "security" }
+  ],
+  "mainPath": ["agent_request", "task_package", "agent_execute", "business_close"],
+  "semanticChecks": {
+    "allowedRoots": ["agent_request"],
+    "allowedTerminals": ["business_close"],
+    "requiredPaths": [{ "from": "agent_request", "to": "business_close" }]
+  },
+  "nodes": [
+    { "id": "agent_request", "lane": "flow", "col": 0, "type": "external", "label": "外部 Agent 请求任务", "sublabel": "MCP / 任务 API / Webhook", "tag": "Dify、自建或专业 Agent", "width": 150 },
+    { "id": "task_package", "lane": "flow", "col": 1, "type": "security", "label": "授权并交付任务包", "sublabel": "Key、权限、上游结果、表单与工具边界", "tag": "不直连企业系统", "width": 200 },
+    { "id": "agent_execute", "lane": "flow", "col": 2, "type": "external", "label": "Agent 执行并回传", "sublabel": "使用获准工具，提交结构化结果", "tag": "可替换执行者", "width": 185 },
+    { "id": "business_close", "lane": "flow", "col": 3, "type": "backend", "label": "风险门控后继续业务闭环", "sublabel": "低风险自动；高风险人工确认", "tag": "Trace、通知与审计导出", "width": 180 }
+  ],
+  "edges": [
+    { "id": "request-package", "from": "agent_request", "to": "task_package", "label": "身份请求", "variant": "emphasis", "role": "main", "width": 1.5 },
+    { "id": "package-execute", "from": "task_package", "to": "agent_execute", "label": "授权任务与上下文", "variant": "emphasis", "role": "main", "width": 1.5 },
+    { "id": "execute-close", "from": "agent_execute", "to": "business_close", "label": "结果与拟执行动作", "variant": "security", "role": "main", "width": 1.5 }
+  ]
+}

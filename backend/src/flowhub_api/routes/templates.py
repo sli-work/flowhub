@@ -213,7 +213,8 @@ async def template_start_schema(
 
     指定 version 时严格取该版本画布 start 节点的 cfg.schema；
     未指定时优先取最新 published 版本画布；
-    无 published 版本时回退最新草稿版本；画布无 schema 时回退模板级 start_schema（seed 静态值）。
+    无 published 版本时回退最新草稿版本。历史问题流程把首节点字段仅存于
+    模板级 start_schema，读取时会先生成同一份有效画布快照，确保画布和填报表单一致。
     返回 version 供前端展示「来自最新版本 vX」。
     """
     tpl = await session.get(GlobalTemplate, template_id)
@@ -235,7 +236,10 @@ async def template_start_schema(
     if chosen is not None:
         canvas = await session.get(TemplateCanvas, chosen.id)
         if canvas is not None and canvas.nodes:
-            start = next((n for n in canvas.nodes if n.get("type") == "start"), None)
+            effective_nodes = _canvas_nodes_with_start_schema(
+                canvas.nodes, tpl.start_schema if tpl.type == "issue" else [],
+            )
+            start = next((n for n in effective_nodes if n.get("type") == "start"), None)
             if start is not None:
                 schema = (start.get("cfg") or {}).get("schema") or []
         version, status = chosen.version, chosen.status
@@ -341,7 +345,12 @@ async def get_canvas(
             await session.commit()
         else:
             return ok({"nodes": [], "edges": [], "fallbacks": []})
-    return ok({"nodes": canvas.nodes, "edges": canvas.edges, "fallbacks": canvas.fallbacks})
+    return ok({
+        # 老版本曾把问题提报字段仅存在模板级 start_schema，导致画布属性区为空，
+        # 而新建问题弹窗却有字段。读取时补齐展示快照，不修改已发布版本。
+        "nodes": _canvas_nodes_with_start_schema(canvas.nodes, tpl.start_schema if tpl.type == "issue" else []),
+        "edges": canvas.edges, "fallbacks": canvas.fallbacks,
+    })
 
 
 @router.put("/{template_id}/versions/{version}/canvas")
@@ -381,6 +390,20 @@ def _sync_tpl_nodes(tpl: GlobalTemplate, nodes: list) -> None:
         {"id": n.get("id", ""), "label": n.get("label", ""), "type": n.get("type", "task")}
         for n in nodes
     ]
+
+
+def _canvas_nodes_with_start_schema(nodes: list | None, start_schema: list | None) -> list:
+    """为旧画布补全开始节点表单，仅用于 API 输出，绝不改写已发布快照。"""
+    if not nodes or not start_schema:
+        return list(nodes or [])
+    result: list = []
+    for node in nodes:
+        cfg = node.get("cfg") if isinstance(node, dict) else None
+        if isinstance(node, dict) and node.get("type") == "start" and (not isinstance(cfg, dict) or not cfg.get("schema")):
+            result.append({**node, "cfg": {**(cfg or {}), "schema": [dict(field) for field in start_schema]}})
+        else:
+            result.append(node)
+    return result
 
 
 def _validate_canvas(payload: dict) -> list[dict]:
@@ -702,14 +725,24 @@ def _default_req_v3_canvas(vid: str) -> TemplateCanvas:
 
 def _default_issue_v1_canvas(vid: str) -> TemplateCanvas:
     """问题流程 v1 默认画布（对齐 GLOBAL_TEMPLATES tpl-issue 节点定义）。"""
-    cfg = {"typeLine": "", "purpose": "", "handler": "", "fallback": "", "sla": "", "schema": [], "output": ""}
+    # 开始节点的 schema 是新建问题时展示的硬性要求，必须直接保存在画布里。
+    # 不能只依赖 GlobalTemplate.start_schema，否则画布会显示为空而实际填报有字段。
+    from copy import deepcopy
+    from flowhub_api.seed.demo import ISSUE_START_SCHEMA
+
+    def node_cfg(index: int) -> dict:
+        return {
+            "typeLine": "", "purpose": "", "handler": "", "fallback": "", "sla": "",
+            "schema": deepcopy(ISSUE_START_SCHEMA) if index == 0 else [], "output": "",
+        }
+
     labels = ["问题提报", "分诊", "二线分析", "开发排查", "修复", "验证", "售后确认", "关闭"]
     types = ["start", "task", "task", "task", "task", "task", "acceptance", "end"]
     x_pos = [24, 176, 328, 480, 480, 328, 176, 24]
     y_pos = [24, 24, 24, 24, 118, 118, 118, 118]
     nodes = [
         {"id": f"i{i + 1}", "label": labels[i], "type": types[i], "x": x_pos[i], "y": y_pos[i],
-         "width": 118, "height": 56, "cfg": cfg}
+         "width": 118, "height": 56, "cfg": node_cfg(i)}
         for i in range(8)
     ]
     edges = [["i1", "i2"], ["i2", "i3"], ["i3", "i4"], ["i4", "i5"],

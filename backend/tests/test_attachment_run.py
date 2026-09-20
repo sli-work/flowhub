@@ -21,9 +21,34 @@ def test_check_citations_no_attachment_word_ok():
     assert check_attachment_citations("这是普通分析结论。", []) == []
 
 
+@pytest.mark.parametrize("output", [
+    "本节点当前没有附件。",
+    "请补充附件后再次提交。",
+    "附件清单由人工维护。",
+])
+def test_check_citations_ignores_non_evidentiary_attachment_mentions(output):
+    """普通提及附件不等同于依据附件得出了事实结论。"""
+    assert check_attachment_citations(output, []) == []
+
+
 def test_check_citations_mentions_attachment_without_tool_flagged():
     issues = check_attachment_citations("根据附件 Q2 复盘，缺货 120 单。", [])
     assert issues and "附件" in issues[0]
+
+
+@pytest.mark.parametrize("output", [
+    "附件《Q2复盘.pdf》显示缺货 120 单。",
+    "附件 Q2 复盘规定必须在 7 天内完成补货。",
+    "最终验收以附件为准。",
+    "详细技术要求详见附件。",
+])
+def test_check_citations_rejects_attachment_evidence_claims_without_tool(output):
+    assert check_attachment_citations(output, [])
+
+
+def test_check_citations_does_not_allow_output_to_self_exempt_missing_evidence():
+    output = "根据附件得出结论：缺货 120 单；附件未解析，需人工核对。"
+    assert check_attachment_citations(output, [])
 
 
 def test_check_citations_mentions_attachment_with_valid_evidence_ok():
@@ -175,6 +200,37 @@ async def test_mcp_attachment_tools_are_stepwise(seeded, monkeypatch):
     assert valid_document_content_token(token_value, "evd1")
     assert not valid_document_content_token(token_value, "evd2")
     assert "error" in rejected
+
+
+@pytest.mark.asyncio
+async def test_mcp_document_can_target_task_and_is_retained_on_submit(seeded, monkeypatch):
+    """外部 MCP 以 task_id 产出文件时，附件必须绑定到该任务所属工作项。"""
+    from sqlalchemy import select
+
+    from flowhub_api.clients import minio as minio_client
+    from flowhub_api.db.session import SessionFactory
+    from flowhub_api.models import DocItem, TaskItem
+    from flowhub_api.services import mcp_server
+
+    _, task, admin, _ = seeded
+    monkeypatch.setattr(minio_client, "get_minio", lambda: None)
+    token = mcp_server._current_user.set(admin)
+    try:
+        attachment = await mcp_server.create_document(
+            name="技术方案", content="# 技术方案\n\n采用分层架构。", task_id=task.id,
+        )
+        submitted = await mcp_server.submit_task(task.id, {"technical_plan": [attachment]})
+    finally:
+        mcp_server._current_user.reset(token)
+
+    assert submitted["submitted"] is True
+    async with SessionFactory() as session:
+        saved_task = await session.get(TaskItem, task.id)
+        saved_doc = await session.scalar(select(DocItem).where(DocItem.id == attachment["id"]))
+        assert saved_task.form_values["technical_plan"] == [attachment]
+        assert saved_doc.wi == task.wi_id
+        await session.delete(saved_doc)
+        await session.commit()
 
 @pytest.mark.asyncio
 async def test_attachment_inspect_is_paginated_metadata_only(seeded, monkeypatch):

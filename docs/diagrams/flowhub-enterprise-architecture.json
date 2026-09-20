@@ -1,0 +1,367 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "FlowHub 企业 AI 流程与治理架构",
+    "subtitle": "把外部 Agent、自动化与企业业务系统纳入同一条可控、可审计的业务流程",
+    "locale": "zh-CN",
+    "animation": "trace",
+    "visual_preset": "blueprint",
+    "quality_profile": "showcase",
+    "output": "docs/diagrams/flowhub-enterprise-architecture.html",
+    "viewBox": [
+      1312,
+      784
+    ],
+    "views": [
+      {
+        "id": "agent-access",
+        "label": "外部 Agent 接入",
+        "focus": [
+          "external_agent",
+          "access_gateway",
+          "context_runtime",
+          "policy_center"
+        ],
+        "note": "外部 Agent 通过受控入口取得任务、上下文与最小授权，而非直接进入企业系统。"
+      },
+      {
+        "id": "business-closed-loop",
+        "label": "业务闭环",
+        "focus": [
+          "workbench",
+          "workflow_engine",
+          "integration_hub",
+          "business_systems",
+          "trace_center"
+        ],
+        "note": "从业务发起、任务编排到系统执行、通知与审计形成统一闭环。"
+      },
+      {
+        "id": "governance-core",
+        "label": "治理控制面",
+        "focus": [
+          "policy_center",
+          "approval_gate",
+          "trace_center",
+          "workflow_engine"
+        ],
+        "note": "风险分级、人工兜底和不可抵赖留痕贯穿 AI 与自动化执行过程。"
+      }
+    ],
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "components": [
+    {
+      "id": "workbench",
+      "type": "frontend",
+      "label": "业务工作台",
+      "sublabel": "表单、待办、SLA、并行与回退",
+      "tag": "人机协同入口",
+      "pos": [
+        56,
+        176
+      ],
+      "size": [
+        168,
+        64
+      ]
+    },
+    {
+      "id": "admin",
+      "type": "frontend",
+      "label": "管理员控制台",
+      "sublabel": "流程发布、Key 管理、权限配置",
+      "tag": "配置与运营",
+      "pos": [
+        56,
+        84
+      ],
+      "size": [
+        168,
+        61
+      ]
+    },
+    {
+      "id": "external_agent",
+      "type": "external",
+      "label": "外部 Agent",
+      "sublabel": "Dify 等外部 Agent",
+      "tag": "可插拔执行者",
+      "pos": [
+        56,
+        332
+      ],
+      "size": [
+        168,
+        66
+      ]
+    },
+    {
+      "id": "automation",
+      "type": "external",
+      "label": "自动化平台",
+      "sublabel": "n8n 等触发与集成自动化",
+      "tag": "事件驱动",
+      "pos": [
+        56,
+        436
+      ],
+      "size": [
+        168,
+        61
+      ]
+    },
+    {
+      "id": "access_gateway",
+      "type": "security",
+      "label": "受控接入网关",
+      "sublabel": "MCP / 任务 API / 最小权限",
+      "tag": "外部 Agent 不直连业务系统",
+      "pos": [
+        312,
+        304
+      ],
+      "size": [
+        200,
+        70
+      ]
+    },
+    {
+      "id": "workflow_engine",
+      "type": "backend",
+      "label": "业务流程编排引擎",
+      "sublabel": "节点、分支、并行、回退、SLA、状态机",
+      "tag": "核心差异：流程为主线",
+      "pos": [
+        576,
+        176
+      ],
+      "size": [
+        216,
+        74
+      ]
+    },
+    {
+      "id": "context_runtime",
+      "type": "database",
+      "label": "AI 上下文与 Agent 运行时",
+      "sublabel": "上游结果、表单、知识、提示词、工具边界",
+      "tag": "上下文随流程交接",
+      "pos": [
+        576,
+        316
+      ],
+      "size": [
+        216,
+        74
+      ]
+    },
+    {
+      "id": "policy_center",
+      "type": "security",
+      "label": "策略与权限中心",
+      "sublabel": "RBAC、数据范围、动作风险分级、版本冻结",
+      "tag": "企业级控制面",
+      "pos": [
+        576,
+        444
+      ],
+      "size": [
+        216,
+        70
+      ]
+    },
+    {
+      "id": "approval_gate",
+      "type": "security",
+      "label": "人工审批与异常兜底",
+      "sublabel": "写操作 / 高风险动作 / 超阈值结果",
+      "tag": "该拦截时才拦截",
+      "pos": [
+        864,
+        432
+      ],
+      "size": [
+        196,
+        69
+      ]
+    },
+    {
+      "id": "integration_hub",
+      "type": "backend",
+      "label": "系统与工具适配层",
+      "sublabel": "API、Webhook、MCP、连接器、消息触发",
+      "tag": "复用既有系统投资",
+      "pos": [
+        864,
+        188
+      ],
+      "size": [
+        196,
+        69
+      ]
+    },
+    {
+      "id": "trace_center",
+      "type": "database",
+      "label": "运行 Trace 与审计中心",
+      "sublabel": "链路、结果、操作与审计导出",
+      "tag": "全链路可追溯",
+      "pos": [
+        864,
+        308
+      ],
+      "size": [
+        196,
+        70
+      ]
+    },
+    {
+      "id": "business_systems",
+      "type": "external",
+      "label": "企业业务系统",
+      "sublabel": "ERP / CRM / OA 等",
+      "tag": "系统记录与执行落点",
+      "pos": [
+        1128,
+        188
+      ],
+      "size": [
+        152,
+        69
+      ]
+    },
+    {
+      "id": "legacy_approval",
+      "type": "external",
+      "label": "既有审批系统",
+      "sublabel": "保留组织、表单与合规能力",
+      "tag": "被编排，不被替换",
+      "pos": [
+        1128,
+        328
+      ],
+      "size": [
+        152,
+        64
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "FlowHub：企业 AI 流程与治理层",
+      "wraps": [
+        "access_gateway",
+        "workflow_engine",
+        "context_runtime",
+        "policy_center",
+        "approval_gate",
+        "integration_hub",
+        "trace_center"
+      ],
+      "pad": 34
+    },
+    {
+      "kind": "security-group",
+      "label": "受控执行边界：授权、风险决策与审计均在 FlowHub 内完成",
+      "wraps": [
+        "access_gateway",
+        "context_runtime",
+        "policy_center",
+        "approval_gate",
+        "trace_center"
+      ],
+      "pad": 18
+    }
+  ],
+  "connections": [
+    {
+      "id": "admin-configures",
+      "from": "admin",
+      "to": "workflow_engine",
+      "label": "发布流程与规则",
+      "variant": "dashed"
+    },
+    {
+      "id": "business-starts",
+      "from": "workbench",
+      "to": "workflow_engine",
+      "variant": "emphasis",
+      "width": 1.6
+    },
+    {
+      "id": "agent-request",
+      "from": "external_agent",
+      "to": "access_gateway",
+      "label": "MCP / 任务 API",
+      "variant": "emphasis",
+      "width": 1.6
+    },
+    {
+      "id": "gateway-context",
+      "from": "access_gateway",
+      "to": "context_runtime",
+      "label": "授权任务与上下文",
+      "labelAt": [
+        544,
+        408
+      ],
+      "variant": "emphasis",
+      "width": 1.5
+    },
+    {
+      "id": "workflow-context",
+      "from": "workflow_engine",
+      "to": "context_runtime",
+      "label": "任务交接",
+      "labelAt": [
+        684,
+        261
+      ],
+      "variant": "default"
+    },
+    {
+      "id": "context-policy",
+      "from": "context_runtime",
+      "to": "policy_center",
+      "label": "风险评估",
+      "labelAt": [
+        684,
+        408
+      ],
+      "variant": "security"
+    },
+    {
+      "id": "policy-approval",
+      "from": "policy_center",
+      "to": "approval_gate",
+      "label": "高风险转人工",
+      "variant": "security",
+      "width": 1.4
+    },
+    {
+      "id": "workflow-integration",
+      "from": "workflow_engine",
+      "to": "integration_hub",
+      "variant": "emphasis",
+      "width": 1.5
+    },
+    {
+      "id": "integration-business",
+      "from": "integration_hub",
+      "to": "business_systems",
+      "variant": "default"
+    },
+    {
+      "id": "workflow-trace",
+      "from": "workflow_engine",
+      "to": "trace_center",
+      "label": "结果与证据",
+      "variant": "dashed"
+    }
+  ]
+}

@@ -107,6 +107,30 @@ class TaskAppend(Base):
     values: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
+class TaskCorrection(Base):
+    """不可变的已提交任务更正提案；原任务表单永不被覆盖。"""
+
+    __tablename__ = "task_corrections"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    wi_id: Mapped[str] = mapped_column(ForeignKey("work_items.id", ondelete="CASCADE"), index=True)
+    task_id: Mapped[str] = mapped_column(ForeignKey("tasks.id", ondelete="CASCADE"), index=True)
+    original_values: Mapped[dict] = mapped_column(JSON, default=dict)
+    changes: Mapped[dict] = mapped_column(JSON, default=dict)
+    reason: Mapped[str] = mapped_column(Text)
+    suggested_mode: Mapped[str] = mapped_column(String(16), default="append")
+    applied_mode: Mapped[str] = mapped_column(String(16), default="")
+    source: Mapped[str] = mapped_column(String(24), default="human")
+    proposer_id: Mapped[str] = mapped_column(String(40), default="")
+    proposer: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(24), default="pending_review", index=True)
+    reviewer: Mapped[str] = mapped_column(String(64), default="")
+    review_notes: Mapped[str] = mapped_column(Text, default="")
+    append_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    created_at: Mapped[str] = mapped_column(String(40), default="")
+    updated_at: Mapped[str] = mapped_column(String(40), default="")
+
+
 class WorkflowIssue(Base):
     """A local rework loop created by any workflow node without moving the main cursor."""
 

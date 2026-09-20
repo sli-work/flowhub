@@ -169,9 +169,26 @@ async def run_repo_tool_loop(llm, messages: list, bundle, *, on_trace: Callable[
             transcript.append(ToolMessage(content=content, tool_call_id=call_id))
 
 
+_ATTACHMENT_EVIDENCE_MENTION = re.compile(
+    r"\[附件@[^\]]+\]"
+    r"|(?:根据|基于|参考|参照|依据|按|从).{0,12}?附件"
+    r"|(?:以附件为准|详见附件)"
+    r"|附件[^\n。；，]{0,24}?(?:显示|表明|说明|指出|记载|列明|可见|要求|规定)",
+)
+
+
+def _mentions_attachment_evidence(output: str) -> bool:
+    """Return whether output attributes a conclusion to attachment content.
+
+    Merely naming an attachment, for example asking somebody to upload one,
+    does not make it an evidence-backed claim and must not block adoption.
+    """
+    return bool(_ATTACHMENT_EVIDENCE_MENTION.search(output))
+
+
 def check_attachment_citations(output: str, tool_trace: list | None, attachment_evidence: dict | None = None) -> list[str]:
     """验证附件结论确有本轮 search 证据，且引用没有伪造来源。"""
-    if "附件" not in output:
+    if not _mentions_attachment_evidence(output):
         return []
     evidence = list((attachment_evidence or {}).get("injected") or [])
     has_search = any(
@@ -180,8 +197,6 @@ def check_attachment_citations(output: str, tool_trace: list | None, attachment_
         for item in (tool_trace or [])
     )
     if not has_search or not evidence:
-        if "附件未解析" in output or "需人工核对" in output:
-            return []
         return ["产出提到附件但本轮没有成功检索到附件证据，需人工核对"]
     valid_refs = {
         f"[附件@{item.get('docName')}:{item.get('location')}:{item.get('seq')}]"
@@ -761,6 +776,16 @@ def build_graph(provider: LlmProvider, model: LlmProviderModel, system_prompt: s
                     "format_repair_required": False,
                 }
             format_status = state.get("format_status") or "valid"
+            # 节点产出是机器可消费的 JSON，不是自然语言回答。通用事实质量
+            # 复写会把已修复的 JSON 当作“空回答”再生成一次，反而覆盖可回填结果。
+            # 此路径以格式和 schema 校验为最终门槛；事实质量仍由任务书/证据约束和人工审批承担。
+            if issues:
+                return {
+                    "validation_issues": issues[:3],
+                    "quality_status": "needs_revision" if int(state.get("attempt", 0)) < int(policy["max_attempts"]) else "needs_human_review",
+                    "format_status": format_status,
+                }
+            return {"validation_issues": [], "quality_status": "passed", "format_status": format_status}
         else:
             format_status = state.get("format_status")
         llm = make_model(ChatOpenAI, model, provider, decrypt_secret(provider.api_key), retries=0)

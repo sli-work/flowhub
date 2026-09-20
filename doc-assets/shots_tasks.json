@@ -1,0 +1,126 @@
+[
+ {
+  "id": "01-os-overview",
+  "desc": "OS 总览",
+  "click": "OS 总览"
+ },
+ {
+  "id": "02-templates",
+  "desc": "流程模板",
+  "click": "流程模板"
+ },
+ {
+  "id": "03-workitems",
+  "desc": "工作项",
+  "click": "工作项"
+ },
+ {
+  "id": "04-expert-center",
+  "desc": "Expert 中心",
+  "click": "Expert 中心"
+ },
+ {
+  "id": "05-skill-center",
+  "desc": "Expert Skill",
+  "click": "Expert Skill"
+ },
+ {
+  "id": "06-mcp-center",
+  "desc": "MCP 中心",
+  "click": "MCP 中心"
+ },
+ {
+  "id": "07-provider",
+  "desc": "Provider",
+  "click": "Provider"
+ },
+ {
+  "id": "08-runtime-center",
+  "desc": "运行中心",
+  "click": "运行中心"
+ },
+ {
+  "id": "09-approvals",
+  "desc": "审批队列",
+  "click": "审批队列"
+ },
+ {
+  "id": "10-aichat",
+  "desc": "AiChat",
+  "click": "AiChat"
+ },
+ {
+  "id": "11-matrix",
+  "desc": "权限矩阵",
+  "click": "权限矩阵"
+ },
+ {
+  "id": "12-audit",
+  "desc": "审计中心",
+  "click": "审计中心"
+ },
+ {
+  "id": "13-notifications",
+  "desc": "通知中心",
+  "click": "通知中心"
+ },
+ {
+  "id": "14-channels",
+  "desc": "渠道配置",
+  "click": "渠道配置"
+ },
+ {
+  "id": "15-documents",
+  "desc": "文档中心",
+  "click": "文档中心"
+ },
+ {
+  "id": "16-repos",
+  "desc": "代码仓库",
+  "click": "代码仓库"
+ },
+ {
+  "id": "17-external-tools",
+  "desc": "MCP/Skill 下载",
+  "click": "MCP / Skill 下载"
+ },
+ {
+  "id": "18-knowledge",
+  "desc": "知识库",
+  "click": "知识库"
+ },
+ {
+  "id": "19-memory",
+  "desc": "Memory",
+  "click": "Memory"
+ },
+ {
+  "id": "20-dashboard",
+  "desc": "领导看板",
+  "click": "领导看板"
+ },
+ {
+  "id": "21-canvas-req",
+  "desc": "需求流程画布",
+  "click": "流程模板",
+  "realClick": "(function(){var es=[].slice.call(document.querySelectorAll('body *')).filter(function(e){return e.children.length===0&&(e.textContent||'').trim()===\"需求流程\"});for(var k=0;k<es.length;k++){var p=es[k];for(var i=0;i<12&&p;i++){p=p.parentElement;if(!p)break;var bs=[].slice.call(p.querySelectorAll('button')).filter(function(b){return (b.textContent||'').trim()==='打开画布'});if(bs.length)return bs[0]}}return null})()",
+  "wait": 2800,
+  "afterClick": 4000
+ },
+ {
+  "id": "22-canvas-issue",
+  "desc": "问题流程画布",
+  "click": "流程模板",
+  "realClick": "(function(){var es=[].slice.call(document.querySelectorAll('body *')).filter(function(e){return e.children.length===0&&(e.textContent||'').trim()===\"问题流程\"});for(var k=0;k<es.length;k++){var p=es[k];for(var i=0;i<12&&p;i++){p=p.parentElement;if(!p)break;var bs=[].slice.call(p.querySelectorAll('button')).filter(function(b){return (b.textContent||'').trim()==='打开画布'});if(bs.length)return bs[0]}}return null})()",
+  "wait": 2800,
+  "afterClick": 4000
+ },
+ {
+  "id": "23-node-process",
+  "desc": "节点处理页",
+  "click": "我的任务",
+  "wait": 2600,
+  "realClick": "(function(){var cs=[].slice.call(document.querySelectorAll('div[class*=\"cursor-pointer\"]')).filter(function(d){return (d.textContent||'').indexOf('rancher')>=0});if(!cs.length)return null;var p=cs[0];for(var i=0;i<5&&p;i++){p=p.parentElement;if(!p)break;var bs=[].slice.call(p.querySelectorAll('button')).filter(function(b){return (b.textContent||'').trim()==='去处理'});if(bs.length)return bs[0]}return null})()",
+  "afterClick": 4200
+ }
+]

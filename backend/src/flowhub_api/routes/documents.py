@@ -32,6 +32,7 @@ ALLOWED_EXT = {".pdf", ".md", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
 ALLOWED_MIME = {"application/pdf", "text/markdown", "text/plain", "application/zip",
                 "application/x-zip-compressed",  # Windows 浏览器对 .zip 的常见 MIME
                 "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 "image/png", "image/jpeg", "image/webp", "application/octet-stream"}
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp"}
 IMAGE_MIME = {"image/png", "image/jpeg", "image/webp"}

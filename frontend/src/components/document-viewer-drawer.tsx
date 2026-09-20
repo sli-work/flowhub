@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
-import { Download, FileText, LoaderCircle, PanelLeftClose, PanelLeftOpen, X } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
+import { Download, FileText, LoaderCircle, PanelLeftClose, PanelLeftOpen, RotateCcw, RotateCw, X, ZoomIn, ZoomOut } from 'lucide-react'
 import FileViewer from '@file-viewer/react'
 import type { FileViewerOptions } from '@file-viewer/core'
 import officePreset from '@file-viewer/preset-office'
@@ -19,6 +19,109 @@ export interface ViewerDoc {
 type ThemeMode = 'light' | 'dark'
 type ArchiveEntry = { path: string; size: number }
 type ArchivePreview = { preview_type: 'axure' | 'archive'; entries: ArchiveEntry[] }
+type ViewportSize = { width: number; height: number }
+type ImageSize = { width: number; height: number }
+
+const NATIVE_IMAGE_EXTENSIONS = new Set(['avif', 'bmp', 'gif', 'ico', 'jpeg', 'jpg', 'png', 'svg', 'webp'])
+
+function nativeImageFile(name: string) {
+  const extension = name.split('.').pop()?.toLowerCase() ?? ''
+  return NATIVE_IMAGE_EXTENSIONS.has(extension)
+}
+
+function clamp(value: number, limit: number) {
+  return Math.min(Math.max(value, -limit), limit)
+}
+
+function ImagePreview({ src, name }: { src: string; name: string }) {
+  const viewportRef = useRef<HTMLDivElement>(null)
+  const dragRef = useRef<{ pointerId: number; x: number; y: number; offsetX: number; offsetY: number } | null>(null)
+  const [viewport, setViewport] = useState<ViewportSize>({ width: 0, height: 0 })
+  const [naturalSize, setNaturalSize] = useState<ImageSize | null>(null)
+  const [scale, setScale] = useState(1)
+  const [rotation, setRotation] = useState(0)
+  const [offset, setOffset] = useState({ x: 0, y: 0 })
+
+  useEffect(() => {
+    const element = viewportRef.current
+    if (!element) return
+    const update = () => setViewport({ width: element.clientWidth, height: element.clientHeight })
+    update()
+    const observer = new ResizeObserver(update)
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [])
+
+  const baseSize = useMemo<ImageSize | null>(() => {
+    if (!naturalSize || !viewport.width || !viewport.height) return null
+    const ratio = Math.min(1, viewport.width / naturalSize.width, viewport.height / naturalSize.height)
+    return { width: naturalSize.width * ratio, height: naturalSize.height * ratio }
+  }, [naturalSize, viewport])
+  const rotated = rotation % 180 !== 0
+  const contentWidth = ((rotated ? baseSize?.height : baseSize?.width) ?? 0) * scale
+  const contentHeight = ((rotated ? baseSize?.width : baseSize?.height) ?? 0) * scale
+  const offsetLimit = {
+    x: Math.max(0, (contentWidth - viewport.width) / 2),
+    y: Math.max(0, (contentHeight - viewport.height) / 2),
+  }
+  const displayedOffset = { x: clamp(offset.x, offsetLimit.x), y: clamp(offset.y, offsetLimit.y) }
+  const resetView = () => { setScale(1); setOffset({ x: 0, y: 0 }) }
+  const updateScale = (next: number) => {
+    const bounded = Math.min(5, Math.max(1, Number(next.toFixed(2))))
+    setScale(bounded)
+    if (bounded === 1) setOffset({ x: 0, y: 0 })
+  }
+  const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (scale <= 1 || (!offsetLimit.x && !offsetLimit.y)) return
+    event.currentTarget.setPointerCapture(event.pointerId)
+    dragRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, offsetX: displayedOffset.x, offsetY: displayedOffset.y }
+  }
+  const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current
+    if (!drag || drag.pointerId !== event.pointerId) return
+    setOffset({
+      x: clamp(drag.offsetX + event.clientX - drag.x, offsetLimit.x),
+      y: clamp(drag.offsetY + event.clientY - drag.y, offsetLimit.y),
+    })
+  }
+  const stopDragging = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (dragRef.current?.pointerId !== event.pointerId) return
+    dragRef.current = null
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+  }
+
+  return (
+    <div
+      ref={viewportRef}
+      className={cn('relative flex h-full min-h-0 select-none items-center justify-center overflow-hidden bg-slate-100 touch-none dark:bg-slate-900', scale > 1 ? 'cursor-grab active:cursor-grabbing' : 'cursor-zoom-in')}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={stopDragging}
+      onPointerCancel={stopDragging}
+      onLostPointerCapture={() => { dragRef.current = null }}
+    >
+      <div className="absolute right-3 top-3 z-10 flex items-center gap-1 rounded-lg border border-slate-200 bg-white/95 p-1 shadow-sm backdrop-blur dark:border-slate-700 dark:bg-slate-900/95">
+        <button type="button" className="rounded p-1.5 hover:bg-slate-100 disabled:opacity-40 dark:hover:bg-slate-800" aria-label="缩小图片" disabled={scale <= 1} onClick={() => updateScale(scale - 0.25)}><ZoomOut className="h-4 w-4" /></button>
+        <span className="min-w-11 text-center text-[11px] text-slate-500 dark:text-slate-400">{Math.round(scale * 100)}%</span>
+        <button type="button" className="rounded p-1.5 hover:bg-slate-100 disabled:opacity-40 dark:hover:bg-slate-800" aria-label="放大图片" disabled={scale >= 5} onClick={() => updateScale(scale + 0.25)}><ZoomIn className="h-4 w-4" /></button>
+        <button type="button" className="rounded p-1.5 hover:bg-slate-100 dark:hover:bg-slate-800" aria-label="向左旋转图片" onClick={() => setRotation((value) => (value + 270) % 360)}><RotateCcw className="h-4 w-4" /></button>
+        <button type="button" className="rounded p-1.5 hover:bg-slate-100 dark:hover:bg-slate-800" aria-label="向右旋转图片" onClick={() => setRotation((value) => (value + 90) % 360)}><RotateCw className="h-4 w-4" /></button>
+        <button type="button" className="rounded p-1.5 text-[11px] hover:bg-slate-100 dark:hover:bg-slate-800" aria-label="还原图片视图" onClick={resetView}>还原</button>
+      </div>
+      <img
+        src={src}
+        alt={name}
+        draggable={false}
+        onLoad={(event) => setNaturalSize({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })}
+        onClick={() => { if (scale === 1) updateScale(2) }}
+        onDoubleClick={resetView}
+        className="max-w-none select-none bg-white shadow-xl"
+        style={baseSize ? { width: baseSize.width, height: baseSize.height, transform: `translate(${displayedOffset.x}px, ${displayedOffset.y}px) scale(${scale}) rotate(${rotation}deg)` } : { maxWidth: '100%', maxHeight: '100%' }}
+      />
+      {scale > 1 && <p className="pointer-events-none absolute bottom-3 rounded bg-slate-950/65 px-2 py-1 text-[11px] text-white">按住鼠标拖动图片</p>}
+    </div>
+  )
+}
 
 function formatFileSize(bytes: number) {
   if (bytes < 1024) return `${bytes} B`
@@ -79,11 +182,13 @@ export function DocumentViewerDrawer({ open, docs, initialDocId, onClose }: { op
   const current = useMemo(() => docs.find((d) => d.id === currentId) ?? null, [docs, currentId])
   const resolvedTheme: ThemeMode = themeMode
   const isZip = !!current && current.name.toLowerCase().endsWith('.zip')
+  const isNativeImage = !!current && nativeImageFile(current.name)
   /* FileViewer 的 options 按引用比较（变化即触发 controller.update 重载文档），
      必须 memoize，否则父组件任意重渲染（如任务页 3s 轮询）都会让 PDF 反复刷新 */
   const viewerOptions = useMemo<FileViewerOptions>(() => ({
     preset: [officePreset, litePreset],
     rendererMode: 'replace',
+    styleIsolation: 'shadow',
     theme: resolvedTheme,
     search: { enabled: true },
     toolbar: { position: 'bottom-right' },
@@ -258,12 +363,15 @@ export function DocumentViewerDrawer({ open, docs, initialDocId, onClose }: { op
                   {!archiveEntries.length && <li className="px-3 py-5 text-center text-slate-400">压缩包内没有可显示的文件</li>}
                 </ul>
               </div>
+            ) : blobUrl && current && isNativeImage ? (
+              <ImagePreview key={blobUrl} src={blobUrl} name={current.name} />
             ) : blobUrl && current ? (
               <FileViewer
                 key={currentDocId ?? 'none'}
                 url={blobUrl}
                 filename={current.name}
                 options={viewerOptions}
+                style={{ userSelect: 'text' }}
               />
             ) : null}
           </div>

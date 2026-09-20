@@ -324,6 +324,14 @@ class WorkflowService:
     async def advance(self, task: TaskItem, project: Project, tpl: GlobalTemplate, auto_depth: int = 0) -> dict:
         """完成任务 → 沿边推进到下一节点（决策按条件选分支 / 并行分叉拆单 / 汇合等齐）→ 绑定解析 → 生成新任务。
         auto_depth：自动节点的递归采纳深度（防连环自动节点 + 环画布无限递归）。"""
+        if (task.source or "").startswith("correction:"):
+            raise BizError(BizCode.VALIDATION, "更正返工任务不能推进主流程")
+        from flowhub_api.models import TaskCorrection
+        blocked = (await self.session.execute(select(TaskCorrection.id).where(
+            TaskCorrection.wi_id == task.wi_id, TaskCorrection.status == "rework_assigned",
+        ).limit(1))).scalar_one_or_none()
+        if blocked:
+            raise BizError(BizCode.DUPLICATE_OPERATION, "存在待完成的实质更正返工，完成后才能继续流转", http_status=409)
         instance = (await self.session.execute(select(WorkflowInstance).where(WorkflowInstance.work_item_id == task.wi_id))).scalar_one_or_none()
         version = instance.version if instance is not None else None
         nodes = await self.nodes_of(tpl, version)
@@ -596,6 +604,9 @@ class WorkflowService:
             await self.validate_image_references(
                 project=t.project, wi_id=t.wi_id, schema=cfg.get("schema") or [], form_values=form_values or {},
             )
+            await self.validate_file_references(
+                wi_id=t.wi_id, schema=cfg.get("schema") or [], form_values=form_values or {}, uploader=actor.name,
+            )
 
         t.form_values = form_values or {}
         t.acceptance_checks = acceptance_checks or {}
@@ -673,6 +684,40 @@ class WorkflowService:
                     raise BizError(BizCode.FORBIDDEN, "只能引用当前用户为新工作项上传的图片")
             elif doc.wi not in (None, wi_id):
                 raise BizError(BizCode.FORBIDDEN, "不能引用其他工作项的图片")
+
+    async def validate_file_references(
+        self, *, wi_id: str, schema: list[dict], form_values: dict, uploader: str,
+    ) -> None:
+        """限制 upload/file 字段只能引用当前工作项或调用者新建的未归属文档。"""
+        refs: list[tuple[str, str]] = []
+        for field in schema:
+            if field.get("type") not in ("upload", "file"):
+                continue
+            key = str(field.get("key") or "")
+            value = form_values.get(key)
+            if value is None:
+                continue
+            if not isinstance(value, list):
+                raise BizError(BizCode.VALIDATION, f"「{field.get('label', key)}」必须是附件引用数组")
+            for ref in value:
+                if not isinstance(ref, dict) or not isinstance(ref.get("id"), str) or not ref["id"].strip():
+                    raise BizError(BizCode.VALIDATION, f"「{field.get('label', key)}」包含无效附件引用")
+                refs.append((key, ref["id"]))
+        if not refs:
+            return
+        docs = (await self.session.execute(
+            select(DocItem).where(DocItem.id.in_({doc_id for _, doc_id in refs}))
+        )).scalars().all()
+        found = {doc.id: doc for doc in docs}
+        for key, doc_id in refs:
+            doc = found.get(doc_id)
+            if doc is None or doc.deleted:
+                raise BizError(BizCode.VALIDATION, f"附件「{doc_id}」不存在或已删除")
+            if doc.wi == wi_id:
+                continue
+            if doc.wi is None and doc.uploader == uploader:
+                continue
+            raise BizError(BizCode.FORBIDDEN, f"字段「{key}」不能引用其他工作项的附件")
 
     async def resolve_template_for_task(self, task: TaskItem) -> tuple[Project | None, GlobalTemplate | None]:
         """按流程实例定位模板，不能随项目后来绑定的版本漂移。"""

@@ -10,12 +10,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from flowhub_api.authz.authorizer import build_authorizer, get_current_user
 from flowhub_api.core.response import BizCode, BizError, ok
 from flowhub_api.db.session import get_db
-from flowhub_api.models import GlobalTemplate, NodeAssignment, Project, ProjectTemplateBinding, TaskItem, User, WorkflowInstance, WorkflowIssue
-from flowhub_api.schemas.api import IssueCreateReq, IssueVerifyReq, TaskActionReq, TaskAdoptRunReq, TaskAiFillReq, TaskSplitReq
+from flowhub_api.models import GlobalTemplate, NodeAssignment, Project, ProjectTemplateBinding, TaskCorrection, TaskItem, User, WorkItem, WorkflowInstance, WorkflowIssue
+from flowhub_api.schemas.api import IssueCreateReq, IssueVerifyReq, TaskActionReq, TaskAdoptRunReq, TaskAiFillReq, TaskCorrectionCreateReq, TaskCorrectionReviewReq, TaskSplitReq
 from flowhub_api.services.audit import AuditService
-from flowhub_api.services.agent_context import can_read_task
+from flowhub_api.services.agent_context import can_read_completed_task, can_read_task
 from flowhub_api.services.task_lineage import historical_split_parent_ids_for_tasks
 from flowhub_api.services.task_issues import TaskIssueService
+from flowhub_api.services.task_corrections import TaskCorrectionService
 from flowhub_api.services.workflow import WorkflowService, is_empty_form_value, main_task_clause
 
 logger = logging.getLogger("flowhub_api")
@@ -86,6 +87,43 @@ async def list_tasks(
     q: str = "", status_group: str = "", sort: str = "default",
     page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100),
 ):
+    correction_service = TaskCorrectionService(session)
+
+    async def pending_corrections() -> list[tuple[TaskCorrection, TaskItem]]:
+        """Pending proposals visible only to users who may independently review them."""
+        rows = (await session.execute(
+            select(TaskCorrection, TaskItem)
+            .join(TaskItem, TaskCorrection.task_id == TaskItem.id)
+            .where(TaskCorrection.status == "pending_review")
+            .order_by(TaskCorrection.created_at.desc())
+        )).all()
+        result: list[tuple[TaskCorrection, TaskItem]] = []
+        for correction, task in rows:
+            if not await correction_service.can_review(correction, user):
+                continue
+            if node and node not in task.node or project and project not in task.project or priority and task.priority != priority:
+                continue
+            if q and q not in task.title:
+                continue
+            result.append((correction, task))
+        return result
+
+    # 更正审批不是普通待办：它始终指向已完成的原任务，不能混入处理人自己的任务可见范围。
+    if status_group == "correction_pending":
+        pairs = await pending_corrections()
+        total = len(pairs)
+        page_pairs = pairs[(page - 1) * page_size: page * page_size]
+        archived_wis = {x[0] for x in (await session.execute(select(WorkItem.id).where(WorkItem.status == "archived"))).all()}
+        items = []
+        for correction, task in page_pairs:
+            item = _brief(task)
+            item["frozen"] = item["wiId"] in archived_wis
+            item["pendingCorrection"] = correction_service.brief(correction, can_review=True)
+            items.append(item)
+        return ok({"items": items, "total": total, "page": page, "page_size": page_size,
+                   "stats": {"all": 0, "todo": 0, "doing": 0, "submitted": 0, "done": 0,
+                             "open": 0, "overdue": 0, "expertPending": 0, "correctionPending": total}})
+
     conds = []
     visibility = None
     if status:
@@ -110,8 +148,6 @@ async def list_tasks(
     base = select(TaskItem).where(*conds)
 
     # 冻结：所属工作项已归档（项目归档冻结）→ 排序沉底 + 前端「冻结」标记
-    from flowhub_api.models import WorkItem
-
     archived_subq = select(WorkItem.id).where(WorkItem.status == "archived")
     frozen_last = case((TaskItem.wi_id.in_(archived_subq), 1), else_=0)
     # 排序：未完成优先（待办在前），同状态按时间倒序；冻结任务一律排最后；created 为纯时间线倒序
@@ -154,9 +190,10 @@ async def list_tasks(
             func.count(TaskItem.id).filter(TaskItem.expert_pending.is_(True)),
         ).where(*stats_where)
     )).one()
+    correction_pending = len(await pending_corrections())
     stats = {
         "all": all_count, "todo": todo, "doing": doing, "submitted": submitted, "done": done,
-        "open": all_count - done, "overdue": overdue_n, "expertPending": expert_n,
+        "open": all_count - done, "overdue": overdue_n, "expertPending": expert_n, "correctionPending": correction_pending,
     }
     return ok({"items": items, "total": total, "page": page, "page_size": page_size, "stats": stats})
 
@@ -170,7 +207,7 @@ async def get_task(
     t = await session.get(TaskItem, task_id)
     if t is None:
         raise BizError(BizCode.NOT_FOUND, "任务不存在")
-    if not await can_read_task(session, user, t):
+    if not await can_read_completed_task(session, user, t):
         raise BizError(BizCode.PERM_DENIED, "无权限读取该任务", http_status=403)
     # 冻结标记：任务所属工作项已归档（项目归档冻结）→ 处理页只读提示
     from flowhub_api.models import WorkItem as _WI
@@ -345,6 +382,12 @@ async def get_task(
         "issueTargets": await TaskIssueService(session).targets_for(t),
         "issues": [TaskIssueService.brief(issue) for issue in await TaskIssueService(session).issues_for_task(t)],
         "issueSummary": await TaskIssueService(session).summary(t.wi_id, t.id),
+        "corrections": [
+            TaskCorrectionService.brief(row, can_review=await TaskCorrectionService(session).can_review(row, user))
+            for row in (await session.execute(
+                select(TaskCorrection).where(TaskCorrection.task_id == t.id).order_by(TaskCorrection.created_at.desc())
+            )).scalars().all()
+        ],
         "nextTaskId": next_task_id,
         "expertRuns": [
             {"id": r.id, "status": r.status, "output": r.output or "", "error": r.error, "startedAt": r.started_at, "context": r.context or "", "parsed": r.parsed,
@@ -386,6 +429,63 @@ async def list_task_issues(
     service = TaskIssueService(session)
     issues = await service.issues_for_task(task)
     return ok({"items": [service.brief(issue) for issue in issues], "summary": await service.summary(task.wi_id, task.id)})
+
+
+@router.post("/{task_id}/corrections")
+async def propose_task_correction(
+    task_id: str, body: TaskCorrectionCreateReq, user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_db)],
+):
+    build_authorizer(user).require("task:submit")
+    task = (await session.execute(select(TaskItem).where(TaskItem.id == task_id).with_for_update())).scalar_one_or_none()
+    if task is None:
+        raise BizError(BizCode.NOT_FOUND, "任务不存在")
+    if not await can_read_task(session, user, task):
+        raise BizError(BizCode.PERM_DENIED, "无权限更正该任务", http_status=403)
+    service = TaskCorrectionService(session)
+    correction = await service.propose(task, changes=body.changes, reason=body.reason,
+        suggested_mode=body.suggested_mode, actor=user, source="human")
+    notifications = await service.review_notifications(correction, task, user)
+    await session.commit()
+    if notifications:
+        from flowhub_api.routes.notifications import publish_notification
+        for notification in notifications:
+            await publish_notification(notification)
+    return ok({"correction": service.brief(correction, can_review=False)}, "更正提案已提交，等待人工审批")
+
+
+@router.get("/{task_id}/corrections")
+async def list_task_corrections(
+    task_id: str, session: Annotated[AsyncSession, Depends(get_db)], user: Annotated[User, Depends(get_current_user)],
+):
+    task = await session.get(TaskItem, task_id)
+    if task is None:
+        raise BizError(BizCode.NOT_FOUND, "任务不存在")
+    if not await can_read_task(session, user, task):
+        raise BizError(BizCode.PERM_DENIED, "无权限读取该任务的更正记录", http_status=403)
+    rows = (await session.execute(
+        select(TaskCorrection).where(TaskCorrection.task_id == task.id).order_by(TaskCorrection.created_at.desc())
+    )).scalars().all()
+    service = TaskCorrectionService(session)
+    return ok({"items": [TaskCorrectionService.brief(row, can_review=await service.can_review(row, user)) for row in rows]})
+
+
+@router.post("/corrections/{correction_id}/review")
+async def review_task_correction(
+    correction_id: str, body: TaskCorrectionReviewReq, user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_db)],
+):
+    build_authorizer(user).require("task:submit")
+    correction = (await session.execute(
+        select(TaskCorrection).where(TaskCorrection.id == correction_id).with_for_update()
+    )).scalar_one_or_none()
+    if correction is None:
+        raise BizError(BizCode.NOT_FOUND, "更正提案不存在")
+    service = TaskCorrectionService(session)
+    reviewed = await service.review(correction, approve=body.approve, mode=body.mode, notes=body.notes, actor=user)
+    await session.commit()
+    message = "更正已生效" if reviewed.status == "applied" else ("已创建更正返工任务" if reviewed.status == "rework_assigned" else "更正提案已驳回")
+    return ok({"correction": service.brief(reviewed)}, message)
 
 
 @router.post("/issues/{issue_id}/verify")
@@ -433,8 +533,9 @@ async def append_task_info(
     # 仅已完成节点可追加（流程已走过该节点）
     if t.status != "completed":
         raise BizError(BizCode.VALIDATION, f"节点「{t.node}」尚未完成，无需补充信息", http_status=409)
-    # 权限：仅节点原处理人 / 系统管理员
-    if t.assignee != user.name and user.name != "系统管理员":
+    # 权限：仅节点原处理人 / 节点绑定共同处理人 / 系统管理员（与任务可见性 can_read_task 一致）
+    recipients = await WorkflowService(session).resolve_task_recipients(t)
+    if t.assignee != user.name and user.name != "系统管理员" and not any(r.id == user.id for r in recipients):
         raise BizError(BizCode.PERM_DENIED, f"仅节点「{t.node}」的处理人（{t.assignee}）可补充信息", http_status=403)
     values = (body or {}).get("values") or {}
     # 按节点 schema 校验必填字段（与提交表单一致）
@@ -537,8 +638,8 @@ async def task_action(
     if t is None:
         raise BizError(BizCode.NOT_FOUND, "任务不存在")
 
-    if (t.source or "").startswith("issue:") and body.action == "return":
-        raise BizError(BizCode.VALIDATION, "问题处理任务不能使用主流程退回，请提交修复或验证结论")
+    if ((t.source or "").startswith("issue:") or (t.source or "").startswith("correction:")) and body.action == "return":
+        raise BizError(BizCode.VALIDATION, "局部返工任务不能使用主流程退回，请完成更正后提交")
 
     # 归档项目冻结：任务所属工作项已归档（或项目已归档）→ 禁止任何流转操作（保留可查看）
     from flowhub_api.models import Project, WorkItem
@@ -577,8 +678,8 @@ async def task_action(
             raise BizError(BizCode.NOT_FOUND, "转办用户不存在")
         t.status = "transferred"
         t.assignee = target.name
-        # source 是问题闭环的类型标记；覆盖它会让后续 submit 误走主流程推进。
-        if not (t.source or "").startswith("issue:"):
+        # source 是问题/更正闭环的类型标记；覆盖它会让后续 submit 误走主流程推进。
+        if not ((t.source or "").startswith("issue:") or (t.source or "").startswith("correction:")):
             t.source = f"{user.name}转办"
         await AuditService(session).record(
             actor=user.name, action="task:transfer", target=f"{t.id} → {target.name}", result="success",
@@ -639,6 +740,12 @@ async def task_action(
                 http_status=409,
             )
         issue_service = TaskIssueService(session)
+        if (t.source or "").startswith("correction:") and ":handling" in (t.source or ""):
+            correction = await TaskCorrectionService(session).complete_rework(
+                t, body.form_values or {}, body.acceptance_checks or {}, user,
+            )
+            await session.commit()
+            return ok({"task": _brief(t), "correction": TaskCorrectionService.brief(correction)}, "更正返工已提交，已以追加记录保留")
         if (t.source or "").startswith("issue:") and ":handling:" in (t.source or ""):
             issue, verification_task, notifications = await issue_service.complete_handling(
                 t, body.form_values or {}, body.acceptance_checks or {}, user,
@@ -653,6 +760,7 @@ async def task_action(
                       "问题修复已提交，已自动创建验证任务")
         if (t.source or "").startswith("issue:") and ":verify:" in (t.source or ""):
             raise BizError(BizCode.VALIDATION, "问题验证请使用“验证通过/不通过”操作")
+        await TaskCorrectionService(session).assert_work_item_can_advance(t)
         await issue_service.assert_origin_can_advance(t)
         t.form_values = body.form_values or {}
         # 验收清单勾选快照随提交落库（引擎在 advance 中强制全部勾选后才会流转）
@@ -764,8 +872,8 @@ async def split_task(
     t = await session.get(TaskItem, task_id)
     if t is None:
         raise BizError(BizCode.NOT_FOUND, "任务不存在")
-    if (t.source or "").startswith("issue:"):
-        raise BizError(BizCode.VALIDATION, "问题处理任务不能拆分；请提交修复结果或验证结论")
+    if (t.source or "").startswith(("issue:", "correction:")):
+        raise BizError(BizCode.VALIDATION, "局部返工任务不能拆分；请完成返工后提交")
     from flowhub_api.models import WorkItem as _WI
 
     if (await session.execute(select(_WI.id).where(_WI.id == t.wi_id, _WI.status == "archived"))).first():
@@ -798,14 +906,23 @@ async def _expert_fill_guard(session: AsyncSession, t: TaskItem, user: User) -> 
     """Expert 填充/采纳共用守卫：冻结校验 + 状态校验 + 处理人权限 + 节点 schema/deployment 配置。"""
     from flowhub_api.models import WorkItem as _WI
 
+    if (t.source or "").startswith("correction:"):
+        raise BizError(BizCode.VALIDATION, "更正返工任务不能使用 Expert 自动流转，请人工核对后提交")
+
     if (await session.execute(select(_WI.id).where(_WI.id == t.wi_id, _WI.status == "archived"))).first():
         raise BizError(BizCode.FORBIDDEN, "流程已冻结（项目归档），不可操作", http_status=403)
     if t.status in ("completed", "cancelled"):
         raise BizError(BizCode.DUPLICATE_OPERATION, "任务已处理，无需填充", http_status=409)
     wi_row = await session.get(_WI, t.wi_id)
+    # 处理人判定与任务可见性（can_read_task）一致：节点绑定共同处理人也要放行，
+    # 否则多人节点里非 assignee 首位的绑定处理人能看任务却无法采纳/重跑 Expert。
+    from flowhub_api.services.workflow import WorkflowService
+
+    recipients = await WorkflowService(session).resolve_task_recipients(t)
     allowed = (
         t.assignee == user.name
         or user.name == "系统管理员"
+        or any(r.id == user.id for r in recipients)
         or (wi_row is not None and user.name in (wi_row.creator, wi_row.assignee))
     )
     if not allowed:

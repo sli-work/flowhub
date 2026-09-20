@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react'
+import { useDeferredValue, useEffect, useId, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import { Upload, Paperclip, Calendar, AlertCircle, Image, LoaderCircle } from 'lucide-react'
 import { cn } from '../lib/utils'
 import { api, getToken } from '../lib/api'
@@ -70,7 +70,7 @@ function MarkdownTextarea({ value, onChange, placeholder, error }: {
 }
 
 /* 单字段控件 */
-function FieldControl({ field, value, onChange, error, workItemId, project, onPreviewDocument }: {
+function FieldControl({ field, value, onChange, error, workItemId, project, onPreviewDocument, radioName }: {
   field: FormField
   value: unknown
   onChange: (v: unknown) => void
@@ -78,6 +78,7 @@ function FieldControl({ field, value, onChange, error, workItemId, project, onPr
   workItemId?: string
   project?: string
   onPreviewDocument?: (document: UploadedFileRef) => void
+  radioName?: string
 }) {
   const base = cn(
     'w-full rounded-lg border bg-white text-sm outline-none transition-all',
@@ -155,7 +156,7 @@ function FieldControl({ field, value, onChange, error, workItemId, project, onPr
             <label key={o.value} className="flex cursor-pointer items-center gap-2.5 text-[13px] text-slate-600 dark:text-slate-300">
               <input
                 type="radio"
-                name={`radio-${field.key}`}
+                name={radioName ?? `radio-${field.key}`}
                 className="h-4 w-4 accent-blue-600"
                 checked={str === o.value}
                 onChange={() => onChange(o.value)}
@@ -325,6 +326,7 @@ export function SchemaForm({ fields, values, onChange, compact, workItemId, proj
   onPreviewDocument?: (document: UploadedFileRef) => void
 }) {
   const [tried, setTried] = useState(false)
+  const formInstanceId = useId()
   const missing = validateSchema(fields, values)
   const set = (key: string, v: unknown) => onChange((current) => ({ ...current, [key]: v }))
 
@@ -341,7 +343,7 @@ export function SchemaForm({ fields, values, onChange, compact, workItemId, proj
                 {fieldTypeLabel[f.type]}
               </span>
             </label>
-            <FieldControl field={f} value={values[f.key]} onChange={(v) => set(f.key, v)} error={error} workItemId={workItemId} project={project} onPreviewDocument={onPreviewDocument} />
+            <FieldControl field={f} value={values[f.key]} onChange={(v) => set(f.key, v)} error={error} workItemId={workItemId} project={project} onPreviewDocument={onPreviewDocument} radioName={`radio-${formInstanceId}-${f.key}`} />
             {f.hint && <p className="text-[11px] text-slate-400">{f.hint}</p>}
             {error && (
               <p className="flex items-center gap-1 text-[11.5px] text-red-500">

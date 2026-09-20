@@ -41,6 +41,19 @@ class TestUpload:
         assert doc["name"] == "测试文档.md"
         assert doc["uploader"] == "张伟"
 
+    def test_upload_accepts_xlsx_office_mime(self, client: TestClient, leader_headers: dict):
+        r = client.post(
+            "/api/v1/documents/upload",
+            headers=leader_headers,
+            files={"file": (
+                "阿里云服务待提供指标0807(6) (1).xlsx",
+                io.BytesIO(b"placeholder workbook content"),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )},
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["data"]["doc"]["name"].endswith(".xlsx")
+
     def test_upload_reject_extension(self, client: TestClient, leader_headers: dict):
         r = client.post("/api/v1/documents/upload", headers=leader_headers,
                         files={"file": ("evil.exe", io.BytesIO(b"MZ"), "application/octet-stream")})

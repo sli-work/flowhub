@@ -67,7 +67,36 @@ async def test_schema_output_gets_one_dedicated_format_repair(monkeypatch):
 
     assert result['output'] == '{"summary":"已按原文归位"}'
     assert result['format_status'] == 'repaired'
-    assert result['quality_status'] == 'not_checked'
+    assert result['quality_status'] == 'passed'
+    assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_schema_output_does_not_enter_free_text_quality_revision_after_repair(monkeypatch):
+    """A repaired form object is authoritative; prose QA must not overwrite it."""
+    calls = []
+
+    class Model:
+        def __init__(self, **kw): pass
+
+        async def ainvoke(self, messages):
+            calls.append(messages)
+            prompt = str(messages[-1])
+            if '任务：JSON 格式修复' in prompt:
+                return SimpleNamespace(content='{"summary":"已按原文归位"}')
+            if '事实核验器' in prompt:
+                return SimpleNamespace(content='{"pass":false,"issues":["不应调用"]}')
+            return SimpleNamespace(content='这里是正文，不是 JSON')
+
+    monkeypatch.setattr('flowhub_api.services.expert_runtime.ChatOpenAI', Model)
+    monkeypatch.setattr('flowhub_api.services.expert_runtime.decrypt_secret', lambda x: x)
+    graph = build_graph(SimpleNamespace(base_url='', api_key=''), SimpleNamespace(model='test'), 'test',
+                        quality_mode='accurate', output_schema=[{'key': 'summary', 'label': '摘要', 'type': 'input', 'required': True}]).compile()
+    result = await graph.ainvoke({'prompt': 'test'})
+
+    assert result['output'] == '{"summary":"已按原文归位"}'
+    assert result['format_status'] == 'repaired'
+    assert result['quality_status'] == 'passed'
     assert len(calls) == 2
 
 

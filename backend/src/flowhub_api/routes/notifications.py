@@ -31,7 +31,7 @@ def _brief(n: NotificationItem) -> dict:
         "id": n.id, "title": n.title, "body": n.body, "time": n.time,
         "channels": n.channels, "unread": n.unread, "kind": n.kind,
         "failed": n.failed, "retries": n.retries,
-        "wiId": n.wi_id, "taskId": n.task_id,
+        "wiId": n.wi_id, "taskId": n.task_id, "correctionId": n.correction_id,
     }
 
 

@@ -19,7 +19,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
 from flowhub_api.db.session import SessionFactory
-from flowhub_api.models import DocItem, McpServer, TaskItem, User, WorkItem, WorkflowIssue
+from flowhub_api.models import DocItem, McpServer, TaskCorrection, TaskItem, User, WorkItem, WorkflowIssue
 from flowhub_api.services.crypto import decrypt_secret
 from flowhub_api.services.time import now_iso
 
@@ -42,7 +42,8 @@ _INSTRUCTIONS = """FlowHub 流程协同平台外部接入服务。
 4. attachment_list → attachment_inspect → attachment_read / attachment_find → attachment_render（视觉模型）—— 按需理解附件；需要原文件时使用 attachment_download 获取 5 分钟有效的受控下载链接；
 5. create_document —— 把 Markdown 产出保存为文档（upload 字段用）；
 6. submit_task <task_id> —— 填充表单并提交，自动流转到下一节点。
-7. create_work_item —— 在有创建权限的项目中启动一个新的工作项流程。
+7. propose_task_correction <task_id> —— 对已完成任务提交更正提案；不会直接覆盖历史数据，必须由人工审批。
+8. create_work_item —— 在有创建权限的项目中启动一个新的工作项流程。
 """
 
 mcp = FastMCP(
@@ -56,6 +57,10 @@ mcp = FastMCP(
     # 挂载到 /api/v1/mcp/http 后以根路径提供 Streamable HTTP，最终地址为
     # /api/v1/mcp/http/；避免与兼容保留的 /api/v1/mcp/sse 发生路由冲突。
     streamable_http_path="/",
+    # FlowHub 的工具在每个请求中重新用 access key 认证，业务状态全部落在
+    # 数据库，不依赖 MCP 连接状态。使用无状态传输可让客户端在服务重启、滚动
+    # 发布或切换后端实例后继续携带旧 Mcp-Session-Id，而不会得到 404。
+    stateless_http=True,
 )
 
 
@@ -180,16 +185,47 @@ async def get_task(task_id: str) -> dict:
 
 
 @mcp.tool()
-async def create_document(name: str, content: str, wi_id: str = "") -> dict:
-    """把 Markdown/文本内容保存为 FlowHub 文档（upload 类型表单字段的产出载体），返回 {id, name} 引用。
-    将该引用数组放入 submit_task 的 form_values 对应字段即可完成附件填充。"""
+async def create_document(name: str, content: str, wi_id: str = "", task_id: str = "") -> dict:
+    """保存 Markdown/文本为表单附件，返回 {id, name}。
+
+    优先传 ``task_id``：服务端据此绑定正确的工作项，避免外部客户端把任务 ID
+    误传给 ``wi_id`` 后产生游离附件。``wi_id`` 保留给兼容客户端使用。
+    将返回引用数组放入 submit_task 的 upload/file 字段即可完成附件填充。
+    """
     user = _current_user.get()
     from flowhub_api.services.expert_runtime import create_document_from_text
 
     async with SessionFactory() as session:
+        task = await session.get(TaskItem, task_id) if task_id else None
+        if task_id and task is None:
+            return {"error": f"任务 {task_id} 不存在"}
+        if task is not None and not await _can_read_task(session, user, task):
+            return {"error": "无权限向该任务提交附件"}
+
+        # 兼容把 task_id 误放到 wi_id 的既有外部客户端；任务 ID 与工作项 ID
+        # 使用不同前缀，故不会与有效工作项 ID 冲突。
         wi = await session.get(WorkItem, wi_id) if wi_id else None
-        if wi_id and wi is None:
+        if wi_id and wi is None and task is None:
+            task = await session.get(TaskItem, wi_id)
+            if task is not None:
+                if not await _can_read_task(session, user, task):
+                    return {"error": "无权限向该任务提交附件"}
+            else:
+                return {"error": f"工作项或任务 {wi_id} 不存在"}
+        if task is not None:
+            if wi is not None and wi.id != task.wi_id:
+                return {"error": "task_id 与 wi_id 不属于同一工作项"}
+            wi = await session.get(WorkItem, task.wi_id)
+        if wi is None and wi_id:
             return {"error": f"工作项 {wi_id} 不存在"}
+        if wi is not None and task is None:
+            # 兼容 wi_id 调用时也必须证明调用者能访问该工作项，不能把它当作
+            # 任意文档写入的目标。正常工作项至少有一个流程任务。
+            wi_tasks = (await session.execute(
+                select(TaskItem).where(TaskItem.wi_id == wi.id)
+            )).scalars().all()
+            if not any([await _can_read_task(session, user, candidate) for candidate in wi_tasks]):
+                return {"error": "无权限向该工作项提交附件"}
         ref = await create_document_from_text(
             session, wi_id=wi.id if wi else None, project=wi.project if wi else "未归档",
             name=name, content=content, uploader=user,
@@ -301,8 +337,17 @@ async def submit_task(task_id: str, form_values: dict, acceptance_checks: dict |
             if (task.source or "").startswith("issue:") and ":verify:" in (task.source or ""):
                 return {"error": "问题验证请调用 verify_task_issue"}
             from flowhub_api.services.workflow import WorkflowService
+            from flowhub_api.services.task_corrections import TaskCorrectionService
             from flowhub_api.services.task_issues import TaskIssueService
 
+            if (task.source or "").startswith("correction:") and ":handling" in (task.source or ""):
+                correction = await TaskCorrectionService(session).complete_rework(
+                    task, form_values or {}, acceptance_checks or {}, user,
+                )
+                await session.commit()
+                return {"submitted": True, "task": await _task_summary(session, task),
+                        "correction": TaskCorrectionService.brief(correction), "closed": True}
+            await TaskCorrectionService(session).assert_work_item_can_advance(task)
             await TaskIssueService(session).assert_origin_can_advance(task)
             result = await WorkflowService(session).submit_and_advance(task, form_values or {}, acceptance_checks or {}, user)
             await session.commit()
@@ -347,6 +392,54 @@ async def create_task_issue(task_id: str, target_task_id: str, title: str, descr
         for notification in notifications:
             await publish_notification(notification)
         return {"created": True, "issue": service.brief(issue)}
+
+
+@mcp.tool()
+async def propose_task_correction(task_id: str, changes: dict, reason: str,
+                                  suggested_mode: Literal["append", "rework"] = "append") -> dict:
+    """提交已完成任务的更正提案，供人工在 FlowHub 中审批。
+
+    此工具绝不修改已提交的历史表单，也不能审批自己的提案。changes 的 key 必须属于
+    get_task 返回的表单 schema；附件字段继续使用 create_document 的引用。
+    """
+    user = _current_user.get()
+    from flowhub_api.services.task_corrections import TaskCorrectionService
+
+    async with SessionFactory() as session:
+        task = await session.get(TaskItem, task_id)
+        if task is None:
+            return {"error": "任务不存在"}
+        if not await _can_read_task(session, user, task):
+            return {"error": "无权限更正该任务（仅任务处理人或系统/组织管理员）"}
+        try:
+            service = TaskCorrectionService(session)
+            correction = await service.propose(task, changes=changes or {}, reason=reason,
+                suggested_mode=suggested_mode, actor=user, source="external_mcp")
+            notifications = await service.review_notifications(correction, task, user)
+            await session.commit()
+            if notifications:
+                from flowhub_api.routes.notifications import publish_notification
+                for notification in notifications:
+                    await publish_notification(notification)
+        except Exception as exc:  # noqa: BLE001
+            return {"error": getattr(exc, "detail", None) or str(exc)}
+        return {"proposed": True, "requiresHumanReview": True, "correction": service.brief(correction, can_review=False)}
+
+
+@mcp.tool()
+async def list_task_corrections(task_id: str) -> list[dict]:
+    """查看任务的更正提案及人工审批状态。审批只能在 FlowHub 界面完成。"""
+    user = _current_user.get()
+    from flowhub_api.services.task_corrections import TaskCorrectionService
+
+    async with SessionFactory() as session:
+        task = await session.get(TaskItem, task_id)
+        if task is None or not await _can_read_task(session, user, task):
+            return [{"error": "任务不存在或无权限"}]
+        rows = (await session.execute(
+            select(TaskCorrection).where(TaskCorrection.task_id == task.id).order_by(TaskCorrection.created_at.desc())
+        )).scalars().all()
+        return [TaskCorrectionService.brief(row) for row in rows]
 
 
 @mcp.tool()

@@ -84,6 +84,8 @@ async def download_skill_markdown(_: Annotated[User, Depends(get_current_user)])
 - `claim_task`: claim a transferred/assigned task.
 - `create_document`: save Markdown content as a FlowHub document (for upload-type form fields).
 - `submit_task`: fill the node form and submit, advancing the workflow to the next node.
+- `propose_task_correction`: propose a correction to an already completed task. The original submission remains immutable and a human must approve it in FlowHub.
+- `list_task_corrections`: inspect correction proposals and their review status.
 
 ## Task Processing Workflow（处理任务）
 
@@ -91,12 +93,19 @@ async def download_skill_markdown(_: Annotated[User, Depends(get_current_user)])
 1.5. transferred 任务先 `claim_task <task_id>` 认领；
 2. `get_task_context <task_id>` 获取完整上下文（工作项信息 + 前序节点表单明细 + 文档元数据）；涉及附件时先 `attachment_list`，再 `attachment_inspect` 和按 location 的 `attachment_read`/`attachment_find`；需要原始文件时调用 `attachment_download`，其下载链接只在 5 分钟内有效；
 3. `get_task <task_id>` 查看当前节点的 `formSchema`（待填字段：key/type/required）与 `acceptance`（验收标准）；
-4. upload 类型字段：用 `create_document(name, content, wi_id)` 把 Markdown 产出保存为文档，拿到 `{{id, name}}` 引用；
+4. upload/file 类型字段：用 `create_document(name, content, task_id)` 把 Markdown 产出保存为文档；`task_id` 是当前任务 ID，服务端会自动绑定所属工作项。拿到 `{{id, name}}` 引用后再提交；
 5. `submit_task(task_id, form_values, acceptance_checks)` 提交：
    - `form_values` 按 formSchema 的 key 组织，upload/file 字段传 `[{{"id": ..., "name": ...}}]`；
      image 字段只能传人工上传 PNG、JPEG、WebP 后得到的图片引用，不能由 Expert 自动生成；
    - `acceptance_checks` 逐项 `{{"<key>": {{"text": "<标准原文>", "checked": true}}}}`，验收标准必须全部勾选，否则校验失败；
 6. 返回 `nextNode` / `nextAssignees` 表示已流转；`waitingJoin: true` 表示并行汇合等待其他分支。
+
+## Correction Workflow（已流转内容更正）
+
+1. 已完成任务发现内容错误时，先 `get_task` 获取原表单 schema；
+2. 调用 `propose_task_correction(task_id, changes, reason, suggested_mode)`，其中 `changes` 只传发生变化的字段，`suggested_mode` 为 `append`（补充更正）或 `rework`（实质返工）；
+3. 外部 MCP **不能审批**更正，返回的提案必须由 FlowHub 中的独立人工审批；
+4. `append` 审批后作为可审计追加记录生效；`rework` 审批后生成独立返工任务，完成返工前主流程不能继续提交。使用 `list_task_corrections` 查询状态。
 
 ## Work Item Creation（创建工作项）
 

@@ -94,9 +94,9 @@ export function NotificationsPage() {
   const onOpen = (n: NotificationItem) => {
     if (n.kind === 'agent') openDialog('expertApproval')
     else if (n.failed) retry(n)
-    else if (n.kind === 'arrive' || n.kind === 'transfer') {
+    else if (n.taskId) {
       // 跳转到对应任务处理页（携带真实任务 ID），无关联任务则提示回列表
-      if (n.taskId) openTask(n.taskId, n.wiId)
+      if (n.taskId) openTask(n.taskId, n.wiId, undefined, n.correctionId)
       else toast('该通知未关联处理任务，请到任务列表查看')
     }
     else if (n.wiId) openWorkItem(n.wiId)

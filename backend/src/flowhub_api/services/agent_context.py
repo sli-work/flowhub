@@ -1,6 +1,6 @@
 """Agent 上下文组装：按当前用户权限，读取当前节点任务 + 该节点之前所有节点的表单内容 + 关联文档。
 
-权限语义与 `GET /tasks` 列表一致（docs/03）：
+权限语义（docs/03）：
 - 系统管理员 / 组织管理员：可读任意任务上下文
 - 其他用户：可读自己被节点绑定为共同处理人的任务
 无权限时抛 403（调用方写审计 denied），绝不静默返回部分数据。
@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from flowhub_api.core.response import BizCode, BizError
-from flowhub_api.models import DocItem, TaskAppend, TaskItem, User, WorkItem
+from flowhub_api.models import DocItem, Project, TaskAppend, TaskItem, User, WorkItem
 from flowhub_api.services.document_access import document_content_link
 from flowhub_api.services.workflow import main_task_clause
 from flowhub_api.services import repo_mirror
@@ -23,16 +23,67 @@ _ADMIN_ROLES = ("system_admin", "organization_admin")
 _MAX_DOC_BYTES = 4096
 
 
-async def can_read_task(session: AsyncSession, user: User, task: TaskItem) -> bool:
-    """当前用户是否有权读取该任务上下文（含其所属工作项的历史节点与文档）。"""
-    if any(r.id in _ADMIN_ROLES for r in user.roles):
-        return True
+async def _is_task_participant(session: AsyncSession, user: User, task: TaskItem) -> bool:
+    """用户是否是该任务的直接处理人或节点共同处理人。"""
     if task.assignee in {user.name, user.account, user.id}:
         return True
     from flowhub_api.services.workflow import WorkflowService
 
     recipients = await WorkflowService(session).resolve_task_recipients(task)
     return any(candidate.id == user.id for candidate in recipients)
+
+
+async def can_read_task(session: AsyncSession, user: User, task: TaskItem) -> bool:
+    """当前用户是否是任务直接处理人，可读取任务上下文。"""
+    if any(r.id in _ADMIN_ROLES for r in user.roles):
+        return True
+    return await _is_task_participant(session, user, task)
+
+
+async def can_read_completed_task(session: AsyncSession, user: User, task: TaskItem) -> bool:
+    """已完成/已取消任务的历史只读权限。
+
+    此能力只供详情和历史列表等只读接口调用，绝不能替代 ``can_read_task``
+    用于任何写操作或 MCP 写入入口。
+    """
+    if await can_read_task(session, user, task):
+        return True
+    if task.status not in {"completed", "cancelled"}:
+        return False
+
+    wi = await session.get(WorkItem, task.wi_id)
+    if wi is not None and user.name in {wi.assignee, wi.creator}:
+        return True
+    project = (await session.execute(
+        select(Project).where(Project.name == task.project).order_by(Project.id).limit(1)
+    )).scalar_one_or_none()
+    if project is not None and user.name == project.manager:
+        return True
+
+    work_item_tasks = (await session.execute(
+        select(TaskItem).where(TaskItem.wi_id == task.wi_id)
+    )).scalars().all()
+    for item in work_item_tasks:
+        if await _is_task_participant(session, user, item):
+            return True
+    return False
+
+
+async def can_read_work_item_history(session: AsyncSession, user: User, wi: WorkItem, tasks: list[TaskItem]) -> bool:
+    """工作项详情/历史列表的只读权限，避免逐个任务重复扫描同一工作项。"""
+    if any(role.id in _ADMIN_ROLES for role in user.roles):
+        return True
+    for task in tasks:
+        if await _is_task_participant(session, user, task):
+            return True
+    if not any(task.status in {"completed", "cancelled"} for task in tasks):
+        return False
+    if user.name in {wi.assignee, wi.creator}:
+        return True
+    project = (await session.execute(
+        select(Project).where(Project.name == wi.project).order_by(Project.id).limit(1)
+    )).scalar_one_or_none()
+    return project is not None and user.name == project.manager
 
 
 def _fmt_values(values: dict | None) -> str:

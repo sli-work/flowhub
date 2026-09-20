@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import {
-  ArrowLeft, ArrowRight, Bot, ClipboardList, FileText, Info, Layers, LoaderCircle, Users, Plus,
-  Send, Sparkles, Undo2, UserPlus, PauseCircle, ShieldAlert, ChevronRight, Trash2, CircleAlert, CircleCheck,
+  ArrowLeft, ArrowRight, Bot, ClipboardList, FileText, Layers, LoaderCircle, Users, Plus,
+  Send, Sparkles, Undo2, UserPlus, PauseCircle, ShieldAlert, ChevronRight, Trash2, CircleAlert, CircleCheck, FilePenLine,
 } from 'lucide-react'
 import { useApp, toast } from '../store/app-store'
 import {
@@ -14,7 +14,7 @@ import { DocumentViewerDrawer, type ViewerDoc } from '../components/document-vie
 import { AttachmentEvidencePanel } from '../components/attachment-evidence-panel'
 import { IssueRichTextEditor, IssueRichTextView, issueDocumentText, legacyIssueDocument, type IssueDocument } from '../components/issue-rich-text'
 import { cn } from '../lib/utils'
-import type { AcceptanceChecks, ExpertRunBrief, FormField, IssueSummary, NodeDeliverable, TaskItem, WorkItem, WorkflowIssue } from '../types'
+import type { AcceptanceChecks, ExpertRunBrief, FormField, IssueSummary, NodeDeliverable, TaskCorrection, TaskItem, WorkItem, WorkflowIssue } from '../types'
 
 interface CanvasNodeLite {
   id: string
@@ -35,6 +35,7 @@ interface FallbackTarget { id: string; label: string }
 interface SubtaskBrief { id: string; title: string; node: string; status: string; assignee: string; due: string }
 interface SplitRow { title: string; note: string; assignee: string }
 interface IssueTarget { taskId: string; nodeId: string; label: string; assignees: string[] }
+interface TaskAction { label: string; icon: ReactNode; disabled?: boolean; reason?: string; tone?: 'primary' | 'danger'; onClick: () => void }
 
 /** 画布保存顺序可能随编辑拖拽变化；进度条必须以模板边定义的拓扑顺序展示。 */
 function orderCanvasNodes(nodes: CanvasNodeLite[], edges: unknown): CanvasNodeLite[] {
@@ -143,10 +144,14 @@ function documentRefs(value: unknown): DocumentRef[] {
   })
 }
 
+function correctionChanges(original: Record<string, unknown>, proposed: Record<string, unknown>) {
+  return Object.fromEntries(Object.entries(proposed).filter(([key, value]) => JSON.stringify(value) !== JSON.stringify(original[key])))
+}
+
 /* Run 产出在中栏「Expert 产出」卡内按字段预览（ReadOnlyValue），无抽屉 */
 
 export function NodeProcessPage() {
-  const { navigate, openDialog, openTask, openWorkItem, activeTaskId, currentUser, setActiveTaskTitle } = useApp()
+  const { navigate, openDialog, openTask, openWorkItem, activeTaskId, activeCorrectionId, clearActiveCorrection, currentUser, setActiveTaskTitle } = useApp()
   const [formValues, setFormValues] = useState<SchemaValues>({})
   /* 真实数据：当前任务 → 所属工作项 → 流程实例 → 模板画布 */
   const [task, setTask] = useState<TaskItem | null>(null)
@@ -193,6 +198,15 @@ export function NodeProcessPage() {
   const [appendFor, setAppendFor] = useState<{ taskId: string; node: string; schema: FormField[] } | null>(null)
   const [appendValues, setAppendValues] = useState<SchemaValues>({})
   const [appendBusy, setAppendBusy] = useState(false)
+  const [corrections, setCorrections] = useState<TaskCorrection[]>([])
+  const [correctionOpen, setCorrectionOpen] = useState(false)
+  const [correctionValues, setCorrectionValues] = useState<SchemaValues>({})
+  const [correctionReason, setCorrectionReason] = useState('')
+  const [correctionMode, setCorrectionMode] = useState<'append' | 'rework'>('append')
+  const [correctionBusy, setCorrectionBusy] = useState(false)
+  const [correctionReview, setCorrectionReview] = useState<TaskCorrection | null>(null)
+  const [correctionReviewMode, setCorrectionReviewMode] = useState<'append' | 'rework'>('append')
+  const [correctionReviewNotes, setCorrectionReviewNotes] = useState('')
   const [expandedUp, setExpandedUp] = useState<Set<number>>(new Set())
   const toggleUp = (idx: number) => setExpandedUp((prev) => {
     const next = new Set(prev)
@@ -258,7 +272,7 @@ export function NodeProcessPage() {
     if (!activeTaskId) { navigate('tasks'); return }
     // 切换任务时重置所有任务级状态：避免上一个任务的表单/节点配置/验收清单残留显示
     setTask(null); setFormValues({}); setAiFilledKeys([]); setExpertRuns([])
-    setUpstream([]); setSubtasks([]); setTimeline([]); setFlowSteps([]); setDocs([])
+    setUpstream([]); setSubtasks([]); setTimeline([]); setFlowSteps([]); setDocs([]); setCorrections([])
     setCandidates([]); setStartValues({}); setWi(null); setInstance(null)
     setCurCfg({}); setCurSchema([]); setCurNodeType(''); setAcceptance({}); setFallbackTargets([]); setIssues([]); setIssueTargets([])
     setExpandedUp(new Set()); setSubmitBusy(false)
@@ -276,6 +290,7 @@ export function NodeProcessPage() {
       nodeCfg?: { purpose?: string; handler?: string; sla?: string; schema?: FormField[]; deliverable?: NodeDeliverable; split?: { mode?: string } }
       fallbackTargets?: FallbackTarget[]
       issues?: WorkflowIssue[]; issueSummary?: IssueSummary; issueTargets?: IssueTarget[]
+      corrections?: TaskCorrection[]
     }>(`/api/v1/tasks/${activeTaskId}`)
       .then((td) => {
         setTask(td.task)
@@ -291,6 +306,7 @@ export function NodeProcessPage() {
         setFallbackTargets(td.fallbackTargets ?? [])
         setIssues(td.issues ?? []); setIssueSummary(td.issueSummary ?? { total: 0, open: 0, blocking: 0, waitingVerification: 0 }); setIssueTargets(td.issueTargets ?? [])
         setSubtasks(td.subtasks ?? [])
+        setCorrections(td.corrections ?? [])
         // 引擎视角的节点配置（最新 published 画布）：任务书/表单/拆分与流转校验同源
         if (td.nodeCfg) {
           engineCfgApplied = true
@@ -360,6 +376,20 @@ export function NodeProcessPage() {
       .then((d) => setCandidates(d.users))
       .catch(() => {})
   }, [activeTaskId, navigate, setActiveTaskTitle])
+
+  /* 待审批列表/通知携带具体提案 ID。详情加载完再打开弹窗，避免审核人滚动查找记录。 */
+  useEffect(() => {
+    if (!activeCorrectionId || loading) return
+    const target = corrections.find((item) => item.id === activeCorrectionId)
+    if (target?.status === 'pending_review' && target.canReview) {
+      setCorrectionReview(target)
+      setCorrectionReviewMode(target.suggestedMode ?? 'append')
+      setCorrectionReviewNotes('')
+    } else {
+      toast.error('该更正已处理或你已无审核权限')
+    }
+    clearActiveCorrection()
+  }, [activeCorrectionId, corrections, loading, clearActiveCorrection])
 
   /* 文档列表：按工作项 ID 查询（文档挂在工作项下，不能拿任务 ID 去查）。
      独立 effect + 只依赖 wiId：任务详情加载出 wiId 后拉一次，避免随任务详情 effect 整体重置循环。 */
@@ -519,16 +549,6 @@ export function NodeProcessPage() {
     } finally { setRerunBusy(false) }
   }
 
-  const requestInfo = async () => {
-    if (!activeTaskId) { toast.error('暂无任务可请求补充信息'); return }
-    try {
-      await api.post(`/api/v1/tasks/${activeTaskId}/actions`, { action: 'request_info' })
-      toast.success('补充信息请求已发送：SLA 暂停计时')
-    } catch (e) {
-      toast.error(e instanceof ApiError ? e.message : '请求失败')
-    }
-  }
-
   const openIssue = () => {
     if (!issueTargets.length) { toast.error('当前子线没有可投递的已完成前置节点'); return }
     setIssueDraft({ title: '', descriptionDoc: legacyIssueDocument(''), targetTaskId: issueTargets[0].taskId, priority: 'P2', blocking: false })
@@ -623,14 +643,68 @@ export function NodeProcessPage() {
     } finally { setAppendBusy(false) }
   }
 
+  const openCorrection = () => {
+    if (!task || task.status !== 'completed') return
+    setCorrectionValues({ ...(task.formValues ?? {}) })
+    setCorrectionReason('')
+    setCorrectionMode('append')
+    setCorrectionOpen(true)
+  }
+
+  const submitCorrection = async () => {
+    if (!task) return
+    const changes = correctionChanges(task.formValues ?? {}, correctionValues)
+    if (!Object.keys(changes).length) { toast.error('请至少修改一项已提交内容'); return }
+    if (!correctionReason.trim()) { toast.error('请说明更正原因'); return }
+    try {
+      setCorrectionBusy(true)
+      await api.post(`/api/v1/tasks/${task.id}/corrections`, {
+        changes,
+        reason: correctionReason.trim(),
+        suggested_mode: correctionMode,
+      })
+      const detail = await api.get<{ corrections?: TaskCorrection[] }>(`/api/v1/tasks/${task.id}`)
+      setCorrections(detail.corrections ?? [])
+      setCorrectionOpen(false)
+      toast.success('更正提案已提交，等待人工审核；原始提交不会被覆盖')
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : '更正提案提交失败')
+    } finally { setCorrectionBusy(false) }
+  }
+
+  const openCorrectionReview = (correction: TaskCorrection) => {
+    setCorrectionReview(correction)
+    setCorrectionReviewMode(correction.suggestedMode ?? 'append')
+    setCorrectionReviewNotes('')
+  }
+
+  const submitCorrectionReview = async (approve: boolean) => {
+    if (!correctionReview || !task) return
+    try {
+      setCorrectionBusy(true)
+      await api.post(`/api/v1/tasks/corrections/${correctionReview.id}/review`, {
+        approve,
+        mode: correctionReviewMode,
+        notes: correctionReviewNotes.trim(),
+      })
+      const detail = await api.get<{ items?: TaskCorrection[] }>(`/api/v1/tasks/${task.id}/corrections`)
+      setCorrections(detail.items ?? [])
+      setCorrectionReview(null)
+      toast.success(approve ? '更正提案已审核' : '更正提案已驳回')
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : '更正审核失败')
+    } finally { setCorrectionBusy(false) }
+  }
+
   /* 动作可用性说明（不可用动作说明原因而非静默隐藏）；归档冻结任务全部只读；
      completed/cancelled 历史任务同样只读回看，不允许再提交/退回/转办 */
   const readonlyTask = !!task?.frozen || task?.status === 'completed' || task?.status === 'cancelled'
   const readonlyReason = task?.frozen
     ? '项目已归档，流程已冻结（只读）'
     : '历史任务（已完成/已取消），仅供回看不可操作'
-  const actions = readonlyTask
+  const actions: TaskAction[] = readonlyTask
     ? [
+        ...(task?.status === 'completed' ? [{ label: '更正已提交内容', icon: <FilePenLine className="h-4 w-4" />, disabled: false, onClick: openCorrection }] : []),
         { label: '提交', icon: <Send className="h-4 w-4" />, disabled: true, reason: readonlyReason, onClick: () => {} },
         { label: '退回', icon: <Undo2 className="h-4 w-4" />, disabled: true, reason: readonlyReason, onClick: () => {} },
         { label: '转办', icon: <ArrowRight className="h-4 w-4" />, disabled: true, reason: readonlyReason, onClick: () => {} },
@@ -675,9 +749,6 @@ export function NodeProcessPage() {
           </div>
         </div>
         <div className="flex flex-none items-center gap-2">
-          <button className="flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-[12.5px] font-medium text-slate-600 transition-colors hover:border-amber-400 hover:text-amber-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300" onClick={requestInfo}>
-            <Info className="h-4 w-4" />请求补充信息
-          </button>
           <button className="flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-[12.5px] font-medium text-slate-600 transition-colors hover:border-blue-400 hover:text-blue-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300"
             onClick={() => openDialog('expertApproval')}>
             <Bot className="h-4 w-4" />Expert 待审批
@@ -1156,6 +1227,30 @@ export function NodeProcessPage() {
             <Timeline events={timeline} />
           </SectionCard>
 
+          {task?.status === 'completed' && (
+            <SectionCard title="更正记录" extra={<Badge tone={corrections.some((item) => item.status === 'pending_review') ? 'warn' : 'info'}>{corrections.length}</Badge>} bodyClassName="p-4">
+              {corrections.length ? (
+                <div className="space-y-2">
+                  {corrections.map((correction) => (
+                    <div key={correction.id} className="rounded-lg border border-slate-200 p-2.5 text-[11.5px] dark:border-slate-700">
+                      <div className="flex items-center gap-1.5">
+                        <b className="min-w-0 flex-1 truncate text-slate-700 dark:text-slate-200">{correction.appliedMode === 'rework' || correction.suggestedMode === 'rework' ? '实质返工' : '补充更正'}</b>
+                        <Badge tone={correction.status === 'applied' || correction.status === 'approved_rework' ? 'suc' : correction.status === 'rejected' ? 'err' : 'warn'}>{correction.status === 'pending_review' ? '待审核' : correction.status === 'approved_rework' ? '已批准返工' : correction.status === 'applied' ? '已生效' : correction.status}</Badge>
+                      </div>
+                      <p className="mt-1 text-slate-500 dark:text-slate-400">{correction.reason}</p>
+                      <p className="mt-1 text-slate-400">{Object.keys(correction.changes ?? {}).map((key) => fieldLabel(curSchema, key)).join('、') || '字段变更'} · {correction.proposer ?? correction.source ?? '人工'}{correction.createdAt ? ` · ${correction.createdAt}` : ''}</p>
+                      {correction.status === 'pending_review' && correction.canReview && (
+                        <button className="mt-2 rounded-md border border-blue-200 px-2 py-1 text-[11px] font-medium text-blue-600 transition-colors hover:bg-blue-50 dark:border-blue-500/30 dark:text-blue-300 dark:hover:bg-blue-500/10" onClick={() => openCorrectionReview(correction)}>审核更正</button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-[11.5px] leading-relaxed text-slate-400">尚无更正提案。更正将以追加记录保留，原始提交不可改写。</p>
+              )}
+            </SectionCard>
+          )}
+
           {/* 动作区 */}
           <SectionCard title="节点动作" bodyClassName="p-4">
             <div className="space-y-2">
@@ -1331,6 +1426,68 @@ export function NodeProcessPage() {
                 disabled={appendBusy} onClick={submitAppend}>
                 {appendBusy ? '提交中…' : '提交补充'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {correctionOpen && task && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => { if (!correctionBusy) setCorrectionOpen(false) }}>
+          <div className="max-h-[88vh] w-full max-w-2xl overflow-y-auto rounded-xl border border-slate-200 bg-white p-5 shadow-l dark:border-slate-700 dark:bg-slate-900" onClick={(event) => event.stopPropagation()}>
+            <div className="mb-1 flex items-center justify-between">
+              <b className="flex items-center gap-1.5 text-sm text-slate-800 dark:text-slate-100"><FilePenLine className="h-4 w-4 text-blue-600" />更正已提交内容</b>
+              <button className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200" disabled={correctionBusy} onClick={() => setCorrectionOpen(false)}>✕</button>
+            </div>
+            <p className="mb-4 text-[11.5px] leading-relaxed text-slate-400">原始提交将永久保留。仅提交变更字段和原因，提案需人工审核后才会生效。</p>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="text-[12px] font-medium text-slate-600 dark:text-slate-300">更正类型
+                <select className="mt-1.5 h-9 w-full rounded-lg border border-slate-300 bg-white px-3 text-[12.5px] font-normal outline-none focus:border-blue-400 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200" value={correctionMode} onChange={(event) => setCorrectionMode(event.target.value as 'append' | 'rework')}>
+                  <option value="append">补充更正（不改变已流转分支）</option>
+                  <option value="rework">实质返工（影响下游决策或交付）</option>
+                </select>
+              </label>
+              <label className="text-[12px] font-medium text-slate-600 dark:text-slate-300">更正原因
+                <input className="mt-1.5 h-9 w-full rounded-lg border border-slate-300 bg-white px-3 text-[12.5px] font-normal outline-none focus:border-blue-400 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200" value={correctionReason} onChange={(event) => setCorrectionReason(event.target.value)} placeholder="说明发现的问题和更正原因" />
+              </label>
+            </div>
+            <div className="mt-4 border-t border-slate-100 pt-4 dark:border-slate-800">
+              <div className="mb-2 text-[12px] font-medium text-slate-600 dark:text-slate-300">修改后的字段</div>
+              <SchemaForm fields={curNodeType === 'start' ? startSchema : curSchema} values={correctionValues} onChange={setCorrectionValues} workItemId={task.wiId} project={task.project} onPreviewDocument={openDocumentPreview} />
+              {curSchema.length === 0 && curNodeType !== 'start' && <p className="rounded-lg border border-dashed border-slate-200 p-3 text-center text-[11.5px] text-slate-400 dark:border-slate-700">该历史节点未保留表单 Schema，暂不能通过页面发起字段更正。</p>}
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <button className="rounded-lg border border-slate-300 px-3.5 py-1.5 text-[12px] font-medium text-slate-600 disabled:opacity-50 dark:border-slate-600 dark:text-slate-300" disabled={correctionBusy} onClick={() => setCorrectionOpen(false)}>取消</button>
+              <button className="rounded-lg bg-blue-600 px-3.5 py-1.5 text-[12px] font-medium text-white shadow-sm transition-colors hover:bg-blue-700 disabled:opacity-50" disabled={correctionBusy || (curSchema.length === 0 && curNodeType !== 'start')} onClick={() => void submitCorrection()}>{correctionBusy ? '提交中…' : '提交更正提案'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {correctionReview && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => { if (!correctionBusy) setCorrectionReview(null) }}>
+          <div className="w-full max-w-lg rounded-xl border border-slate-200 bg-white p-5 shadow-l dark:border-slate-700 dark:bg-slate-900" onClick={(event) => event.stopPropagation()}>
+            <div className="mb-1 flex items-center justify-between">
+              <b className="text-sm text-slate-800 dark:text-slate-100">审核更正提案</b>
+              <button className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200" disabled={correctionBusy} onClick={() => setCorrectionReview(null)}>✕</button>
+            </div>
+            <p className="mb-3 text-[11.5px] leading-relaxed text-slate-400">审批通过后按所选方式生效；后端将校验审批权限及禁止自审批。</p>
+            <div className="rounded-lg bg-slate-50 p-3 text-[12px] dark:bg-slate-800/60">
+              <div className="font-medium text-slate-700 dark:text-slate-200">{correctionReview.reason}</div>
+              <div className="mt-1 text-slate-400">变更字段：{Object.keys(correctionReview.changes ?? {}).map((key) => fieldLabel(curSchema, key)).join('、') || '—'}</div>
+            </div>
+            <label className="mt-4 block text-[12px] font-medium text-slate-600 dark:text-slate-300">生效方式
+              <select className="mt-1.5 h-9 w-full rounded-lg border border-slate-300 bg-white px-3 text-[12.5px] font-normal outline-none focus:border-blue-400 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200" value={correctionReviewMode} onChange={(event) => setCorrectionReviewMode(event.target.value as 'append' | 'rework')}>
+                <option value="append">作为补充更正追加</option>
+                <option value="rework">批准并发起实质返工</option>
+              </select>
+            </label>
+            <label className="mt-3 block text-[12px] font-medium text-slate-600 dark:text-slate-300">审批说明（可选）
+              <textarea className="mt-1.5 min-h-[76px] w-full rounded-lg border border-slate-300 bg-white p-2.5 text-[12.5px] font-normal outline-none focus:border-blue-400 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200" value={correctionReviewNotes} onChange={(event) => setCorrectionReviewNotes(event.target.value)} placeholder="填写审批结论或返工要求" />
+            </label>
+            <div className="mt-4 flex justify-end gap-2">
+              <button className="rounded-lg border border-slate-300 px-3.5 py-1.5 text-[12px] font-medium text-slate-600 disabled:opacity-50 dark:border-slate-600 dark:text-slate-300" disabled={correctionBusy} onClick={() => setCorrectionReview(null)}>取消</button>
+              <button className="rounded-lg bg-red-600 px-3.5 py-1.5 text-[12px] font-medium text-white disabled:opacity-50" disabled={correctionBusy} onClick={() => void submitCorrectionReview(false)}>{correctionBusy ? '处理中…' : '驳回'}</button>
+              <button className="rounded-lg bg-emerald-600 px-3.5 py-1.5 text-[12px] font-medium text-white disabled:opacity-50" disabled={correctionBusy} onClick={() => void submitCorrectionReview(true)}>{correctionBusy ? '处理中…' : '批准'}</button>
             </div>
           </div>
         </div>

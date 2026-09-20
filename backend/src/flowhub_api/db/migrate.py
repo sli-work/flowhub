@@ -76,6 +76,12 @@ async def migrate(conn: AsyncConnection) -> None:
             "WHERE created_at = '' AND id ~ '^T-[0-9]{20}-'"
         ))
         logger.info("migrate: tasks.created_at added & backfilled")
+    # task_corrections 在首版发布后新增提案人 ID。旧记录保留空值并按 proposer 名称
+    # 兼容判断，避免升级环境在审批或列表查询时缺列失败。
+    correction_columns = await _existing_columns(conn, "task_corrections")
+    if correction_columns and "proposer_id" not in correction_columns:
+        await conn.execute(text('ALTER TABLE task_corrections ADD COLUMN "proposer_id" VARCHAR(40) DEFAULT \'\''))
+        logger.info("migrate: task_corrections.proposer_id added")
     expert_columns = await _existing_columns(conn, "experts")
     expert_columns_to_add = {
         "description": "TEXT DEFAULT ''",
@@ -214,6 +220,9 @@ async def migrate(conn: AsyncConnection) -> None:
     if "task_id" not in ntf_cols:
         await conn.execute(text('ALTER TABLE notifications ADD COLUMN "task_id" VARCHAR(64) DEFAULT \'\''))
         logger.info("migrate: notifications.task_id 已补充")
+    if "correction_id" not in ntf_cols:
+        await conn.execute(text('ALTER TABLE notifications ADD COLUMN "correction_id" VARCHAR(40) DEFAULT \'\''))
+        logger.info("migrate: notifications.correction_id 已补充")
     # expert_runs.parsed：解析快照（{values, warnings}），前端预览与采纳幂等消费
     run_cols = await _existing_columns(conn, "expert_runs")
     if "parsed" not in run_cols:

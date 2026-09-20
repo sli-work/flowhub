@@ -62,6 +62,7 @@ class NotificationItem(Base):
     # 业务跳转目标：通知点击 → 对应工作项 / 任务（空则跳通知中心列表）
     wi_id: Mapped[str] = mapped_column(String(40), default="")
     task_id: Mapped[str] = mapped_column(String(64), default="")
+    correction_id: Mapped[str] = mapped_column(String(40), default="")
 
 
 class AuditRow(Base):

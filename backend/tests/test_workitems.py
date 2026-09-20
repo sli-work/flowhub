@@ -334,6 +334,96 @@ class TestTaskAppend:
         assert "必填" in r.json()["message"]
 
 
+class TestTaskCorrections:
+    def test_correction_requires_independent_human_review(self, client: TestClient, org_headers: dict):
+        wid, _, H_zw, _ = TestTaskAppend()._mk(client, org_headers)
+        start_task = client.get(f"/api/v1/work-items/{wid}", headers=H_zw).json()["data"]["tasks"][0]
+        proposed = client.post(f"/api/v1/tasks/{start_task['id']}/corrections", headers=H_zw, json={
+            "changes": {"description": "更正后的需求背景"}, "reason": "原需求描述遗漏关键范围",
+            "suggested_mode": "append",
+        })
+        assert proposed.status_code == 200, proposed.text
+        correction = proposed.json()["data"]["correction"]
+        assert correction["status"] == "pending_review"
+        assert correction["source"] == "human"
+
+        # 提案人不可自审；合格审核人能在“我的任务”的专用入口看到它。
+        assert correction["canReview"] is False
+        pending = client.get("/api/v1/tasks?status_group=correction_pending", headers=org_headers)
+        assert pending.status_code == 200, pending.text
+        assert pending.json()["data"]["stats"]["correctionPending"] == 1
+        assert pending.json()["data"]["items"][0]["id"] == start_task["id"]
+        assert pending.json()["data"]["items"][0]["pendingCorrection"]["id"] == correction["id"]
+        assert client.get("/api/v1/tasks?status_group=correction_pending", headers=H_zw).json()["data"]["total"] == 0
+
+        detail_for_reviewer = client.get(f"/api/v1/tasks/{start_task['id']}", headers=org_headers)
+        assert detail_for_reviewer.json()["data"]["corrections"][0]["canReview"] is True
+        notifications = client.get("/api/v1/notifications?page_size=100", headers=org_headers).json()["data"]["items"]
+        assert any(item["taskId"] == start_task["id"] and item["correctionId"] == correction["id"] and item["title"] == "待审核：已提交内容更正" for item in notifications)
+
+        self_review = client.post(f"/api/v1/tasks/corrections/{correction['id']}/review", headers=H_zw,
+                                  json={"approve": True, "mode": "append"})
+        assert self_review.status_code == 403
+
+        approved = client.post(f"/api/v1/tasks/corrections/{correction['id']}/review", headers=org_headers,
+                               json={"approve": True, "mode": "append", "notes": "确认属于补充更正"})
+        assert approved.status_code == 200, approved.text
+        assert approved.json()["data"]["correction"]["status"] == "applied"
+
+        rows = client.get(f"/api/v1/tasks/{start_task['id']}/corrections", headers=H_zw)
+        assert rows.status_code == 200
+        assert rows.json()["data"]["items"][0]["changes"]["description"] == "更正后的需求背景"
+
+    def test_approved_rework_stays_outside_main_flow(self, client: TestClient, org_headers: dict):
+        wid, _, H_zw, _ = TestTaskAppend()._mk(client, org_headers)
+        detail = client.get(f"/api/v1/work-items/{wid}", headers=H_zw).json()["data"]
+        start_task = detail["tasks"][0]
+        proposed = client.post(f"/api/v1/tasks/{start_task['id']}/corrections", headers=H_zw, json={
+            "changes": {"title": "返工后标题"}, "reason": "标题影响后续交付", "suggested_mode": "rework",
+        }).json()["data"]["correction"]
+        approved = client.post(f"/api/v1/tasks/corrections/{proposed['id']}/review", headers=org_headers,
+                               json={"approve": True, "mode": "rework"})
+        assert approved.status_code == 200, approved.text
+        assert approved.json()["data"]["correction"]["status"] == "rework_assigned"
+        tasks = client.get("/api/v1/tasks?page_size=100", headers=H_zw).json()["data"]["items"]
+        handler = next(task for task in tasks if task["wiId"] == wid and (task.get("source") or "").startswith("correction:"))
+        submitted = client.post(f"/api/v1/tasks/{handler['id']}/actions", headers=H_zw, json={
+            "action": "submit", "form_values": {"title": "返工后标题", "description": "pytest 发起的流程", "priority": "P2", "labels": ["pytest"]},
+        })
+        assert submitted.status_code == 200, submitted.text
+        assert submitted.json()["data"]["task"]["status"] == "completed"
+        correction = client.get(f"/api/v1/tasks/{start_task['id']}/corrections", headers=H_zw).json()["data"]["items"][0]
+        assert correction["status"] == "applied"
+
+
+class TestCompletedTaskReadAccess:
+    def test_work_item_participant_can_read_other_completed_task_but_outsider_cannot(self, client: TestClient, org_headers: dict):
+        wid, n2_id, H_zw, H_wf = TestTaskAppend()._mk(client, org_headers)
+        start_task = client.get(f"/api/v1/work-items/{wid}", headers=H_zw).json()["data"]["tasks"][0]
+
+        # 吴凡只处理当前 n2 节点，仍可回看张伟已完成的 n1 节点。
+        history = client.get(f"/api/v1/tasks/{start_task['id']}", headers=H_wf)
+        assert history.status_code == 200, history.text
+        assert history.json()["data"]["task"]["status"] == "completed"
+
+        # 历史放开是只读，不赋予其他节点的流转权限。
+        write = client.post(f"/api/v1/tasks/{start_task['id']}/actions", headers=H_wf, json={"action": "submit", "form_values": {}})
+        assert write.status_code == 409
+
+        correction = client.post(f"/api/v1/tasks/{start_task['id']}/corrections", headers=H_wf, json={
+            "changes": {"description": "不应由后续节点发起"}, "reason": "越权校验", "suggested_mode": "append",
+        })
+        assert correction.status_code == 403
+
+        H_sl = auth_headers(client.post("/api/v1/auth/login", json={"account": "sunlin", "password": "Demo@1234"}).json()["data"]["token"])
+        denied = client.get(f"/api/v1/tasks/{start_task['id']}", headers=H_sl)
+        assert denied.status_code == 403
+
+        # 当前处理任务本身仍可正常读取，避免测试仅覆盖历史路径。
+        assert client.get(f"/api/v1/tasks/{n2_id}", headers=H_wf).status_code == 200
+
+
+
 class TestWorkItemStop:
     def test_stop_flow(self, client: TestClient, leader_headers: dict, org_headers: dict, _created_project: str):
         """手动停止：权限拦截 → 停止后实例/任务/工作项全部终结 → 重复停止 409。"""

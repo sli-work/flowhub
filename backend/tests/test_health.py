@@ -57,6 +57,28 @@ class TestHealth:
         payload = json.loads(next(line.removeprefix("data: ") for line in initialized.text.splitlines() if line.startswith("data: ")))
         assert payload["result"]["serverInfo"]["name"] == "FlowHub"
 
+    def test_mcp_streamable_http_accepts_stale_session_after_restart(self, client: TestClient, org_headers: dict):
+        """Streamable HTTP must not strand a client when an in-memory server session disappears.
+
+        FlowHub tools are request-scoped and database-backed, so the transport is deliberately
+        stateless: a client may safely retain an old ``Mcp-Session-Id`` after a deploy/restart.
+        """
+        access_key = client.post(
+            "/api/v1/access-keys", headers=org_headers, json={"name": "Stateless MCP"},
+        ).json()["data"]["key"]["key"]
+        response = client.post(
+            "/api/v1/mcp/http/",
+            headers={
+                "Authorization": f"Bearer {access_key}",
+                "Accept": "application/json, text/event-stream",
+                "Mcp-Session-Id": "session-from-a-restarted-instance",
+            },
+            json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+        )
+        assert response.status_code == 200
+        payload = json.loads(next(line.removeprefix("data: ") for line in response.text.splitlines() if line.startswith("data: ")))
+        assert any(tool["name"] == "submit_task" for tool in payload["result"]["tools"])
+
 
 class TestExternalAgentDownloads:
     def test_download_origin_requires_explicit_public_base_url(self, monkeypatch):

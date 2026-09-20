@@ -101,9 +101,9 @@ async def get_work_item(
     tasks = (await session.execute(
         select(TaskItem).where(TaskItem.wi_id == wi_id).order_by(TaskItem.id)
     )).scalars().all()
-    from flowhub_api.services.agent_context import can_read_task
+    from flowhub_api.services.agent_context import can_read_work_item_history
     is_admin = any(role.id in {"system_admin", "organization_admin"} for role in user.roles)
-    if not is_admin and not any([await can_read_task(session, user, task) for task in tasks]):
+    if not is_admin and not await can_read_work_item_history(session, user, wi, tasks):
         raise BizError(BizCode.PERM_DENIED, "无权限读取该工作项", http_status=403)
     # 兼容 parent_task_id 尚未落库的历史拆分记录：审计里保存了父任务和 child IDs，
     # 在流程图响应中即时恢复关系；不按任务创建顺序猜测，避免误连普通串行任务。
@@ -142,10 +142,10 @@ async def list_work_item_issues(
     wi = await session.get(WorkItem, wi_id)
     if wi is None:
         raise BizError(BizCode.NOT_FOUND, "工作项不存在")
-    from flowhub_api.services.agent_context import can_read_task
+    from flowhub_api.services.agent_context import can_read_work_item_history
     tasks = (await session.execute(select(TaskItem).where(TaskItem.wi_id == wi_id))).scalars().all()
     is_admin = any(role.id in {"system_admin", "organization_admin"} for role in user.roles)
-    if not is_admin and not any([await can_read_task(session, user, task) for task in tasks]):
+    if not is_admin and not await can_read_work_item_history(session, user, wi, tasks):
         raise BizError(BizCode.PERM_DENIED, "无权限读取该工作项的问题记录", http_status=403)
     service = TaskIssueService(session)
     rows = (await session.execute(select(WorkflowIssue).where(WorkflowIssue.wi_id == wi_id).order_by(WorkflowIssue.created_at.desc()))).scalars().all()

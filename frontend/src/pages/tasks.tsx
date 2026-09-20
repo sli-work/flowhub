@@ -18,11 +18,12 @@ const STATUS_TABS = [
   { key: 'doing', label: '进行中', statKey: 'doing' },
   { key: 'submitted', label: '已提交', statKey: 'submitted' },
   { key: 'done', label: '已完成', statKey: 'done' },
+  { key: 'correction_pending', label: '更正待审批', statKey: 'correctionPending' },
 ] as const
 
 interface TaskStats {
   all: number; todo: number; doing: number; submitted: number; done: number
-  open: number; overdue: number; expertPending: number
+  open: number; overdue: number; expertPending: number; correctionPending: number
 }
 
 const SELECT_CLS =
@@ -50,6 +51,7 @@ function TaskRow({ t }: { t: TaskItem }) {
           {taskStatusBadge(t.status)}
           {t.overdue && <Badge tone="err" dot>已超时</Badge>}
           {t.expertPending && <Badge tone="pur" dot>Expert 待审批</Badge>}
+          {t.pendingCorrection && <Badge tone="warn" dot>更正待审批</Badge>}
           {t.frozen && <Badge tone="blk">冻结</Badge>}
         </div>
         {/* 次行：元信息（弱化展示） */}
@@ -72,7 +74,7 @@ function TaskRow({ t }: { t: TaskItem }) {
         </div>
       </div>
       <button
-        onClick={(e) => { e.stopPropagation(); openTask(t.id, t.wiId, t.title) }}
+        onClick={(e) => { e.stopPropagation(); openTask(t.id, t.wiId, t.title, t.pendingCorrection?.id) }}
         disabled={t.frozen}
         className={cn(
           'flex-none rounded-lg px-3 py-1.5 text-[12px] font-medium shadow-sm transition-colors',
@@ -80,7 +82,7 @@ function TaskRow({ t }: { t: TaskItem }) {
             ? 'cursor-not-allowed bg-slate-200 text-slate-400 dark:bg-slate-800'
             : 'bg-blue-600 text-white hover:bg-blue-700',
         )}>
-        {t.frozen ? '已冻结' : t.status === 'completed' ? '查看' : '去处理'}
+        {t.frozen ? '已冻结' : t.pendingCorrection ? '去审核' : t.status === 'completed' ? '查看' : '去处理'}
       </button>
       <ArrowRight className="h-4 w-4 flex-none text-slate-300" />
     </div>

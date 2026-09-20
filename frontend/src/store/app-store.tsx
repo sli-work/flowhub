@@ -35,6 +35,8 @@ interface AppState {
   /** 当前工作项 / 任务（详情页与「去处理」页按此拉取真实数据） */
   activeWiId: string | null
   activeTaskId: string | null
+  /** 从待审批列表/通知进入时自动打开的更正提案。 */
+  activeCorrectionId: string | null
   /** 当前处理任务的标题（顶栏 banner 显示，替代写死的「节点处理 · 测试」） */
   activeTaskTitle: string
   updateUser: (u: User) => void
@@ -46,7 +48,8 @@ interface AppState {
   openWorkItem: (wiId: string) => void
   /** 打开任务处理页（携带任务 ID，处理页按真实任务渲染；可同时指定所属工作项便于返回，
    *  title 用于顶栏 banner 即时显示任务标题，详情加载后以真实数据为准） */
-  openTask: (taskId: string, wiId?: string, title?: string) => void
+  openTask: (taskId: string, wiId?: string, title?: string, correctionId?: string) => void
+  clearActiveCorrection: () => void
   /** 处理页详情加载后回填任务标题（通知/工作项等入口未携带 title 时兜底） */
   setActiveTaskTitle: (t: string) => void
   login: () => void
@@ -94,6 +97,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [approvalTargetId, setApprovalTargetId] = useState<string | null>(null)
   const [activeWiId, setActiveWiId] = useState<string | null>(null)
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null)
+  const [activeCorrectionId, setActiveCorrectionId] = useState<string | null>(null)
   const [activeTaskTitle, setActiveTaskTitle] = useState('')
 
   /* 挂载时从后端拉取用户表（单一事实源：组织管理 ↔ 权限矩阵角色成员同步） */
@@ -132,13 +136,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   /** 打开任务处理页（携带任务 ID，处理页按真实任务渲染；可同时指定所属工作项便于返回，
    *  title 用于顶栏 banner 即时显示任务标题，详情加载后以真实数据为准） */
-  const openTask = useCallback((taskId: string, wiId?: string, title?: string) => {
+  const openTask = useCallback((taskId: string, wiId?: string, title?: string, correctionId?: string) => {
     setActiveTaskId(taskId)
+    setActiveCorrectionId(correctionId ?? null)
     if (wiId) setActiveWiId(wiId)
     setActiveTaskTitle(title ?? '')
     setPage('node')
     window.scrollTo({ top: 0 })
   }, [])
+  const clearActiveCorrection = useCallback(() => setActiveCorrectionId(null), [])
 
   /** 发布校验问题定位：跳转画布并高亮目标节点 */
   const locateCanvasNode = useCallback((nodeId: string) => {
@@ -177,6 +183,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setExpertEditorTarget(null)
     setActiveWiId(null)
     setActiveTaskId(null)
+    setActiveCorrectionId(null)
     setLocateNode(null)
     setCheckProblems([])
     setPage('tasks')
@@ -205,10 +212,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const value = useMemo(() => ({
-    authed, role, page, dialog, taskCounter, orgUsers, currentUser, locateNode, checkProblems, canvasTarget, approvalTargetId, activeWiId, activeTaskId, activeTaskTitle, expertEditorTarget,
-    navigate, openWorkItem, openTask, setActiveTaskTitle, login, logout, openDialog, closeDialog, openApproval, bumpTask,
+    authed, role, page, dialog, taskCounter, orgUsers, currentUser, locateNode, checkProblems, canvasTarget, approvalTargetId, activeWiId, activeTaskId, activeCorrectionId, activeTaskTitle, expertEditorTarget,
+    navigate, openWorkItem, openTask, clearActiveCorrection, setActiveTaskTitle, login, logout, openDialog, closeDialog, openApproval, bumpTask,
     updateUser, assignUserRoles, refreshOrgUsers, locateCanvasNode, setCheckProblems, openCanvas, updateCanvasVersion, openExpertEditor,
-  }), [authed, role, page, dialog, taskCounter, orgUsers, currentUser, locateNode, checkProblems, canvasTarget, approvalTargetId, activeWiId, activeTaskId, activeTaskTitle, expertEditorTarget, navigate, openWorkItem, openTask, login, logout, openDialog, closeDialog, openApproval, bumpTask, updateUser, assignUserRoles, refreshOrgUsers, locateCanvasNode, setCheckProblems, openCanvas, openExpertEditor])
+  }), [authed, role, page, dialog, taskCounter, orgUsers, currentUser, locateNode, checkProblems, canvasTarget, approvalTargetId, activeWiId, activeTaskId, activeCorrectionId, activeTaskTitle, expertEditorTarget, navigate, openWorkItem, openTask, clearActiveCorrection, login, logout, openDialog, closeDialog, openApproval, bumpTask, updateUser, assignUserRoles, refreshOrgUsers, locateCanvasNode, setCheckProblems, openCanvas, openExpertEditor])
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>
 }

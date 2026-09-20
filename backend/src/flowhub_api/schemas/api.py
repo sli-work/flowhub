@@ -127,6 +127,18 @@ class TaskActionReq(BaseModel):
     acceptance_checks: dict = {}
 
 
+class TaskCorrectionCreateReq(BaseModel):
+    changes: dict = Field(min_length=1)
+    reason: str = Field(min_length=1, max_length=4000)
+    suggested_mode: Literal["append", "rework"] = "append"
+
+
+class TaskCorrectionReviewReq(BaseModel):
+    approve: bool
+    mode: Literal["append", "rework"] = "append"
+    notes: str = Field(default="", max_length=2000)
+
+
 class TaskAdoptRunReq(BaseModel):
     """采纳指定 Expert Run 的产出回填节点表单。
     normalize=true 时先做 AI 二次格式修正（失败自动降级原解析）；

@@ -185,16 +185,16 @@ export function Sidebar() {
 }
 
 export function Topbar() {
-  const { page, logout, navigate, openDialog, openTask, openWorkItem, currentUser, orgUsers, activeTaskTitle } = useApp()
+  const { page, logout, navigate, openDialog, openTask, openWorkItem, currentUser, orgUsers, activeTaskTitle, canvasTarget } = useApp()
   const { resolvedTheme, setTheme } = useTheme()
   const [notifOpen, setNotifOpen] = useState(false)
   const [themeOpen, setThemeOpen] = useState(false)
   const [userOpen, setUserOpen] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchResults, setSearchResults] = useState<{ type: string; title: string; desc: string; to: string }[]>([])
-  const [notifications, setNotifications] = useState<{ id: string; title: string; body: string; time: string; unread: boolean; kind: string; failed?: boolean; wiId?: string; taskId?: string }[]>([])
+  const [notifications, setNotifications] = useState<{ id: string; title: string; body: string; time: string; unread: boolean; kind: string; failed?: boolean; wiId?: string; taskId?: string; correctionId?: string }[]>([])
   const loadNotifs = () => {
-    api.get<{ items: { id: string; title: string; body: string; time: string; unread: boolean; kind: string; failed?: boolean; wiId?: string; taskId?: string }[] }>('/api/v1/notifications?page_size=50')
+    api.get<{ items: { id: string; title: string; body: string; time: string; unread: boolean; kind: string; failed?: boolean; wiId?: string; taskId?: string; correctionId?: string }[] }>('/api/v1/notifications?page_size=50')
       .then((d) => setNotifications(d.items))
       .catch(() => {})
   }
@@ -246,9 +246,16 @@ export function Topbar() {
     matrix: ['权限矩阵', '系统管理 / 权限矩阵'],
     audit: ['审计中心', '系统管理 / 审计中心'],
   }
-  const [staticTitle, crumb] = titles[page]
+  const [staticTitle, staticCrumb] = titles[page]
+  // 画布页可由模板列表打开任一模板/版本；顶栏不能继续显示默认需求流程。
+  const canvasTitle = page === 'canvas' && canvasTarget
+    ? `流程画布 · ${canvasTarget.templateName} ${canvasTarget.version}`
+    : staticTitle
+  const crumb = page === 'canvas' && canvasTarget
+    ? `流程管理 / 流程模板 / ${canvasTarget.templateName} ${canvasTarget.version}`
+    : staticCrumb
   // 节点处理页顶栏显示真实任务标题（openTask 时携带，处理页数据就绪后由详情兜底）
-  const title = page === 'node' && activeTaskTitle ? `${staticTitle} · ${activeTaskTitle}` : staticTitle
+  const title = page === 'node' && activeTaskTitle ? `${staticTitle} · ${activeTaskTitle}` : canvasTitle
 
   const chooseTheme = (theme: ColorTheme) => {
     saveUserTheme(currentUser, theme)
@@ -345,7 +352,7 @@ export function Topbar() {
                   setNotifOpen(false)
                   if (n.unread) markRead(n.id)
                   if (n.kind === 'agent') openDialog('expertApproval')
-                  else if (n.kind === 'arrive' && n.taskId) openTask(n.taskId, n.wiId)
+                  else if (n.taskId) openTask(n.taskId, n.wiId, undefined, n.correctionId)
                   else if (n.wiId) openWorkItem(n.wiId)
                   else navigate('notif')
                 }}>

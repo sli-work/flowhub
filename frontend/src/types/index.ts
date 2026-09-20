@@ -79,6 +79,23 @@ export interface TaskItem {
   createdAt?: string
   /** 项目归档冻结：任务仅可查看，不可流转 */
   frozen?: boolean
+  /** 当前用户有权审核的、更正已提交内容的提案。 */
+  pendingCorrection?: TaskCorrection
+}
+
+/** 已完成任务的不可变更正提案；原始 formValues 始终保留。 */
+export interface TaskCorrection {
+  id: string
+  status: string
+  reason: string
+  changes: Record<string, unknown>
+  suggestedMode?: 'append' | 'rework'
+  appliedMode?: 'append' | 'rework'
+  source?: string
+  proposer?: string
+  createdAt?: string
+  /** 由服务端按当前用户计算；提案人始终为 false。 */
+  canReview?: boolean
 }
 
 export interface WorkflowIssue {
@@ -464,6 +481,7 @@ export interface NotificationItem {
   /** 业务跳转目标：点击通知 → 对应工作项 / 任务（空则跳通知中心列表） */
   wiId?: string
   taskId?: string
+  correctionId?: string
 }
 
 export interface AuditRow {
