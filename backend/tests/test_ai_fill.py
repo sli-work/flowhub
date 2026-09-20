@@ -3,6 +3,7 @@ import asyncio
 import json
 import time
 import uuid
+from types import SimpleNamespace
 
 import pytest
 
@@ -33,6 +34,78 @@ def test_parse_schema_output_coerces_and_maps():
     assert values["tags"] == ["p0", "p2"], "label 与 value 混合都应映射"
     assert values["report"] == "# 报告正文", "upload 字段保留正文，由调用方转文档"
     assert warnings == []
+
+
+def test_parse_schema_output_selects_balanced_schema_object_among_other_json():
+    """模型在正文附带诊断 JSON 时，仍应选中字段最多的节点产出对象。"""
+    from flowhub_api.services.expert_runtime import parse_schema_output
+
+    raw = (
+        '诊断信息：{"trace": "started"}\n'
+        '节点产出：{"conclusion": "结论", "verdict": "通过", "report": "# 报告"}\n'
+        '收尾信息：{"trace": "finished"}'
+    )
+
+    values, warnings = parse_schema_output(SCHEMA, raw)
+
+    assert values["conclusion"] == "结论"
+    assert values["verdict"] == "pass"
+    assert values["report"] == "# 报告"
+    assert warnings == []
+
+
+def test_parse_schema_output_unwraps_common_values_envelope():
+    """兼容模型常见的 {\"values\": {...}} 包装，避免无意义地进入修复轮。"""
+    from flowhub_api.services.expert_runtime import parse_schema_output
+
+    values, warnings = parse_schema_output(
+        SCHEMA,
+        '{"values": {"conclusion": "结论", "verdict": "pass", "report": "# 报告"}}',
+    )
+
+    assert values["conclusion"] == "结论"
+    assert values["verdict"] == "pass"
+    assert values["report"] == "# 报告"
+    assert warnings == []
+
+
+def test_parse_schema_output_keeps_python_literal_fallback_with_braces_in_text():
+    """兼容的单引号字典中出现花括号时，提取器不能截断候选对象。"""
+    from flowhub_api.services.expert_runtime import parse_schema_output
+
+    values, warnings = parse_schema_output(
+        SCHEMA,
+        "前言 {'conclusion': '含有 { 花括号的结论', 'verdict': 'pass', 'report': '# 报告'} 后缀",
+    )
+
+    assert values["conclusion"] == "含有 { 花括号的结论"
+    assert values["verdict"] == "pass"
+    assert warnings == []
+
+
+def test_schema_runs_request_native_json_object_mode():
+    """支持 OpenAI 兼容 JSON mode 的 Provider 必须在传输层强制返回 JSON。"""
+    from flowhub_api.services.runtime_model import make_model
+
+    received = {}
+
+    class RecordingModel:
+        async def ainvoke(self, _messages):
+            return None
+
+    def factory(**kwargs):
+        received.update(kwargs)
+        return RecordingModel()
+
+    make_model(
+        factory,
+        SimpleNamespace(model="test-model", max_context_tokens=None, max_output_tokens=None),
+        SimpleNamespace(base_url="https://example.test/v1", max_context_tokens=None),
+        "secret",
+        response_format={"type": "json_object"},
+    )
+
+    assert received["model_kwargs"]["response_format"] == {"type": "json_object"}
 
 
 def test_parse_schema_output_rejects_invalid_option():
@@ -257,6 +330,7 @@ def test_ai_fill_generates_values_and_document(client, org_headers, fake_model):
     assert any(x["id"] == run_id for x in runs), "重跑后的 Run 应出现在任务详情"
     new_run = next(x for x in runs if x["id"] == run_id)
     assert new_run["status"] == "succeeded"
+    assert new_run["parsed"]["formatStrategy"] == "native_json_object", "附件工具链完成后仍须走原生 JSON 输出约束"
     td = client.get(f"/api/v1/tasks/{task_id}", headers=headers).json()["data"]
     assert td["expertRuns"][0]["id"] == run_id, "最新 Run 应置顶"
     # 采纳新 Run 产出 → 回填表单

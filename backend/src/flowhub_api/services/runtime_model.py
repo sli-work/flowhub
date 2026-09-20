@@ -27,7 +27,17 @@ class BudgetedModel:
                 await close()
 
 
-def make_model(factory, model, provider, key, retries=2):
+def make_model(factory, model, provider, key, retries=2, response_format=None):
     budget = budget_for_model(model, provider)
-    return BudgetedModel(factory(model=model.model, base_url=provider.base_url, api_key=key,
-        temperature=0, timeout=120, max_retries=retries, max_tokens=budget.output_tokens), budget)
+    kwargs = {
+        "model": model.model,
+        "base_url": provider.base_url,
+        "api_key": key,
+        "temperature": 0,
+        "timeout": 120,
+        "max_retries": retries,
+        "max_tokens": budget.output_tokens,
+    }
+    if response_format is not None:
+        kwargs["model_kwargs"] = {"response_format": response_format}
+    return BudgetedModel(factory(**kwargs), budget)

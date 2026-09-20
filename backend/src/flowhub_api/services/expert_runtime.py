@@ -49,6 +49,17 @@ class RepoToolLoopUnavailable(RuntimeError):
     """The configured model/provider cannot accept FlowHub's tool schema."""
 
 
+_JSON_OBJECT_RESPONSE_FORMAT = {"type": "json_object"}
+
+
+def _json_mode_is_unsupported(exc: Exception) -> bool:
+    """Only retry without JSON mode for gateways that explicitly reject that option."""
+    message = str(exc).lower()
+    return any(marker in message for marker in (
+        "response_format", "json_object", "json mode", "json_mode", "unsupported parameter",
+    ))
+
+
 async def run_repo_tool_loop(llm, messages: list, bundle, *, on_trace: Callable[[dict], Awaitable[None]] | Callable[[dict], None] | None = None,
                              max_calls: int = MAX_REPO_TOOL_CALLS,
                              max_tool_tokens: int | None = None,
@@ -458,6 +469,7 @@ class GraphState(TypedDict, total=False):
     format_repair_attempted: bool
     format_repair_required: bool
     format_repair_error: str
+    format_strategy: str
     code_evidence: list[str]
 
 
@@ -636,6 +648,20 @@ def build_graph(provider: LlmProvider, model: LlmProviderModel, system_prompt: s
         # timeout 只约束"两次读到字节之间"的间隔而非总时长；子任务任务书+schema 的长生成实测 60-90s，
         # 15s 会在网关停顿时误杀 → 表现为"模型服务暂不可用"。放宽到 120s 并允许 2 次重试。
         llm = make_model(ChatOpenAI, model, provider, decrypt_secret(provider.api_key), retries=2)
+
+        async def invoke_schema_output(messages):
+            structured_llm = make_model(
+                ChatOpenAI, model, provider, decrypt_secret(provider.api_key), retries=2,
+                response_format=_JSON_OBJECT_RESPONSE_FORMAT,
+            )
+            try:
+                return await structured_llm.ainvoke(messages), "native_json_object"
+            except Exception as exc:
+                if not _json_mode_is_unsupported(exc):
+                    raise
+                await _emit("trace", {"kind": "format", "tool": "flowhub.output.json_mode", "status": "fallback",
+                                      "summary": "当前 Provider 不支持 JSON mode，已回退严格提示词与格式修复"})
+                return await llm.ainvoke(messages), "prompt_json_fallback"
         history = state.get("history") or []
         attempt_id = int(state.get("attempt", 0)) + 1
         started = time.monotonic()
@@ -710,6 +736,12 @@ def build_graph(provider: LlmProvider, model: LlmProviderModel, system_prompt: s
                                  for item in (ab.traces if ab is not None else []))
                     attachment_state = _attachment_state_from_bundle(ab) if ab is not None else {}
                     tool_evidence = "\n\n".join(bundle.evidence_context)[:MAX_REPO_TOOL_CONTEXT_CHARS]
+                    format_strategy = "tool_loop"
+                    if output_schema:
+                        response, format_strategy = await invoke_schema_output([(
+                            "human", build_json_format_repair_prompt(output_schema, output),
+                        )])
+                        output = str(response.content)
                     if emitter is not None and output:
                         await _emit("token", {"text": output, "attemptId": attempt_id})
                     await _emit("trace", {"kind": "model", "tool": "模型生成", "status": "succeeded", "summary": f"第 {attempt_id} 轮草稿生成完成",
@@ -717,7 +749,8 @@ def build_graph(provider: LlmProvider, model: LlmProviderModel, system_prompt: s
                     return {"output": output, "tool_trace": trace,
                             "flowhub_context": f"{state.get('flowhub_context', '')}\n\n{tool_evidence}".strip(),
                             "attempt": int(state.get("attempt", 0)) + 1, "code_evidence": code_evidence,
-                            "attachmentEvidence": attachment_state}
+                            "attachmentEvidence": attachment_state,
+                            "format_strategy": format_strategy}
             except RepoToolLoopUnavailable as exc:
                 trace.append({"tool": "flowhub.repo.tools", "status": "unavailable",
                               "summary": f"模型不支持仓库工具调用，已回退静态代码上下文：{str(exc)[:160]}"})
@@ -727,7 +760,10 @@ def build_graph(provider: LlmProvider, model: LlmProviderModel, system_prompt: s
                 trace.append({"tool": "flowhub.repo.tools", "status": "failed",
                               "summary": f"仓库工具循环失败，已回退静态代码上下文：{type(exc).__name__}"})
                 await _emit("trace", {"kind": "tool", **trace[-1]})
-        if emitter is not None and hasattr(getattr(llm, "inner", llm), "astream"):
+        if output_schema:
+            response, format_strategy = await invoke_schema_output(messages)
+            output = str(response.content)
+        elif emitter is not None and hasattr(getattr(llm, "inner", llm), "astream"):
             chunks: list[str] = []
             stream = llm.astream(messages)
             try:
@@ -746,8 +782,11 @@ def build_graph(provider: LlmProvider, model: LlmProviderModel, system_prompt: s
             output = str(response.content)
         await _emit("trace", {"kind": "model", "tool": "模型生成", "status": "succeeded", "summary": f"第 {attempt_id} 轮草稿生成完成",
                               "durationMs": round((time.monotonic() - started) * 1000)})
-        return {"output": output, "tool_trace": trace, "attempt": int(state.get("attempt", 0)) + 1,
-                "code_evidence": code_evidence}
+        result = {"output": output, "tool_trace": trace, "attempt": int(state.get("attempt", 0)) + 1,
+                  "code_evidence": code_evidence}
+        if output_schema:
+            result["format_strategy"] = format_strategy
+        return result
 
     async def validate_node(state: GraphState) -> dict:
         output = str(state.get("output") or "")
@@ -806,7 +845,19 @@ def build_graph(provider: LlmProvider, model: LlmProviderModel, system_prompt: s
         await _emit("trace", {"kind": "format", "tool": "flowhub.output.format_repair", "status": "running",
                               "summary": "正在将模型产出归位为节点 JSON"})
         try:
-            response = await llm.ainvoke([("human", build_json_format_repair_prompt(output_schema or [], original))])
+            repair_prompt = [("human", build_json_format_repair_prompt(output_schema or [], original))]
+            structured_llm = make_model(
+                ChatOpenAI, model, provider, decrypt_secret(provider.api_key), retries=1,
+                response_format=_JSON_OBJECT_RESPONSE_FORMAT,
+            )
+            try:
+                response = await structured_llm.ainvoke(repair_prompt)
+                repair_strategy = "native_json_object_repair"
+            except Exception as exc:
+                if not _json_mode_is_unsupported(exc):
+                    raise
+                response = await llm.ainvoke(repair_prompt)
+                repair_strategy = "prompt_json_repair_fallback"
             repaired = str(getattr(response, "content", "") or "")
             _values, warnings = parse_schema_output(output_schema or [], repaired)
             if any("不是 JSON" in warning or "无法解析" in warning for warning in warnings):
@@ -819,7 +870,7 @@ def build_graph(provider: LlmProvider, model: LlmProviderModel, system_prompt: s
         await _emit("trace", {"kind": "format", "tool": "flowhub.output.format_repair", "status": "succeeded",
                               "summary": "已生成可解析的节点 JSON"})
         return {"output": repaired, "format_repair_attempted": True, "format_repair_required": False,
-                "format_status": "repaired", "format_repair_error": ""}
+                "format_status": "repaired", "format_repair_error": "", "format_strategy": repair_strategy}
 
     def route_after_context(state: GraphState) -> str:
         return "approval" if state.get("write_intent") else "model"
@@ -1070,6 +1121,7 @@ async def _snapshot_parsed_for_task(session: AsyncSession, run: ExpertRun, graph
         format_status = 'invalid' if schema and any('不是 JSON' in w or '无法解析' in w for w in warnings) else 'valid'
     run.parsed = {'values': values, 'warnings': warnings, 'valid': not issues, 'validationIssues': issues,
                   'formatStatus': format_status,
+                  'formatStrategy': str(graph_result.get('format_strategy') or 'parser_only'),
                   'formatRepair': {'attempted': bool(graph_result.get('format_repair_attempted')),
                                    'error': str(graph_result.get('format_repair_error') or '')},
                   'codeAnalysis': ((run.config_snapshot or {}).get('codeAnalysis') or {})}
@@ -1223,12 +1275,43 @@ def _parse_json_block(block: str):
 
 
 def _candidate_blocks(raw: str) -> list[str]:
-    """候选 JSON 块：优先 ```json 围栏块，再兜底「首个 { 到最后一个 }」整段。"""
+    """提取独立 JSON 对象，避免正文中多个对象被错误拼成一个无效片段。"""
     blocks = [m.group(1) for m in re.finditer(r"```(?:json)?\s*(.*?)```", raw, re.S)]
-    start, end = raw.find("{"), raw.rfind("}")
-    if start >= 0 and end > start:
-        blocks.append(raw[start:end + 1])
+    depth = 0
+    start = -1
+    quote = ""
+    escaped = False
+    for index, char in enumerate(raw):
+        if quote:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = ""
+            continue
+        if char in ('"', "'"):
+            quote = char
+        elif char == "{":
+            if depth == 0:
+                start = index
+            depth += 1
+        elif char == "}" and depth:
+            depth -= 1
+            if depth == 0 and start >= 0:
+                blocks.append(raw[start:index + 1])
+                start = -1
     return blocks
+
+
+def _schema_payload_candidates(candidate: dict, schema_keys: set[str]) -> list[dict]:
+    """兼容 OpenAI 兼容网关常见的 values/data/result/output 单层包装。"""
+    candidates = [candidate]
+    for key in ("values", "data", "result", "output"):
+        nested = candidate.get(key)
+        if isinstance(nested, dict) and any(field in nested for field in schema_keys):
+            candidates.append(nested)
+    return candidates
 
 
 _TEXT_KEYS = ("content", "text", "markdown", "body", "value")
@@ -1291,11 +1374,12 @@ def parse_schema_output(schema: list[dict], raw: str) -> tuple[dict, list[str]]:
             candidate = candidate[0] if candidate and isinstance(candidate[0], dict) else None
         if not isinstance(candidate, dict):
             continue
-        score = sum(1 for k in schema_keys if k and k in candidate)
-        if score > best[0]:
-            best = (score, candidate)
-        if score == len(schema_keys):
-            break
+        for payload in _schema_payload_candidates(candidate, schema_keys):
+            score = sum(1 for k in schema_keys if k and k in payload)
+            if score > best[0]:
+                best = (score, payload)
+            if score == len(schema_keys):
+                break
     parsed = best[1]
     if parsed is None:
         return {}, ["模型输出不是 JSON，无法自动回填字段"]
