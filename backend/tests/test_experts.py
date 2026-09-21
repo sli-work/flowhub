@@ -43,6 +43,12 @@ def test_expert_lifecycle_with_interrupted_test_run(client, org_headers):
     approval = client.get("/api/v1/expert-approvals", headers=headers).json()["data"]["items"][0]
     assert client.post(f"/api/v1/expert-approvals/{approval['id']}/approve", headers=headers, json={"note": "approved"}).status_code == 200
     assert client.post(f"/api/v1/experts/{expert['expert']['id']}/versions/{version_id}/publish", headers=headers).status_code == 200
+    saved = client.patch(f"/api/v1/experts/{expert['expert']['id']}", headers=headers, json={
+        "description": "updated release expert", "system_prompt": "Summarize updated releases.",
+        "provider_model_id": model_id,
+    })
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["data"]["version"]["version"] == "v0.2"
     deployment_request = {"name": "release-test", "environment": "test", "alias": "release"}
     assert client.post(f"/api/v1/experts/{expert['expert']['id']}/deployments", headers=headers, json=deployment_request).status_code == 200
     deployment = client.get("/api/v1/expert-deployments", headers=headers).json()["data"]["items"][0]

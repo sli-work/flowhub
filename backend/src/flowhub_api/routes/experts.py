@@ -391,7 +391,9 @@ async def update_expert(expert_id: str, body: ExpertVersionReq, user: Annotated[
         raise BizError(BizCode.NOT_FOUND, "Expert 不存在或不可编辑")
     current = await session.get(ExpertVersion, expert.current_version_id) if expert.current_version_id else None
     if current and current.status == "published":
-        nums = [int(item.version[1:]) for item in (await session.execute(select(ExpertVersion.version).where(ExpertVersion.expert_id == expert_id))).scalars().all() if item.startswith("v") and item[1:].replace(".", "", 1).isdigit()]
+        nums = [float(item[1:]) for item in (await session.execute(
+            select(ExpertVersion.version).where(ExpertVersion.expert_id == expert_id)
+        )).scalars().all() if item.startswith("v") and item[1:].replace(".", "", 1).isdigit()]
         version = ExpertVersion(id=new_id("ev"), expert_id=expert_id, version=f"v{(max(nums) + 0.1 if nums else 0.1):.1f}", output_contract_json={}, execution_profile_json={}, knowledge_policy_json={}, memory_policy_json={}, policy_json={}, checksum="", published_by="", created_by=user.id, created_at=now_iso())
         session.add(version)
         expert.current_version_id = version.id
