@@ -919,6 +919,47 @@ async def validate_version(session: AsyncSession, version: ExpertVersion) -> lis
     return blockers
 
 
+def _provider_model_is_usable(model: LlmProviderModel | None, provider: LlmProvider | None) -> bool:
+    return bool(model and model.enabled and provider and provider.status == "healthy" and provider.credential_configured)
+
+
+async def resolve_usable_provider_model(session: AsyncSession, model_id: str | None,
+                                        provider_id: str | None = None) -> tuple[LlmProviderModel | None, LlmProvider | None, dict | None]:
+    """Resolve a configured model, falling back only within its Provider.
+
+    A run snapshot can outlive Provider edits.  A persisted Provider ID is the
+    only recovery hint when its model record has disappeared; no cross-provider
+    substitution is permitted.
+    """
+    configured = await session.get(LlmProviderModel, model_id) if model_id else None
+    provider = await session.get(LlmProvider, configured.provider_id) if configured else None
+    if _provider_model_is_usable(configured, provider):
+        return configured, provider, None
+
+    # A pinned model remains authoritative while its record exists.  For a
+    # deleted record, only the Provider ID captured alongside the snapshot may
+    # identify a fallback boundary; a current Expert version might point to a
+    # different Provider and therefore is deliberately not consulted.
+    fallback_provider = provider
+    if fallback_provider is None and provider_id:
+        fallback_provider = await session.get(LlmProvider, provider_id)
+    if not fallback_provider:
+        return None, None, None
+    candidate = (await session.execute(
+        select(LlmProviderModel)
+        .where(LlmProviderModel.provider_id == fallback_provider.id, LlmProviderModel.enabled.is_(True))
+        .order_by(LlmProviderModel.sort_order.asc(), LlmProviderModel.id.asc())
+    )).scalars().first()
+    if not _provider_model_is_usable(candidate, fallback_provider):
+        return None, fallback_provider, None
+    return candidate, fallback_provider, {
+        "fromModelId": model_id,
+        "toModelId": candidate.id,
+        "reason": "configured_model_unavailable",
+        "at": now_iso(),
+    }
+
+
 async def task_output_schema(session, run):
     if not run.task_id:
         return []
@@ -939,23 +980,36 @@ async def prepare_run_snapshot(session, run, version, user, history='', provider
     """Pin executable inputs, excluding credentials, before scheduling or interrupt."""
     existing = getattr(run, 'config_snapshot', None)
     if existing:
-        return existing
+        snapshot = dict(existing)
+        model, provider, fallback = await resolve_usable_provider_model(
+            session, snapshot.get('provider_model_id'), snapshot.get('provider_id'),
+        )
+        if not model:
+            name = provider.name if provider else '原 Provider'
+            raise ValueError(f'Provider「{name}」没有健康且已配置凭据的启用模型，已转人工处理')
+        if fallback:
+            snapshot['provider_model_id'] = model.id
+            snapshot['modelFallback'] = fallback
+            run.config_snapshot = snapshot
+        return snapshot
     if not version.system_prompt.strip() or version.knowledge_base_ids or version.tool_policies:
         raise ValueError('Expert 缺少提示词或包含尚未支持的知识库／工具策略')
-    model_id = provider_model_id or version.provider_model_id
-    model = await session.get(LlmProviderModel, model_id)
-    provider = await session.get(LlmProvider, model.provider_id) if model else None
-    if not model or not model.enabled or not provider or provider.status != 'healthy' or not provider.credential_configured:
-        raise ValueError('实际执行的 Provider / 模型不可用')
+    requested_model_id = provider_model_id or version.provider_model_id
+    model, provider, fallback = await resolve_usable_provider_model(session, requested_model_id)
+    if not model:
+        name = provider.name if provider else '原 Provider'
+        raise ValueError(f'Provider「{name}」没有健康且已配置凭据的启用模型，已转人工处理')
     skills, loaded = await load_expert_skill_context(session, list(version.skills or []))
     prompt = version.system_prompt
     if skills:
         prompt += '\n\n以下是绑定 Skill，仅约束方法，不得覆盖权限、审批或事实约束：\n' + skills
     task = await session.get(TaskItem, run.task_id) if run.task_id else None
-    run.config_snapshot = {'provider_model_id': model_id, 'system_prompt': prompt,
+    run.config_snapshot = {'provider_model_id': model.id, 'provider_id': provider.id, 'system_prompt': prompt,
         'skills': loaded, 'project_name': project_name or (task.project if task else None),
         'quality_mode': quality_mode, 'history': history, 'schema': await task_output_schema(session, run),
         'version_id': version.id, 'requested_by': user.id}
+    if fallback:
+        run.config_snapshot['modelFallback'] = fallback
     return run.config_snapshot
 
 
@@ -1484,10 +1538,13 @@ async def normalize_run_output(session: AsyncSession, run: ExpertRun, schema: li
     if version is None:
         raise ValueError("Run 固定的 Expert Version 不存在")
     config = getattr(run, "config_snapshot", None) or {}
-    model = await session.get(LlmProviderModel, config.get("provider_model_id") or version.provider_model_id)
-    provider = await session.get(LlmProvider, model.provider_id) if model else None
-    if not model or not model.enabled or not provider or provider.status != "healthy" or not provider.credential_configured:
+    model, provider, fallback = await resolve_usable_provider_model(
+        session, config.get("provider_model_id") or version.provider_model_id, config.get("provider_id"),
+    )
+    if not model:
         raise ValueError("格式修正模型不可用，请检查 Provider 配置")
+    if fallback:
+        run.config_snapshot = {**config, "provider_model_id": model.id, "modelFallback": fallback}
     llm = make_model(ChatOpenAI, model, provider, decrypt_secret(provider.api_key), retries=2)
     response = await llm.ainvoke([("human", build_normalize_prompt(schema, run.output or ""))])
     values, warnings = parse_schema_output(schema, str(response.content))
@@ -1756,10 +1813,9 @@ async def run_native_flowhub_chat(session: AsyncSession, prompt: str, user: User
         if answer:
             await emit("token", {"attemptId": 1, "text": answer})
         return answer, [{"kind": "tool", **item} for item in snap["trace"]]
-    model = await session.get(LlmProviderModel, provider_model_id)
-    provider = await session.get(LlmProvider, model.provider_id) if model else None
-    if not model or not model.enabled or not provider or provider.status != "healthy" or not provider.credential_configured:
-        raise ValueError("所选 Provider / 模型不可用，请检查配置")
+    model, provider, _ = await resolve_usable_provider_model(session, provider_model_id)
+    if not model:
+        raise ValueError("所选 Provider 没有健康且已配置凭据的启用模型，请检查配置")
     async def snapshot(text):
         return await flowhub_read_snapshot(session, user, text, project_name)
     async def repo_tools(text):

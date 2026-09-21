@@ -150,7 +150,7 @@ async def migrate(conn: AsyncConnection) -> None:
     for table, additions in {
         "expert_runs": {"config_snapshot": "JSON NOT NULL DEFAULT '{}'", "quality_result": "JSON NOT NULL DEFAULT '{}'", "execution_generation": "INTEGER NOT NULL DEFAULT 1"},
         "expert_chat_sessions": {"compaction_version": "INTEGER NOT NULL DEFAULT 0"},
-        "llm_provider_models": {"max_context_tokens": "INTEGER", "max_output_tokens": "INTEGER", "supports_vision": "BOOLEAN DEFAULT FALSE"},
+        "llm_provider_models": {"max_context_tokens": "INTEGER", "max_output_tokens": "INTEGER", "supports_vision": "BOOLEAN DEFAULT FALSE", "sort_order": "INTEGER NOT NULL DEFAULT 0"},
         "workflow_issues": {"attachments": "JSON NOT NULL DEFAULT '[]'", "description_doc": "JSON NOT NULL DEFAULT '{}'", "description_text": "TEXT NOT NULL DEFAULT ''"},
     }.items():
         existing = await _existing_columns(conn, table)

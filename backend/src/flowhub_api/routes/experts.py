@@ -21,7 +21,7 @@ from flowhub_api.services.context_budget import budget_for_model, prepare_sessio
 from flowhub_api.services.audit import AuditService
 from flowhub_api.services.crypto import decrypt_secret, encrypt_secret
 from flowhub_api.services.repo_mirror import can_user_read_project, schedule_mirror_build
-from flowhub_api.services.expert_runtime import chat_file_entry, execute_run, new_id, now_iso, resume_approved_run, run_native_flowhub_chat, save_chat_output_document, validate_version
+from flowhub_api.services.expert_runtime import chat_file_entry, execute_run, new_id, now_iso, resolve_usable_provider_model, resume_approved_run, run_native_flowhub_chat, save_chat_output_document, validate_version
 
 router = APIRouter(prefix="/api/v1", tags=["experts"])
 
@@ -278,7 +278,7 @@ def version_brief(version: ExpertVersion) -> dict:
 @router.get("/providers")
 async def list_providers(session: Annotated[AsyncSession, Depends(get_db)], _: Annotated[User, Depends(get_current_user)]):
     providers = (await session.execute(select(LlmProvider))).scalars().all()
-    models = (await session.execute(select(LlmProviderModel))).scalars().all()
+    models = (await session.execute(select(LlmProviderModel).order_by(LlmProviderModel.provider_id, LlmProviderModel.sort_order, LlmProviderModel.id))).scalars().all()
     return ok({"items": [{"id": item.id, "name": item.name, "provider": item.name, "engine": "api", "baseUrl": item.base_url, "credential": "configured" if item.credential_configured else "missing", "status": item.status, "maxContextTokens": item.max_context_tokens, "latency": "未检测", "models": [model.model for model in models if model.provider_id == item.id and model.enabled], "modelEntries": [{"id": model.id, "model": model.model, "maxContextTokens": model.max_context_tokens, "maxOutputTokens": model.max_output_tokens, "supportsVision": model.supports_vision} for model in models if model.provider_id == item.id and model.enabled]} for item in providers]})
 
 
@@ -288,8 +288,8 @@ async def create_provider(body: ProviderReq, user: Annotated[User, Depends(get_c
     provider = LlmProvider(id=new_id("llp"), name=body.name, base_url=body.base_url, api_key=encrypt_secret(body.api_key) if body.api_key else "", credential_configured=bool(body.api_key), status="healthy" if body.api_key else "degraded", max_context_tokens=body.max_context_tokens, created_by=user.id, created_at=now_iso())
     session.add(provider)
     created_models: list[LlmProviderModel] = []
-    for model in body.models:
-        created_model = LlmProviderModel(id=new_id("lpm"), provider_id=provider.id, model=model, label=model, supports_vision=model in body.vision_models)
+    for sort_order, model in enumerate(body.models):
+        created_model = LlmProviderModel(id=new_id("lpm"), provider_id=provider.id, model=model, label=model, sort_order=sort_order, supports_vision=model in body.vision_models)
         limits = body.model_limits.get(model)
         if limits:
             created_model.max_context_tokens = limits.max_context_tokens
@@ -329,20 +329,49 @@ async def update_provider(provider_id: str, body: ProviderReq, user: Annotated[U
         provider.credential_configured = True
         provider.status = "healthy"
     existing = (await session.execute(select(LlmProviderModel).where(LlmProviderModel.provider_id == provider_id))).scalars().all()
-    requested = {model.strip() for model in body.models if model.strip()}
+    requested = list(dict.fromkeys(model.strip() for model in body.models if model.strip()))
+    requested_order = {model: index for index, model in enumerate(requested)}
+    requested_names = set(requested)
     for model in existing:
-        model.enabled = model.model in requested
+        model.enabled = model.model in requested_names
+        if model.enabled:
+            model.sort_order = requested_order[model.model]
         limits = body.model_limits.get(model.model)
         if limits:
             model.max_context_tokens = limits.max_context_tokens
             model.max_output_tokens = limits.max_output_tokens
         model.supports_vision = model.model in body.vision_models
     existing_names = {model.model for model in existing}
-    for model_name in requested - existing_names:
+    for model_name in requested_names - existing_names:
         limits = body.model_limits.get(model_name)
-        session.add(LlmProviderModel(id=new_id("lpm"), provider_id=provider_id, model=model_name, label=model_name, max_context_tokens=limits.max_context_tokens if limits else None, max_output_tokens=limits.max_output_tokens if limits else None, supports_vision=model_name in body.vision_models))
+        session.add(LlmProviderModel(id=new_id("lpm"), provider_id=provider_id, model=model_name, label=model_name, sort_order=requested_order[model_name], max_context_tokens=limits.max_context_tokens if limits else None, max_output_tokens=limits.max_output_tokens if limits else None, supports_vision=model_name in body.vision_models))
+    await session.flush()
+    candidate, _, _ = await resolve_usable_provider_model(
+        session,
+        (await session.execute(
+            select(LlmProviderModel.id)
+            .where(LlmProviderModel.provider_id == provider_id, LlmProviderModel.enabled.is_(True))
+            .order_by(LlmProviderModel.sort_order.asc(), LlmProviderModel.id.asc())
+            .limit(1)
+        )).scalar_one_or_none(),
+    )
+    rebound_versions = 0
+    if candidate:
+        disabled_ids = [model.id for model in existing if not model.enabled]
+        if disabled_ids:
+            affected = (await session.execute(select(ExpertVersion).where(ExpertVersion.provider_model_id.in_(disabled_ids)))).scalars().all()
+            for version in affected:
+                previous_model_id = version.provider_model_id
+                version.provider_model_id = candidate.id
+                version.provider_snapshot = {**(version.provider_snapshot or {}), "modelFallback": {
+                    "fromModelId": previous_model_id, "toModelId": candidate.id,
+                    "reason": "provider_model_disabled", "at": now_iso(),
+                }}
+                rebound_versions += 1
+            if rebound_versions:
+                await AuditService(session).record(actor=user.name, action="expert:provider_model_fallback", target=provider.name, result="success", after={"reboundVersions": rebound_versions, "modelId": candidate.id, "model": candidate.model})
     await session.commit()
-    return ok({"provider": {"id": provider.id, "name": provider.name}}, "Provider 已更新")
+    return ok({"provider": {"id": provider.id, "name": provider.name}, "fallback": {"reboundVersions": rebound_versions, "modelId": candidate.id if candidate else None, "model": candidate.model if candidate else None}}, "Provider 已更新")
 
 
 @router.get("/experts")
@@ -661,10 +690,18 @@ async def _prepare_chat_history(session, chat, version, prompt, sequence):
         ExpertChatMessage.session_id == chat.id, ExpertChatMessage.sequence < sequence
     ).order_by(ExpertChatMessage.sequence))).scalars().all()
     model_id = chat.provider_model_id or (version.provider_model_id if version else None)
-    model = await session.get(LlmProviderModel, model_id) if model_id else (await session.execute(
-        select(LlmProviderModel).join(LlmProvider).where(LlmProviderModel.enabled.is_(True), LlmProvider.status == "healthy", LlmProvider.credential_configured.is_(True)).order_by(LlmProviderModel.id).limit(1)
-    )).scalars().first()
-    provider = await session.get(LlmProvider, model.provider_id) if model else None
+    if model_id:
+        model, provider, fallback = await resolve_usable_provider_model(session, model_id)
+        if not model:
+            name = provider.name if provider else "原 Provider"
+            raise ValueError(f"Provider「{name}」没有健康且已配置凭据的启用模型，请检查配置")
+        if fallback and chat.provider_model_id:
+            chat.provider_model_id = model.id
+    else:
+        model = (await session.execute(
+            select(LlmProviderModel).join(LlmProvider).where(LlmProviderModel.enabled.is_(True), LlmProvider.status == "healthy", LlmProvider.credential_configured.is_(True)).order_by(LlmProviderModel.sort_order, LlmProviderModel.id).limit(1)
+        )).scalars().first()
+        provider = await session.get(LlmProvider, model.provider_id) if model else None
     budget = budget_for_model(model, provider)
 
     async def summarize(messages, max_tokens):

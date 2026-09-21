@@ -1,10 +1,11 @@
 """Expert Runtime API contract tests."""
+import asyncio
 import io
 
 import pytest
 
 from flowhub_api.services.expert_runtime import (
-    MAX_QUALITY_ATTEMPTS, evidence_review_prompt, quality_policy, should_refine_answer,
+    MAX_QUALITY_ATTEMPTS, evidence_review_prompt, prepare_run_snapshot, quality_policy, resolve_usable_provider_model, should_refine_answer,
 )
 
 
@@ -79,6 +80,110 @@ def test_chat_session_persists_messages(client, org_headers):
     assert message.status_code == 200, message.text
     history = client.get(f"/api/v1/expert-chat/sessions/{chat['id']}/messages", headers=headers).json()["data"]["items"]
     assert [item["role"] for item in history] == ["user", "assistant"]
+
+
+def test_provider_model_change_rebinds_expert_to_first_healthy_model(client, org_headers):
+    """Editing a Provider must not leave its bound Experts pointing at a disabled model."""
+    headers = org_headers
+    provider = client.post("/api/v1/providers", headers=headers, json={
+        "name": "Fallback Provider", "base_url": "https://example.test/v1", "api_key": "test-key",
+        "models": ["old-model", "fallback-model"],
+    })
+    assert provider.status_code == 200, provider.text
+    old_model_id = provider.json()["data"]["provider"]["models"][0]["id"]
+    expert = client.post("/api/v1/experts", headers=headers, json={
+        "name": "Fallback Expert", "slug": "fallback-expert", "description": "fallback",
+        "system_prompt": "Always provide a summary.", "provider_model_id": old_model_id,
+    })
+    assert expert.status_code == 200, expert.text
+
+    updated = client.patch(f"/api/v1/providers/{provider.json()['data']['provider']['id']}", headers=headers, json={
+        "name": "Fallback Provider", "base_url": "https://example.test/v1",
+        "models": ["fallback-model"],
+    })
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["data"]["fallback"]["reboundVersions"] == 1
+    assert updated.json()["data"]["fallback"]["model"] == "fallback-model"
+
+    detail = client.get(f"/api/v1/experts/{expert.json()['data']['expert']['id']}", headers=headers)
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["data"]["versions"][0]["providerModelId"] == updated.json()["data"]["fallback"]["modelId"]
+    listed = client.get("/api/v1/providers", headers=headers).json()["data"]["items"]
+    fallback_provider = next(item for item in listed if item["name"] == "Fallback Provider")
+    assert fallback_provider["models"] == ["fallback-model"]
+
+    async def stale_snapshot_uses_same_provider_fallback() -> dict:
+        from flowhub_api.db.session import SessionFactory
+        from flowhub_api.models import ExpertRun, ExpertVersion, User
+
+        async with SessionFactory() as session:
+            version = await session.get(ExpertVersion, expert.json()["data"]["version"]["id"])
+            user = await session.get(User, "u2")
+            run = ExpertRun(id="run-stale-model", expert_id=expert.json()["data"]["expert"]["id"], expert_version_id=version.id,
+                            requested_by=user.id, trace_id="trace-stale-model", config_snapshot={"provider_model_id": old_model_id})
+            return await prepare_run_snapshot(session, run, version, user)
+
+    snapshot = asyncio.run(stale_snapshot_uses_same_provider_fallback())
+    assert snapshot["provider_model_id"] == updated.json()["data"]["fallback"]["modelId"]
+    assert snapshot["modelFallback"]["fromModelId"] == old_model_id
+
+
+def test_queued_run_with_no_provider_candidate_reports_manual_handling(client, org_headers):
+    """A stale queued snapshot must fail clearly instead of executing with no model."""
+    from flowhub_api.db.session import SessionFactory
+    from flowhub_api.models import ExpertRun, ExpertVersion, User
+
+    headers = org_headers
+    provider = client.post("/api/v1/providers", headers=headers, json={
+        "name": "No Candidate Provider", "base_url": "https://example.test/v1", "api_key": "test-key",
+        "models": ["only-model"],
+    }).json()["data"]["provider"]
+    expert = client.post("/api/v1/experts", headers=headers, json={
+        "name": "No Candidate Expert", "slug": "no-candidate-expert", "description": "manual fallback",
+        "system_prompt": "Provide a summary.", "provider_model_id": provider["models"][0]["id"],
+    }).json()["data"]
+    assert client.patch(f"/api/v1/providers/{provider['id']}", headers=headers, json={
+        "name": "No Candidate Provider", "base_url": "https://example.test/v1", "models": [],
+    }).status_code == 200
+
+    async def snapshot_error() -> str:
+        async with SessionFactory() as session:
+            version = await session.get(ExpertVersion, expert["version"]["id"])
+            user = await session.get(User, "u2")
+            run = ExpertRun(id="run-no-candidate", expert_id=expert["expert"]["id"], expert_version_id=version.id,
+                            requested_by=user.id, trace_id="trace-no-candidate", config_snapshot={"provider_model_id": provider["models"][0]["id"]})
+            try:
+                await prepare_run_snapshot(session, run, version, user)
+            except ValueError as exc:
+                return str(exc)
+            return ""
+
+    assert "已转人工处理" in asyncio.run(snapshot_error())
+
+
+def test_stale_snapshot_never_falls_back_to_a_different_provider(client, org_headers):
+    """A version rebinding elsewhere must not change a queued run's Provider boundary."""
+    from flowhub_api.db.session import SessionFactory
+
+    headers = org_headers
+    first = client.post("/api/v1/providers", headers=headers, json={
+        "name": "Snapshot Provider A", "base_url": "https://example.test/v1", "api_key": "test-key", "models": ["a-model"],
+    }).json()["data"]["provider"]
+    second = client.post("/api/v1/providers", headers=headers, json={
+        "name": "Snapshot Provider B", "base_url": "https://example.test/v1", "api_key": "test-key", "models": ["b-model"],
+    }).json()["data"]["provider"]
+    assert client.patch(f"/api/v1/providers/{first['id']}", headers=headers, json={
+        "name": "Snapshot Provider A", "base_url": "https://example.test/v1", "models": [],
+    }).status_code == 200
+
+    async def resolve() -> tuple[object, object]:
+        async with SessionFactory() as session:
+            model, provider, _ = await resolve_usable_provider_model(session, first["models"][0]["id"], second["models"][0]["id"])
+            return model, provider
+
+    model, provider = asyncio.run(resolve())
+    assert model is None
+    assert provider.name == "Snapshot Provider A"
 
 
 def test_default_chat_uses_native_flowhub_capabilities(client, org_headers):

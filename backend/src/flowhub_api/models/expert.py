@@ -30,6 +30,8 @@ class LlmProviderModel(Base):
     model: Mapped[str] = mapped_column(String(128))
     label: Mapped[str] = mapped_column(String(128), default="")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # The Provider editor's model order is the explicit automatic-fallback order.
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
     max_context_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     max_output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     supports_vision: Mapped[bool] = mapped_column(Boolean, default=False)
