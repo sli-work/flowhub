@@ -36,12 +36,12 @@ _MAX_MANIFEST_CHARS = 600
 _MAX_REPOS = 6
 _GRAPHIFY_MAX_PROMPT_CHARS = 2400
 _MAX_QUERY_SYMBOLS = 8
-REPO_TOOL_MAX_READ_LINES = 300
-REPO_TOOL_MAX_READ_CHARS = 16_000
-REPO_TOOL_MAX_SEARCH_RESULTS = 60
-REPO_TOOL_MAX_SEARCH_SCAN_RESULTS = 600
-REPO_TOOL_MAX_LIST_RESULTS = 300
-REPO_TOOL_MAX_DIFF_LINES = 300
+REPO_TOOL_MAX_READ_LINES = 160
+REPO_TOOL_MAX_READ_CHARS = 6_000
+REPO_TOOL_MAX_SEARCH_RESULTS = 20
+REPO_TOOL_MAX_SEARCH_SCAN_RESULTS = 200
+REPO_TOOL_MAX_LIST_RESULTS = 80
+REPO_TOOL_MAX_DIFF_LINES = 120
 GRAPHIFY_PREFLIGHT_MAX_CHARS = 12_000
 
 
@@ -419,7 +419,7 @@ async def project_repo_fingerprint(session: AsyncSession, project_name: str, *, 
 
 
 async def create_repo_tool_bundle(session: AsyncSession, project_name: str, *, user: User, query: str = "", allow_clone: bool = False,
-                                  include_preflight: bool = True) -> RepoToolBundle:
+                                  include_preflight: bool = True, refresh_existing: bool = True) -> RepoToolBundle:
     """Build Pi-style, project-scoped read-only tools for one LangGraph turn.
 
     The repository selection is closed over by this function.  The model can
@@ -437,12 +437,27 @@ async def create_repo_tool_bundle(session: AsyncSession, project_name: str, *, u
         .order_by(ProjectRepoBinding.id)
         .limit(_MAX_REPOS)
     )).all()
-    available: dict[str, tuple[Repo, ProjectRepoBinding, Path, str, set[str]]] = {}
+    prepared: list[tuple[ProjectRepoBinding, Repo, Path, RepoConnection | None]] = []
     for binding, repo in rows:
         mirror = mirror_dir(repo.id)
-        if not mirror.is_dir() and allow_clone:
+        should_sync = mirror.is_dir() and refresh_existing
+        should_clone = not mirror.is_dir() and allow_clone
+        connection = None
+        if should_sync or should_clone:
             connection = await session.get(RepoConnection, repo.connection_id)
-            mirror = await ensure_mirror(repo, connection) if connection else None
+        prepared.append((binding, repo, mirror, connection))
+
+    # Fetch repositories concurrently once per analysis run, then pin every
+    # tool to the refreshed commit.  Existing mirror locks prevent duplicate
+    # fetches when multiple runs inspect the same repository simultaneously.
+    refresh_targets = [(repo, connection) for _, repo, _, connection in prepared if connection is not None]
+    refreshed = await asyncio.gather(*(ensure_mirror(repo, connection) for repo, connection in refresh_targets)) if refresh_targets else []
+    refreshed_by_id = {repo.id: mirror for (repo, _), mirror in zip(refresh_targets, refreshed)}
+
+    available: dict[str, tuple[Repo, ProjectRepoBinding, Path, str, set[str]]] = {}
+    for binding, repo, mirror, connection in prepared:
+        if connection is not None:
+            mirror = refreshed_by_id.get(repo.id)
         if mirror is None or not mirror.is_dir():
             continue
         commit = await asyncio.to_thread(_mirror_commit, mirror)
@@ -506,17 +521,17 @@ async def create_repo_tool_bundle(session: AsyncSession, project_name: str, *, u
         )
         return json.dumps({"repository": repo.full_name, **result}, ensure_ascii=False)
 
-    async def list_files(repo: str = "", path: str = "", limit: int = 200) -> str:
+    async def list_files(repo: str = "", path: str = "", limit: int = REPO_TOOL_MAX_LIST_RESULTS) -> str:
         if not path.strip():
             raise RepoToolError("repo_list_files 必须指定已知目录；请先使用 Graphify、符号查询或定向搜索定位路径")
         selected, _, mirror, commit, _ = resolve(repo)
         return render("repo_list_files", selected, repo_list_files(mirror, commit, path=path or None, limit=limit))
 
-    async def find_files(pattern: str, repo: str = "", path: str = "", limit: int = 200) -> str:
+    async def find_files(pattern: str, repo: str = "", path: str = "", limit: int = REPO_TOOL_MAX_LIST_RESULTS) -> str:
         selected, _, mirror, commit, _ = resolve(repo)
         return render("repo_find_files", selected, repo_find_files(mirror, commit, pattern, path=path or None, limit=limit))
 
-    async def search(query: str, repo: str = "", path: str = "", glob: str = "", regex: bool = False, limit: int = 40) -> str:
+    async def search(query: str, repo: str = "", path: str = "", glob: str = "", regex: bool = False, limit: int = REPO_TOOL_MAX_SEARCH_RESULTS) -> str:
         selected, _, mirror, commit, _ = resolve(repo)
         return render("repo_search", selected, repo_search(mirror, commit, query, path=path or None, glob=glob or None, regex=regex, limit=limit))
 

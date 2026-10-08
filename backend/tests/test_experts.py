@@ -1,6 +1,7 @@
 """Expert Runtime API contract tests."""
 import asyncio
 import io
+from types import SimpleNamespace
 
 import pytest
 
@@ -30,6 +31,80 @@ def test_quality_loop_allows_initial_answer_and_two_revisions_only():
     assert should_refine_answer(2, ["格式不清晰"])
     assert not should_refine_answer(3, ["仍可改进"])
     assert not should_refine_answer(1, [])
+
+
+def test_fast_task_graph_uses_one_request_retry_and_never_starts_a_second_draft(monkeypatch):
+    """任务表单的快速策略应避免质量复写造成的第二轮模型调用。"""
+    from flowhub_api.services import expert_runtime
+
+    calls = []
+    invocations = []
+
+    class Completion:
+        content = '{"summary": "缺少必填字段"}'
+
+    class RecordingModel:
+        def __init__(self, **kwargs):
+            calls.append(kwargs)
+
+        async def ainvoke(self, _messages):
+            invocations.append(_messages)
+            return Completion()
+
+    monkeypatch.setattr(expert_runtime, "ChatOpenAI", RecordingModel)
+    monkeypatch.setattr(expert_runtime, "decrypt_secret", lambda _value: "test-key")
+    graph = expert_runtime.build_graph(
+        SimpleNamespace(api_key="encrypted", base_url="https://example.test/v1", max_context_tokens=None),
+        SimpleNamespace(model="test-model", max_context_tokens=None, max_output_tokens=None),
+        "填写表单",
+        quality_mode="fast",
+        generation_retries=1,
+        output_schema=[{"key": "conclusion", "label": "结论", "type": "textarea", "required": True}],
+    ).compile()
+
+    result = asyncio.run(graph.ainvoke({"prompt": "生成结论", "write_intent": False}))
+
+    assert result["attempt"] == 1
+    assert len(invocations) == 1
+    assert all(call["max_retries"] == 1 for call in calls)
+
+
+def test_fast_task_graph_keeps_one_retry_for_json_format_repair(monkeypatch):
+    """首轮 JSON 非法时，唯一的格式修复调用也使用任务快照的重试策略。"""
+    from flowhub_api.services import expert_runtime
+
+    calls = []
+    responses = iter(['不是 JSON', '{"conclusion": "已修复"}'])
+
+    class Completion:
+        def __init__(self, content):
+            self.content = content
+
+    class RecordingModel:
+        def __init__(self, **kwargs):
+            calls.append(kwargs)
+
+        async def ainvoke(self, _messages):
+            return Completion(next(responses))
+
+    monkeypatch.setattr(expert_runtime, "ChatOpenAI", RecordingModel)
+    monkeypatch.setattr(expert_runtime, "decrypt_secret", lambda _value: "test-key")
+    graph = expert_runtime.build_graph(
+        SimpleNamespace(api_key="encrypted", base_url="https://example.test/v1", max_context_tokens=None),
+        SimpleNamespace(model="test-model", max_context_tokens=None, max_output_tokens=None),
+        "填写表单",
+        quality_mode="fast",
+        generation_retries=1,
+        output_schema=[{"key": "conclusion", "label": "结论", "type": "textarea", "required": True}],
+    ).compile()
+
+    result = asyncio.run(graph.ainvoke({"prompt": "生成结论", "write_intent": False}))
+
+    repair_requests = [call for call in calls if call.get("model_kwargs")]
+    assert result["attempt"] == 1
+    assert result["output"] == '{"conclusion": "已修复"}'
+    assert [call["max_retries"] for call in repair_requests] == [1, 1]
+
 
 def test_expert_lifecycle_with_interrupted_test_run(client, org_headers):
     headers = org_headers

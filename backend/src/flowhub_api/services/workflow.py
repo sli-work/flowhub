@@ -791,6 +791,7 @@ class WorkflowService:
                 self.session, deployment_id, brief_text,
                 expert_user, task_id=new_task.id,
                 completion={"automatic": is_auto, "auto_depth": auto_depth},
+                quality_mode="fast", generation_retries=1, unbounded_output=True,
             )
         self.session.add(new_task)
         await self.session.flush()

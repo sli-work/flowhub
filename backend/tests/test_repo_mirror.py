@@ -1,6 +1,41 @@
 import json
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
+
+
+@pytest.mark.asyncio
+async def test_repo_tool_bundle_refreshes_an_existing_mirror_before_pinning_commit(tmp_path, monkeypatch):
+    from flowhub_api.services import repo_mirror
+
+    mirror = tmp_path / "repo.git"
+    mirror.mkdir()
+    repo = SimpleNamespace(id="repo-1", full_name="orders/api", connection_id="conn-1")
+    binding = SimpleNamespace(role="核心")
+    connection = SimpleNamespace(id="conn-1")
+
+    class Session:
+        async def execute(self, statement):
+            return SimpleNamespace(all=lambda: [(binding, repo)])
+
+        async def get(self, model, identity):
+            assert identity == "conn-1"
+            return connection
+
+    refresh = AsyncMock(return_value=mirror)
+    monkeypatch.setattr(repo_mirror, "can_user_read_project", AsyncMock(return_value=True))
+    monkeypatch.setattr(repo_mirror, "mirror_dir", lambda repo_id: mirror)
+    monkeypatch.setattr(repo_mirror, "ensure_mirror", refresh)
+    monkeypatch.setattr(repo_mirror, "_mirror_commit", lambda path: "abcdef123456")
+    monkeypatch.setattr(repo_mirror, "_run_git", lambda *args, **kwargs: SimpleNamespace(returncode=1, stdout="", stderr=""))
+
+    bundle = await repo_mirror.create_repo_tool_bundle(
+        Session(), "DRCC", user=SimpleNamespace(id="u1"), include_preflight=False,
+    )
+
+    refresh.assert_awaited_once_with(repo, connection)
+    assert bundle.tools
 
 
 def test_graphify_map_text_uses_symbols_and_relationships_with_a_prompt_budget(tmp_path):

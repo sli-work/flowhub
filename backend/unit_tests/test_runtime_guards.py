@@ -3,7 +3,7 @@ import pytest
 from flowhub_api.services.expert_runtime import run_repo_tool_loop, build_graph
 
 @pytest.mark.asyncio
-async def test_unknown_tools_exhaust_budget_and_summarize():
+async def test_unknown_tools_exhaust_round_ceiling_and_summarize():
     class Model:
         rounds = 0
         def bind_tools(self, tools): return self
@@ -12,7 +12,7 @@ async def test_unknown_tools_exhaust_budget_and_summarize():
             return SimpleNamespace(content='', tool_calls=[{'name': 'unknown', 'id': str(self.rounds), 'args': {}}])
     model = Model()
     bundle = SimpleNamespace(tools=[SimpleNamespace(name='known')])
-    answer, calls = await run_repo_tool_loop(model, [('human', 'test')], bundle, max_calls=2)
+    answer, calls = await run_repo_tool_loop(model, [('human', 'test')], bundle, max_rounds=2)
     assert model.rounds <= 4
     assert calls == 2
     assert answer

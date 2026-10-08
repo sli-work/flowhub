@@ -244,7 +244,7 @@ async def test_attachment_inspect_is_paginated_metadata_only(seeded, monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_tool_loop_reports_the_budget_that_is_exhausted():
+async def test_tool_loop_returns_model_summary_after_a_tool_round():
     from flowhub_api.services.expert_runtime import run_repo_tool_loop
 
     class Tool:
@@ -268,7 +268,7 @@ async def test_tool_loop_reports_the_budget_that_is_exhausted():
     trace = []
     output, used = await run_repo_tool_loop(
         Model(), [("human", "test")], SimpleNamespace(tools=[Tool()], traces=[]),
-        on_trace=trace.append, max_tool_tokens=10,
+        on_trace=trace.append,
     )
     assert used == 1 and output == "总结"
-    assert "token 预算已达 10/10" in trace[-1]["summary"]
+    assert [item["status"] for item in trace] == ["succeeded"]

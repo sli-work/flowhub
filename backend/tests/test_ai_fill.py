@@ -304,6 +304,27 @@ def test_task_expert_run_exposes_observable_stage_events(client, org_headers, fa
     assert all("createdAt" in event and "title" in event for event in events)
 
 
+def test_task_expert_runs_use_one_draft_for_arrival_and_manual_rerun(client, org_headers, fake_model):
+    """任务到达和手动重跑均为 fast：字段校验不足不触发第二轮草稿。"""
+    headers = org_headers
+    _model_id, dep_id = _publish_expert_with_deployment(client, headers, "fill-dep-fast-task-runs")
+    tpl_id = _publish_flow_template(client, headers, dep_id)
+    pid = _make_project(client, headers, tpl_id, "v1", [])
+    FakeChatOpenAI.payload = json.dumps({"report": "# 缺少必填字段"})
+    calls_before_task_run = FakeChatOpenAI.calls
+    wi_id = _create_wi(client, headers, pid, tpl_id, "Expert 单轮生成")
+    task_id = _get_open_tasks(client, headers, wi_id)[0]["id"]
+
+    runs = _wait_run_succeeded(client, headers, task_id)
+    assert runs and runs[0]["status"] == "succeeded"
+    assert FakeChatOpenAI.calls == calls_before_task_run + 1
+
+    rerun = client.post(f"/api/v1/tasks/{task_id}/ai-fill", headers=headers, json={})
+    assert rerun.status_code == 200, rerun.text
+    _wait_run_succeeded(client, headers, task_id)
+    assert FakeChatOpenAI.calls == calls_before_task_run + 2
+
+
 def test_ai_fill_generates_values_and_document(client, org_headers, fake_model):
     headers = org_headers
     model_id, dep_id = _publish_expert_with_deployment(client, headers, "fill-dep-1")
@@ -359,7 +380,7 @@ def test_non_json_run_is_retained_but_cannot_be_adopted(client, org_headers, fak
     task_id = _get_open_tasks(client, headers, wi_id)[0]["id"]
 
     runs = _wait_run_succeeded(client, headers, task_id)
-    assert runs and runs[0]["status"] == "succeeded"
+    assert runs and runs[0]["status"] == "failed"
     run = runs[0]
     assert run["output"] == FakeChatOpenAI.payload
     assert run["parsed"]["formatStatus"] == "invalid"
@@ -368,7 +389,7 @@ def test_non_json_run_is_retained_but_cannot_be_adopted(client, org_headers, fak
 
     adopted = client.post(f"/api/v1/tasks/{task_id}/adopt-run", headers=headers, json={"run_id": run["id"]})
     assert adopted.status_code == 422
-    assert "JSON" in adopted.json()["message"]
+    assert "failed" in adopted.json()["message"]
     docs = client.get(f"/api/v1/documents?wi={wi_id}", headers=headers).json()["data"]["items"]
     assert docs == []
 

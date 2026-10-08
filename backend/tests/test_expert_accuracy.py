@@ -9,6 +9,7 @@ import pytest
 
 from flowhub_api.services.expert_runtime import (
     build_repair_instruction,
+    compact_schema_retry_messages,
     code_evidence_issues,
     extract_entity_ids,
     _skill_markdown_from_archive,
@@ -55,6 +56,49 @@ def test_code_answer_explicitly_handles_projects_without_a_repository():
     assert not code_evidence_issues("这个项目代码怎么改", evidence, "该项目未绑定代码仓库；以下基于任务上下文分析，未经过代码实现验证。")
 
 
+def test_repo_backed_delivery_plan_cannot_pass_with_a_generic_template():
+    evidence = "【代码证据｜orders/api｜commit abcdef123456】\n命中符号：create_order（function｜src/orders.py:L12）"
+
+    issues = code_evidence_issues(
+        "根据仓库给出本次开发范围、实施方案和冒烟用例",
+        evidence,
+        "## 项目范围\n- 功能1：用户登录\n- 功能2：商品列表\n\n## 项目用例\n采购后生成文档",
+    )
+
+    assert issues == ["代码结论缺少 [repo@commit:file:L行号 symbol] 证据引用。"]
+
+
+def test_compact_schema_retry_keeps_required_field_contract():
+    messages = [("system", "原始系统提示"), ("human", "为当前任务生成产出")]
+    compact = compact_schema_retry_messages([
+        {"key": "plan", "label": "任务计划", "type": "textarea", "required": True},
+        {"key": "priority", "label": "优先级", "type": "select", "required": True,
+         "options": [{"label": "高", "value": "high"}]},
+    ], messages)
+
+    assert "plan（任务计划，必填" in compact[0][1]
+    assert "priority（优先级，必填" in compact[0][1]
+    assert "当前任务" in compact[1][1]
+
+
+@pytest.mark.asyncio
+async def test_task_snapshot_uses_only_the_inherited_work_item_context():
+    from flowhub_api.services.expert_runtime import flowhub_read_snapshot
+
+    class Session:
+        async def execute(self, statement):
+            raise AssertionError("节点 Expert 不应查询当前用户全部任务")
+
+    result = await flowhub_read_snapshot(
+        Session(), SimpleNamespace(name="李松", roles=[]), "生成开发方案",
+        task_context="【工作项信息】\n当前工作项及其已完成前序节点",
+    )
+
+    assert result["context"] == "【工作项信息】\n当前工作项及其已完成前序节点"
+    assert result["pre_answer"] == ""
+    assert result["trace"][0]["tool"] == "flowhub.task.context"
+
+
 def test_quality_review_accepts_only_an_explicit_clean_pass():
     assert parse_quality_review('{"pass": true, "issues": []}') == (True, [], "passed")
     passed, issues, status = parse_quality_review('{"pass": true, "issues": ["证据不足"]}')
@@ -75,6 +119,53 @@ def test_skill_archive_is_read_in_memory_without_extracting_files():
         zipped.writestr("review/SKILL.md", "# Review\n只依据证据输出结论")
 
     assert _skill_markdown_from_archive(archive.getvalue(), "zip") == "# Review\n只依据证据输出结论"
+
+
+def test_budgeted_model_can_cap_tool_selection_output_without_changing_the_model():
+    from flowhub_api.services.context_budget import ContextBudget
+    from flowhub_api.services.runtime_model import BudgetedModel
+
+    class Inner:
+        def __init__(self, options=None):
+            self.options = options or {}
+
+        def bind(self, **options):
+            return Inner({**self.options, **options})
+
+    constrained = BudgetedModel(Inner(), ContextBudget(32_000, 4_096, "test-model")).with_max_output_tokens(1_024)
+
+    assert constrained.inner.options["max_tokens"] == 1_024
+    assert constrained.budget.output_tokens == 1_024
+    assert constrained.budget.context_tokens == 32_000
+
+
+def test_task_model_omits_request_output_cap_when_provider_owns_the_limit():
+    from flowhub_api.services.runtime_model import make_model
+
+    class Factory:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    result = make_model(
+        Factory,
+        SimpleNamespace(model="test-model", max_context_tokens=32_000, max_output_tokens=4_096),
+        SimpleNamespace(base_url="https://example.test", max_context_tokens=32_000),
+        "test-key",
+        send_max_tokens=False,
+    )
+
+    assert "max_tokens" not in result.inner.kwargs
+
+
+def test_empty_optional_schema_output_is_invalid_for_expert_delivery():
+    from flowhub_api.services.expert_runtime import expert_schema_output_issues
+
+    issues = expert_schema_output_issues(
+        [{"key": "smoke_scope", "label": "冒烟范围", "type": "textarea", "required": False}],
+        {},
+    )
+
+    assert issues == ["模型未生成任何可回填字段"]
 
 
 @pytest.mark.asyncio
@@ -116,7 +207,7 @@ async def test_repo_tool_loop_returns_tool_evidence_to_the_model_and_records_tra
 
 
 @pytest.mark.asyncio
-async def test_repo_tool_loop_stops_when_the_call_budget_is_exhausted():
+async def test_repo_tool_loop_continues_beyond_legacy_call_budget_until_model_finishes():
     from flowhub_api.services.expert_runtime import run_repo_tool_loop
 
     class Tool:
@@ -140,13 +231,259 @@ async def test_repo_tool_loop_stops_when_the_call_budget_is_exhausted():
             )
 
     trace = []
+    class FinishingModel(Model):
+        async def ainvoke(self, messages):
+            self.calls += 1
+            if self.calls > 10:
+                return SimpleNamespace(content="已完成十次取证后的结论", tool_calls=[])
+            return SimpleNamespace(
+                content="",
+                tool_calls=[{"id": f"call-{self.calls}", "name": "repo_search", "args": {"query": "x"}}],
+            )
+
     output, used = await run_repo_tool_loop(
-        Model(), [("human", "查代码")], SimpleNamespace(tools=[Tool()], traces=[]), on_trace=trace.append, max_calls=1,
+        FinishingModel(), [("human", "查代码")], SimpleNamespace(tools=[Tool()], traces=[]), on_trace=trace.append,
+    )
+
+    assert used == 10
+    assert output == "已完成十次取证后的结论"
+    assert all(item["status"] == "succeeded" for item in trace)
+
+
+@pytest.mark.asyncio
+async def test_repo_tool_loop_semantically_compacts_at_provider_context_window():
+    from flowhub_api.services.context_budget import ContextBudget
+    from flowhub_api.services.expert_runtime import run_repo_tool_loop
+
+    class Tool:
+        name = "repo_search"
+
+        async def ainvoke(self, args):
+            return "evidence " * 80
+
+    class Model:
+        def __init__(self):
+            self.calls = 0
+            self.budget = ContextBudget(1_200, 100, "")
+
+        def bind_tools(self, tools):
+            return self
+
+        async def ainvoke(self, messages):
+            if any("压缩工具取证" in str(message) for message in messages):
+                return SimpleNamespace(content="保留：repo_search 已读取与问题相关的代码证据。", tool_calls=[])
+            self.calls += 1
+            if self.calls > 12:
+                return SimpleNamespace(content="基于压缩后的证据完成结论", tool_calls=[])
+            return SimpleNamespace(content="", tool_calls=[{
+                "id": f"call-{self.calls}", "name": "repo_search", "args": {"query": "x"},
+            }])
+
+    trace = []
+    output, used = await run_repo_tool_loop(
+        Model(), [("human", "查代码")], SimpleNamespace(tools=[Tool()], traces=[]), on_trace=trace.append,
+    )
+
+    assert used == 12
+    assert output == "基于压缩后的证据完成结论"
+    assert any(item["tool"] == "flowhub.repo.context_compaction" for item in trace)
+
+
+@pytest.mark.asyncio
+async def test_repo_tool_loop_recovers_from_model_length_finish_with_a_plain_summary():
+    from flowhub_api.services.expert_runtime import run_repo_tool_loop
+
+    class Tool:
+        name = "repo_search"
+
+        async def ainvoke(self, args):
+            return "src/orders.py:L12 def create_order"
+
+    class ToolBoundModel:
+        def __init__(self):
+            self.calls = 0
+
+        async def ainvoke(self, messages):
+            self.calls += 1
+            if self.calls == 1:
+                return SimpleNamespace(content="", tool_calls=[{
+                    "id": "call-1", "name": "repo_search", "args": {"query": "create_order"},
+                }])
+            raise RuntimeError("LengthFinishReasonError")
+
+    class Model:
+        def __init__(self):
+            self.tool_model = ToolBoundModel()
+            self.summary_messages = []
+
+        def bind_tools(self, tools):
+            return self.tool_model
+
+        async def ainvoke(self, messages):
+            self.summary_messages = messages
+            return SimpleNamespace(content="基于已读取的代码证据完成总结。", tool_calls=[])
+
+    model = Model()
+    trace = []
+    output, used = await run_repo_tool_loop(
+        model, [("human", "查 create_order")], SimpleNamespace(tools=[Tool()], traces=[]), on_trace=trace.append,
     )
 
     assert used == 1
-    assert "安全上限" in output
-    assert [item["status"] for item in trace] == ["succeeded", "blocked"]
+    assert "Provider 输出长度上限" in output
+    assert any("长度上限" in item["summary"] for item in trace)
+    assert model.summary_messages == []
+
+
+@pytest.mark.asyncio
+async def test_repo_tool_loop_recovers_when_gateway_returns_length_finish_reason():
+    from flowhub_api.services.expert_runtime import run_repo_tool_loop
+
+    class ToolBoundModel:
+        async def ainvoke(self, messages):
+            return SimpleNamespace(content="截断内容", tool_calls=[], response_metadata={"finish_reason": "length"})
+
+    class Model:
+        def bind_tools(self, tools):
+            return ToolBoundModel()
+
+        async def ainvoke(self, messages):
+            return SimpleNamespace(content="基于已有证据的简短总结", tool_calls=[])
+
+    trace = []
+    output, used = await run_repo_tool_loop(
+        Model(), [("human", "查代码")], SimpleNamespace(tools=[SimpleNamespace(name="repo_search")], traces=[]),
+        on_trace=trace.append,
+    )
+
+    assert used == 0
+    assert output == "截断内容"
+    assert any("长度上限" in item["summary"] for item in trace)
+
+
+@pytest.mark.asyncio
+async def test_repo_tool_loop_requires_one_repository_read_for_structured_delivery():
+    from flowhub_api.services.expert_runtime import run_repo_tool_loop
+
+    class Tool:
+        name = "repo_search"
+
+        async def ainvoke(self, args):
+            return "src/orders.py:L12 def create_order"
+
+    class Model:
+        def __init__(self):
+            self.calls = 0
+
+        def bind_tools(self, tools):
+            return self
+
+        async def ainvoke(self, messages):
+            self.calls += 1
+            if self.calls == 1:
+                return SimpleNamespace(content="通用模板", tool_calls=[])
+            if self.calls == 2:
+                return SimpleNamespace(content="", tool_calls=[{
+                    "id": "call-1", "name": "repo_search", "args": {"query": "create_order"},
+                }])
+            return SimpleNamespace(content="基于仓库证据的交付结果", tool_calls=[])
+
+    output, used = await run_repo_tool_loop(
+        Model(), [("human", "生成开发方案")], SimpleNamespace(tools=[Tool()], traces=[]),
+        require_tool_evidence=True,
+    )
+
+    assert used == 1
+    assert output == "基于仓库证据的交付结果"
+
+
+@pytest.mark.asyncio
+async def test_repo_tool_loop_rejects_structured_delivery_when_model_ignores_evidence_reminder():
+    from flowhub_api.services.expert_runtime import run_repo_tool_loop
+
+    class Tool:
+        name = "repo_search"
+
+    class Model:
+        def bind_tools(self, tools):
+            return self
+
+        async def ainvoke(self, messages):
+            return SimpleNamespace(content="通用模板", tool_calls=[])
+
+    trace = []
+    output, used = await run_repo_tool_loop(
+        Model(), [("human", "生成开发方案")], SimpleNamespace(tools=[Tool()], traces=[]),
+        require_tool_evidence=True, on_trace=trace.append,
+    )
+
+    assert used == 0
+    assert "未完成最小仓库取证" in output
+    assert trace[-1]["status"] == "blocked"
+
+
+@pytest.mark.asyncio
+async def test_repo_tool_loop_does_not_treat_attachment_or_failed_read_as_repository_evidence():
+    from flowhub_api.services.expert_runtime import run_repo_tool_loop
+
+    class AttachmentTool:
+        name = "flowhub_attachment_read"
+
+        async def ainvoke(self, args):
+            return "attachment text"
+
+    class FailedRepoTool:
+        name = "repo_search"
+
+        async def ainvoke(self, args):
+            raise RuntimeError("mirror unavailable")
+
+    class Model:
+        def __init__(self):
+            self.calls = 0
+
+        def bind_tools(self, tools):
+            return self
+
+        async def ainvoke(self, messages):
+            self.calls += 1
+            if self.calls == 1:
+                return SimpleNamespace(content="", tool_calls=[
+                    {"id": "attachment", "name": "flowhub_attachment_read", "args": {}},
+                    {"id": "repo", "name": "repo_search", "args": {"query": "create_order"}},
+                ])
+            return SimpleNamespace(content="通用模板", tool_calls=[])
+
+    output, used = await run_repo_tool_loop(
+        Model(), [("human", "生成开发方案")],
+        SimpleNamespace(tools=[AttachmentTool(), FailedRepoTool()], traces=[]), require_tool_evidence=True,
+    )
+
+    assert used == 2
+    assert "未完成最小仓库取证" in output
+
+
+@pytest.mark.asyncio
+async def test_repo_tool_loop_rejects_structured_delivery_when_length_stops_before_evidence():
+    from flowhub_api.services.expert_runtime import run_repo_tool_loop
+
+    class Tool:
+        name = "repo_search"
+
+    class Model:
+        def bind_tools(self, tools):
+            return self
+
+        async def ainvoke(self, messages):
+            raise RuntimeError("LengthFinishReasonError")
+
+    output, used = await run_repo_tool_loop(
+        Model(), [("human", "生成开发方案")], SimpleNamespace(tools=[Tool()], traces=[]),
+        require_tool_evidence=True,
+    )
+
+    assert used == 0
+    assert "未完成最小仓库取证" in output
 
 
 @pytest.mark.asyncio
@@ -168,6 +505,123 @@ async def test_repo_tool_loop_keeps_graphify_preflight_evidence_without_spending
 
     assert output == "基于图谱回答"
     assert used == 0
+
+
+@pytest.mark.asyncio
+async def test_repo_tool_loop_stops_at_the_tool_round_ceiling():
+    """工具封顶后必须基于已取证内容进行一次无工具的最终生成。"""
+    from flowhub_api.services.expert_runtime import run_repo_tool_loop
+
+    class Tool:
+        name = "repo_search"
+
+        async def ainvoke(self, args):
+            return "src/orders.py:L12 def create_order"
+
+    class Model:
+        def __init__(self):
+            self.calls = 0
+
+        def bind_tools(self, tools):
+            return self
+
+        async def ainvoke(self, messages):
+            self.calls += 1
+            if any("工具预算已用尽" in str(message) for message in messages):
+                return SimpleNamespace(content="基于 src/orders.py:L12 的测试方案", tool_calls=[])
+            return SimpleNamespace(content="", tool_calls=[{
+                "id": f"call-{self.calls}", "name": "repo_search", "args": {"query": "x"},
+            }])
+
+    model = Model()
+    trace = []
+    output, used = await run_repo_tool_loop(
+        model, [("human", "查代码")], SimpleNamespace(tools=[Tool()], traces=[]),
+        on_trace=trace.append, max_rounds=3,
+    )
+
+    assert used == 3
+    assert model.calls == 4, "3 轮工具调用后，直接在禁用工具的第 4 次调用中生成最终结论"
+    assert output == "基于 src/orders.py:L12 的测试方案"
+    assert trace[-1]["tool"] == "flowhub.repo.tools"
+    assert trace[-1]["status"] == "blocked"
+    assert "最终生成" in trace[-1]["summary"]
+
+
+@pytest.mark.asyncio
+async def test_repo_tool_loop_never_executes_more_than_the_tool_call_ceiling():
+    """单个模型响应包含大量调用时，任务分析仍必须限制实际工具执行数。"""
+    from flowhub_api.services.expert_runtime import run_repo_tool_loop
+
+    class Tool:
+        name = "repo_search"
+
+        def __init__(self):
+            self.calls = 0
+
+        async def ainvoke(self, args):
+            self.calls += 1
+            return f"evidence-{self.calls}"
+
+    class Model:
+        def __init__(self):
+            self.calls = 0
+
+        def bind_tools(self, tools):
+            return self
+
+        async def ainvoke(self, messages):
+            self.calls += 1
+            if any("工具预算已用尽" in str(message) for message in messages):
+                return SimpleNamespace(content="基于已读取证据完成交付", tool_calls=[])
+            return SimpleNamespace(content="", tool_calls=[
+                {"id": f"call-{index}", "name": "repo_search", "args": {"query": str(index)}}
+                for index in range(5)
+            ])
+
+    tool = Tool()
+    output, used = await run_repo_tool_loop(
+        Model(), [("human", "查代码")], SimpleNamespace(tools=[tool], traces=[]),
+        max_calls=2,
+    )
+
+    assert used == 2
+    assert tool.calls == 2
+    assert output == "基于已读取证据完成交付"
+
+
+@pytest.mark.asyncio
+async def test_repo_tool_loop_tool_round_ceiling_does_not_bound_default_runs():
+    """未传 max_rounds（对话式/AiChat）时保持原有的无上限行为。"""
+    from flowhub_api.services.expert_runtime import run_repo_tool_loop
+
+    class Tool:
+        name = "repo_search"
+
+        async def ainvoke(self, args):
+            return "evidence"
+
+    class Model:
+        def __init__(self):
+            self.calls = 0
+
+        def bind_tools(self, tools):
+            return self
+
+        async def ainvoke(self, messages):
+            self.calls += 1
+            if self.calls > 15:
+                return SimpleNamespace(content="十五轮后的结论", tool_calls=[])
+            return SimpleNamespace(content="", tool_calls=[{
+                "id": f"call-{self.calls}", "name": "repo_search", "args": {"query": "x"},
+            }])
+
+    output, used = await run_repo_tool_loop(
+        Model(), [("human", "查代码")], SimpleNamespace(tools=[Tool()], traces=[]),
+    )
+
+    assert used == 15
+    assert output == "十五轮后的结论"
 
 
 @pytest.mark.asyncio

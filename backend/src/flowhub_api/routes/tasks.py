@@ -982,6 +982,7 @@ async def ai_fill_task(
     run = await schedule_deployment_run(
         session, deployment_id, prompt, user, task_id=t.id, context=context,
         replace_run_id=latest.id if latest is not None else None,
+        quality_mode="fast", generation_retries=1, unbounded_output=True,
     )
     run.config_snapshot = {**run.config_snapshot, "forceCodeReanalysis": body.reanalyze_code}
     await AuditService(session).record(
