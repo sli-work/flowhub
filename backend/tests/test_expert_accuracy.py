@@ -68,6 +68,50 @@ def test_repo_backed_delivery_plan_cannot_pass_with_a_generic_template():
     assert issues == ["代码结论缺少 [repo@commit:file:L行号 symbol] 证据引用。"]
 
 
+def test_repo_forensics_gate_only_targets_code_analysis_tasks():
+    from flowhub_api.services.expert_runtime import is_code_analysis_question
+
+    # 代码型任务：必须做仓库取证
+    assert is_code_analysis_question("分析 create_order 函数调用链，给出改造方案")
+    assert is_code_analysis_question("源码里这个 bug 怎么修")
+    # 非代码任务：附件/文档/方案类，即便项目绑定仓库也不得强制仓库取证
+    assert not is_code_analysis_question("读取附件《重庆数据局OSM适配新指标和接口计划.xlsx》并回填计划字段")
+    assert not is_code_analysis_question("根据附件给出本次采购的验收方案文档")
+    assert not is_code_analysis_question("为这个需求生成项目计划与里程碑")
+
+
+def test_task_brief_boilerplate_repository_section_does_not_trigger_code_forensics():
+    """任务书对任何绑定仓库的项目都会自动附加「## 关联代码仓库」段（含「仓库」二字），
+    该样板文字不得把非代码任务误判为代码任务而触发仓库取证门禁。"""
+    from flowhub_api.services.expert_runtime import is_code_analysis_question
+
+    brief = (
+        "# 任务书：AI 产出\n\n## 节点目的\n生成分析产出\n\n"
+        "## 需要填写的产出字段\n- 分析结论（conclusion，必填）\n\n"
+        "## 关联代码仓库\n【关联代码仓库】\n  - orders/api（核心）：模块 src/orders\n"
+    )
+    assert not is_code_analysis_question(brief)
+    # 真实的代码任务：需求本身写在正文段落，样板仓库段仍在末尾，必须取证。
+    code_brief = (
+        "# 任务书：AI 产出\n\n## 产出要求\n分析 create_order 的调用链并给出重构方案\n\n"
+        "## 关联代码仓库\n【关联代码仓库】\n  - orders/api（核心）：模块 src/orders\n"
+    )
+    assert is_code_analysis_question(code_brief)
+
+
+def test_failure_kind_classifies_recoverable_and_provider_failures():
+    from flowhub_api.services.expert_runtime import _failure_kind_for_exception
+    from flowhub_api.services.context_budget import ContextBudgetExceeded
+
+    class LengthFinishReasonError(RuntimeError):
+        pass
+
+    assert _failure_kind_for_exception(ContextBudgetExceeded("必要任务上下文超过 Provider 上下文窗口")) == "context_budget"
+    assert _failure_kind_for_exception(LengthFinishReasonError("finish_reason=length")) == "length_limited"
+    assert _failure_kind_for_exception(ValueError("旧运行缺少可靠配置快照")) == "configuration"
+    assert _failure_kind_for_exception(RuntimeError("502 bad gateway")) == "provider_error"
+
+
 def test_compact_schema_retry_keeps_required_field_contract():
     messages = [("system", "原始系统提示"), ("human", "为当前任务生成产出")]
     compact = compact_schema_retry_messages([
@@ -398,7 +442,7 @@ async def test_repo_tool_loop_requires_one_repository_read_for_structured_delive
 
 
 @pytest.mark.asyncio
-async def test_repo_tool_loop_rejects_structured_delivery_when_model_ignores_evidence_reminder():
+async def test_repo_tool_loop_marks_blocked_but_keeps_draft_when_model_ignores_evidence_reminder():
     from flowhub_api.services.expert_runtime import run_repo_tool_loop
 
     class Tool:
@@ -417,9 +461,10 @@ async def test_repo_tool_loop_rejects_structured_delivery_when_model_ignores_evi
         require_tool_evidence=True, on_trace=trace.append,
     )
 
+    # 未取证是复核信号：保留模型已产出的草稿，只记 blocked，不再替换为硬失败提示。
     assert used == 0
-    assert "未完成最小仓库取证" in output
-    assert trace[-1]["status"] == "blocked"
+    assert output == "通用模板"
+    assert any(item["status"] == "blocked" and "未完成最小仓库取证" in item["summary"] for item in trace)
 
 
 @pytest.mark.asyncio
@@ -454,13 +499,15 @@ async def test_repo_tool_loop_does_not_treat_attachment_or_failed_read_as_reposi
                 ])
             return SimpleNamespace(content="通用模板", tool_calls=[])
 
+    trace = []
     output, used = await run_repo_tool_loop(
         Model(), [("human", "生成开发方案")],
         SimpleNamespace(tools=[AttachmentTool(), FailedRepoTool()], traces=[]), require_tool_evidence=True,
+        on_trace=trace.append,
     )
 
     assert used == 2
-    assert "未完成最小仓库取证" in output
+    assert any(item["status"] == "blocked" and "未完成最小仓库取证" in item["summary"] for item in trace)
 
 
 @pytest.mark.asyncio
@@ -477,13 +524,15 @@ async def test_repo_tool_loop_rejects_structured_delivery_when_length_stops_befo
         async def ainvoke(self, messages):
             raise RuntimeError("LengthFinishReasonError")
 
+    trace = []
     output, used = await run_repo_tool_loop(
         Model(), [("human", "生成开发方案")], SimpleNamespace(tools=[Tool()], traces=[]),
-        require_tool_evidence=True,
+        require_tool_evidence=True, on_trace=trace.append,
     )
 
+    # 长度截断仍未取证：记录 blocked，且不再以硬失败提示掩盖真实原因。
     assert used == 0
-    assert "未完成最小仓库取证" in output
+    assert any(item["status"] == "blocked" and "未完成最小仓库取证" in item["summary"] for item in trace)
 
 
 @pytest.mark.asyncio
@@ -736,3 +785,54 @@ def test_quality_review_accepts_json_wrapped_by_gateway_text():
     from flowhub_api.services.expert_runtime import parse_quality_review
 
     assert parse_quality_review('核验结果如下：\n{"pass": true, "issues": []}\n以上。') == (True, [], 'passed')
+
+
+def test_graph_state_keeps_attachment_evidence_for_citation_checks():
+    """GraphState 必须声明 attachmentEvidence；否则 LangGraph 丢弃该键，
+    check_attachment_citations 永远拿不到证据，只要产出提到附件就误报「未检索到附件证据」。"""
+    from flowhub_api.services.expert_runtime import GraphState
+
+    assert "attachmentEvidence" in GraphState.__annotations__, "GraphState 必须声明 attachmentEvidence"
+
+
+@pytest.mark.asyncio
+async def test_graph_propagates_attachment_evidence_to_the_result(monkeypatch):
+    """端到端：model_node 返回的 attachmentEvidence 必须能到达 graph 输出。"""
+    from flowhub_api.services import expert_runtime
+    from langchain_core.tools import StructuredTool
+
+    class Model:
+        def __init__(self, **kw): pass
+
+        def bind_tools(self, tools):
+            return self
+
+        async def ainvoke(self, messages):
+            return SimpleNamespace(content='{"conclusion": "根据附件 [附件@备件.pdf:p1:1]，缺货 120 单"}', tool_calls=[])
+
+    async def fake_read(doc_id: str = "evd1", location: str = "p1") -> str:
+        return "[附件@备件.pdf:p1:1]\n备件缺货 120 单"
+
+    tool = StructuredTool.from_function(coroutine=fake_read, name="flowhub_attachment_read",
+                                        description="read a location from an attachment")
+    injected = [SimpleNamespace(doc_id="evd1", doc_name="备件.pdf", location="p1", seq=1, kind="text", text="备件缺货 120 单")]
+
+    async def attachment_factory(prompt):
+        return SimpleNamespace(
+            tools=[tool], traces=[], evidence_context=[],
+            candidates=[], parsed=[], injected=list(injected), operations=[], duration_ms=0,
+        )
+
+    monkeypatch.setattr(expert_runtime, "ChatOpenAI", Model)
+    monkeypatch.setattr(expert_runtime, "decrypt_secret", lambda value: value)
+    graph = expert_runtime.build_graph(
+        SimpleNamespace(api_key="encrypted", base_url="", max_context_tokens=None),
+        SimpleNamespace(model="test-model", max_context_tokens=None, max_output_tokens=None),
+        "填写表单", quality_mode="fast",
+        output_schema=[{"key": "conclusion", "label": "结论", "type": "textarea", "required": True}],
+        attachment_tools_factory=attachment_factory,
+    ).compile()
+
+    result = await graph.ainvoke({"prompt": "根据附件生成结论"})
+
+    assert result.get("attachmentEvidence") is not None, "attachmentEvidence 必须随 graph 状态保留"

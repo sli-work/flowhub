@@ -568,5 +568,11 @@ export interface ExpertRunBrief {
     manualEdited?: boolean
     editedKeys?: string[]
     editedAt?: string
+    /** 质量状态：passed / needs_human_review / needs_revision / not_checked */
+    qualityStatus?: string
+    /** 失败原因分类：non_json_output / repo_evidence_missing / length_limited / provider_error / context_budget / empty_output */
+    failureKind?: string
   } | null
+  /** 失败原因分类（后端 run_brief 顶层透出，便于列表/详情展示） */
+  failureKind?: string
 }

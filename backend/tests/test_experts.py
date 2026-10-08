@@ -1,6 +1,7 @@
 """Expert Runtime API contract tests."""
 import asyncio
 import io
+import uuid
 from types import SimpleNamespace
 
 import pytest
@@ -259,6 +260,41 @@ def test_stale_snapshot_never_falls_back_to_a_different_provider(client, org_hea
     model, provider = asyncio.run(resolve())
     assert model is None
     assert provider.name == "Snapshot Provider A"
+
+
+def test_run_metrics_expose_failure_kinds_and_review_count(client, org_headers):
+    """运行指标需按失败原因分类，并单列待人工复核，便于定位与回归失败率。"""
+    from flowhub_api.db.session import SessionFactory
+    from flowhub_api.models import ExpertRun, ExpertVersion, User
+
+    headers = org_headers
+    provider = client.post("/api/v1/providers", headers=headers, json={
+        "name": f"Metrics Provider {uuid.uuid4().hex[:6]}", "base_url": "https://example.test/v1",
+        "api_key": "test-key", "models": ["metrics-model"],
+    }).json()["data"]["provider"]
+    expert = client.post("/api/v1/experts", headers=headers, json={
+        "name": "Metrics Expert", "slug": f"metrics-{uuid.uuid4().hex[:6]}", "description": "metrics",
+        "system_prompt": "sp", "provider_model_id": provider["models"][0]["id"],
+    }).json()["data"]
+
+    async def seed_runs():
+        async with SessionFactory() as session:
+            user = await session.get(User, "u2")
+            for index, (status, kind) in enumerate([("failed", "non_json_output"), ("failed", "provider_error"), ("succeeded", "")]):
+                session.add(ExpertRun(
+                    id=f"run-metrics-{index}-{uuid.uuid4().hex[:6]}", expert_id=expert["expert"]["id"],
+                    expert_version_id=expert["version"]["id"], requested_by=user.id,
+                    trace_id=f"trace-metrics-{index}", status=status, input="指标分类",
+                    parsed={"failureKind": kind} if kind else {}, quality_result={"failureKind": kind} if kind else {},
+                ))
+            await session.commit()
+
+    asyncio.run(seed_runs())
+    metrics = client.get("/api/v1/expert-runs", headers=headers).json()["data"]["metrics"]
+    # 会话级共享数据：断言分类键存在且计数为正（不依赖同会话其他用例的绝对条数）。
+    assert metrics["failureKinds"].get("non_json_output", 0) >= 1
+    assert metrics["failureKinds"].get("provider_error", 0) >= 1
+    assert "needs_review" in metrics
 
 
 def test_default_chat_uses_native_flowhub_capabilities(client, org_headers):

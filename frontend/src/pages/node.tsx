@@ -135,6 +135,17 @@ function fieldLabel(schema: FormField[] | undefined, key: string): string {
 
 type DocumentRef = { id: string; name: string }
 
+/* 失败原因分类：与后端 run.parsed.failureKind 对应，供失败卡展示可定位标签 */
+const FAILURE_KIND_LABEL: Record<string, string> = {
+  repo_evidence_missing: '未完成仓库取证',
+  non_json_output: '产出不是 JSON',
+  length_limited: '输出长度受限',
+  provider_error: '模型服务错误',
+  context_budget: '上下文超预算',
+  configuration: '配置问题',
+  empty_output: '无有效输出',
+}
+
 function documentRefs(value: unknown): DocumentRef[] {
   const items = Array.isArray(value) ? value : [value]
   return items.flatMap((item) => {
@@ -477,7 +488,13 @@ export function NodeProcessPage() {
   const latestRunStageElapsedSeconds = latestRunStage && ['queued', 'running'].includes(latestRun.status)
     ? Math.max(0, Math.floor((Date.now() - new Date(latestRunStage.createdAt).getTime()) / 1000))
     : null
-  const canAdoptLatestRun = latestRun?.status === 'succeeded' && latestRun.parsed?.valid !== false && latestRun.parsed?.formatStatus !== 'invalid'
+  /* 可采纳：成功且格式未判定失败。
+     待人工复核（needs_human_review / valid=false）也允许采纳——用户编辑后经「质量覆盖」确认入库，
+     这样有内容但未自动校验通过的产出不会既不能采纳也不能修改。 */
+  const runNeedsReview = latestRun?.parsed?.qualityStatus === 'needs_human_review' || latestRun?.parsed?.valid === false
+  const canAdoptLatestRun = latestRun?.status === 'succeeded'
+    && latestRun.parsed?.formatStatus !== 'invalid'
+    && (latestRun.parsed?.valid !== false || Object.keys(latestRun.parsed?.values ?? {}).length > 0 || runNeedsReview)
 
   const applyExpertValues = (values: Record<string, unknown>, warnings: string[], message: string) => {
     setFormValues((prev) => ({ ...prev, ...values }))
@@ -502,10 +519,22 @@ export function NodeProcessPage() {
       const d = await api.post<{ values: Record<string, unknown>; warnings: string[] }>(`/api/v1/tasks/${activeTaskId}/adopt-run`, { run_id: runId })
       applyExpertValues(d.values, d.warnings, '已采纳 Expert 产出，请审核后提交')
     } catch (e) {
-      const needsQualityOverride = e instanceof ApiError && (e.message.includes('事实质量校验未通过') || e.message.includes('质量校验服务不可用'))
-      if (needsQualityOverride && window.confirm('质量核验未完成。仅当你已逐项人工复核当前产出后，才可覆盖采纳；继续吗？')) {
+      const target = expertRuns.find((item) => item.id === runId)
+      // 该 Run 是否只是「未经自动校验」而非硬失败：以 Run 自身的解析状态为准，
+      // 不依赖后端错误文案（采纳被拒时只回传首条 warning，哨兵句到不了前端）。
+      const runFlagged = target?.parsed?.qualityStatus != null && target.parsed.qualityStatus !== 'passed'
+      const runValues = target?.parsed?.values
+      const hasValues = !!runValues && Object.keys(runValues).length > 0
+      const messageOverride = e instanceof ApiError && (
+        e.message.includes('事实质量校验未通过')
+        || e.message.includes('质量校验服务不可用')
+        || e.message.includes('未完成最小仓库取证')
+        || e.message.includes('未经代码实现验证')
+        || e.message.includes('需人工核对')
+      )
+      if ((runFlagged || messageOverride) && hasValues
+        && window.confirm('该产出未经自动校验通过。仅当你已逐项人工复核当前内容后，才可覆盖采纳；继续吗？')) {
         try {
-          const runValues = expertRuns.find((item) => item.id === runId)?.parsed?.values
           const d = await api.post<{ values: Record<string, unknown>; warnings: string[] }>(`/api/v1/tasks/${activeTaskId}/adopt-run`, {
             run_id: runId, values: runValues ?? formValues, approve_quality_override: true,
           })
@@ -1111,7 +1140,24 @@ export function NodeProcessPage() {
                   )}
                   {/* 字段产出预览：按 schema 渲染（采纳后进表单继续编辑）；无 schema 时展示原始全文 */}
                   {latestRun.status === 'failed' ? (
-                    <p className="mt-2 whitespace-pre-wrap break-words text-[12.5px] leading-relaxed text-red-500">{latestRun.error || '（无错误信息）'}</p>
+                    <div className="mt-2">
+                      {latestRun.failureKind && (
+                        <span className="mb-1.5 inline-block rounded bg-red-50 px-1.5 py-0.5 text-[10.5px] font-medium text-red-600 dark:bg-red-500/15 dark:text-red-300">
+                          {FAILURE_KIND_LABEL[latestRun.failureKind] ?? latestRun.failureKind}
+                        </span>
+                      )}
+                      <p className="whitespace-pre-wrap break-words text-[12.5px] leading-relaxed text-red-500">{latestRun.error || '（无错误信息）'}</p>
+                    </div>
+                  ) : runNeedsReview && !Object.keys(latestRun.parsed?.values ?? {}).length ? (
+                    <div className="mt-2.5 rounded-md border border-amber-200 bg-amber-50/60 px-2.5 py-2 dark:border-amber-500/30 dark:bg-amber-500/10">
+                      <p className="text-[12px] leading-relaxed text-amber-700 dark:text-amber-200">模型产出未经自动校验（{latestRun.parsed?.validationIssues?.join('；') || '需人工复核'}）。原始输出已保留：可直接填写表单后提交，或采纳后编辑再提交。</p>
+                      <details className="mt-2 min-w-0 max-w-full">
+                        <summary className="cursor-pointer text-[11px] font-medium text-amber-700 dark:text-amber-300">展开查看 Expert 原始输出</summary>
+                        <div className="mt-2 h-80 min-h-48 max-h-[70vh] resize-y overflow-auto rounded-md pr-1 [&_.aui-markdown_table]:max-w-full" title="可拖动右下角调整内容高度">
+                          <MarkdownView text={latestRun.output} className="min-w-0 max-w-full break-words text-[12.5px] leading-relaxed" />
+                        </div>
+                      </details>
+                    </div>
                   ) : latestRun.parsed?.formatStatus === 'invalid' ? (
                     <div className="mt-2.5 rounded-md border border-amber-200 bg-amber-50/60 px-2.5 py-2 dark:border-amber-500/30 dark:bg-amber-500/10">
                       <p className="text-[12px] leading-relaxed text-amber-700 dark:text-amber-200">模型未能生成可采纳的 JSON 字段。原始输出已保留；请重新执行，或直接填写表单后提交。</p>

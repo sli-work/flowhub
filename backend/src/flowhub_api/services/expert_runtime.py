@@ -182,13 +182,22 @@ async def run_repo_tool_loop(llm, messages: list, bundle, *, on_trace: Callable[
                         "summary": f"工具上下文接近 Provider 窗口，已语义压缩 {compacted_count} 轮取证（{before} → {after} token）"})
 
     async def insufficient_repo_evidence(reason: str) -> str:
+        """Blocked forensics still yields a best-effort answer instead of a dead end.
+
+        A missing repository read is a review signal, not a reason to throw away
+        work the model already produced from attachments, Graphify preflight or
+        the task context. Emit the observable block, then ask the model once for a
+        final answer from collected evidence; the caller decides adoption from the
+        schema parse. Only a truly empty result falls back to the hard block.
+        """
         await emit({
             "kind": "tool",
             "tool": "flowhub.repo.tools",
             "status": "blocked",
-            "summary": f"{reason}；未完成最小仓库取证，拒绝生成可采纳交付物",
+            "summary": f"{reason}；未完成最小仓库取证，已改由已有证据生成最终产出并转人工复核",
         })
-        return REPO_EVIDENCE_REQUIRED_MESSAGE
+        final = await finalize_from_collected_evidence()
+        return final or REPO_EVIDENCE_REQUIRED_MESSAGE
 
     async def finalize_from_collected_evidence() -> str:
         """Finish without tools after the model has exhausted its tool budget.
@@ -375,6 +384,31 @@ def should_retry_judge(status: str, judge_attempt: int) -> bool:
     return status == "unavailable" and judge_attempt < MAX_JUDGE_RETRIES
 
 
+_CODE_ANALYSIS_HINTS = re.compile(
+    r"代码|源码|代码库|函数|方法|调用链|调用关系|重构|报错|堆栈|异常栈|"
+    r"\bbug\b|class|function|method|refactor|stack\s*trace|\bcommit\b",
+    flags=re.I,
+)
+
+# 任务书会自动附加「## 关联代码仓库」段（任何绑定仓库的项目都有），其中含「仓库」「代码」
+# 等词。分类前必须剥离该样板段，否则所有绑定仓库项目的任务都会被误判为代码任务。
+# 该段是自动生成的最后一个（或倒数第二个）二级段落，剥到下一个 `##` 标题或文末为止。
+_BOILERPLATE_SECTIONS = re.compile(r"^##\s*关联代码仓库\s*$.*?(?=^##\s|\Z)", flags=re.M | re.S)
+
+
+def is_code_analysis_question(prompt: str) -> bool:
+    """Whether a task actually asks for code/repository analysis.
+
+    Gates repository forensics so an attachment, document or planning task that
+    merely belongs to a project with bound repositories is not forced to call
+    ``repo_*`` tools.  The auto-injected repository-map section is stripped
+    first, and only strong, code-specific terms are matched — broad product
+    words such as「接口」「实现」「模块」「文件」frequently appear in non-code
+    briefs and must not trigger the requirement.
+    """
+    return bool(_CODE_ANALYSIS_HINTS.search(_BOILERPLATE_SECTIONS.sub("", prompt or "")))
+
+
 def code_evidence_issues(question: str, evidence: str, answer: str) -> list[str]:
     """Deterministic guard for code-analysis answers, including no-repository cases."""
     is_code_question = bool(re.search(r"代码|仓库|函数|调用|模块|实现|文件|bug|接口|class|function", question, flags=re.I))
@@ -396,6 +430,18 @@ def code_evidence_issues(question: str, evidence: str, answer: str) -> list[str]
         if not allowed or any((item.group(1), item.group(2).lower(), item.group(3), item.group(4)) not in allowed for item in citations):
             return ["代码结论引用未命中本轮仓库工具或图谱证据，不能使用伪造引用。"]
     return []
+
+
+def _failure_kind_for_exception(exc: Exception) -> str:
+    """Classify a run-level exception so failure metrics are actionable."""
+    message = str(exc).lower()
+    if "contextbudgetexceeded" in type(exc).__name__.lower() or "上下文窗口" in message or "上下文预算" in message:
+        return "context_budget"
+    if _is_length_finished(exc):
+        return "length_limited"
+    if isinstance(exc, ValueError):
+        return "configuration"
+    return "provider_error"
 
 
 def build_repair_instruction(previous_output: str, issues: list[str]) -> str:
@@ -590,6 +636,7 @@ class GraphState(TypedDict, total=False):
     format_repair_error: str
     format_strategy: str
     code_evidence: list[str]
+    attachmentEvidence: dict
     repo_evidence_required: bool
 
 
@@ -859,6 +906,9 @@ def build_graph(provider: LlmProvider, model: LlmProviderModel, system_prompt: s
         # Quality revisions must reuse the first pass evidence. Re-running the
         # tool loop here multiplied calls by the number of quality attempts.
         if (repo_tools_factory is not None or attachment_tools_factory is not None) and int(state.get("attempt", 0)) == 0:
+            # Whether the task truly needs code forensics is decided from the brief
+            # after stripping auto-injected boilerplate (see is_code_analysis_question).
+            wants_code_forensics = is_code_analysis_question(state.get("prompt", ""))
             try:
                 from flowhub_api.services.repo_mirror import RepoToolBundle
                 bundle = RepoToolBundle(tools=[], traces=[], evidence_context=[])
@@ -884,12 +934,17 @@ def build_graph(provider: LlmProvider, model: LlmProviderModel, system_prompt: s
                     code_evidence.extend(bundle.evidence_context)
                     messages.append(("system", "以下是已完成的 Graphify 预分析；先基于它回答或决定最小的补充读取：\n"
                                      + "\n\n".join(bundle.evidence_context)))
+                # Graphify preflight counts as collected evidence, so the mandate is
+                # evaluated only after it has been merged into code_evidence.
+                require_repo_forensics = bool(
+                    output_schema and repo_tools_factory is not None
+                    and wants_code_forensics and not code_evidence
+                )
                 if bundle.tools:
-                    has_repo_tools = any(str(getattr(tool, "name", "")).startswith("repo_") for tool in bundle.tools)
                     output, _ = await run_repo_tool_loop(
                         llm, messages, bundle,
                         on_trace=lambda item: _emit("trace", item),
-                        require_tool_evidence=bool(output_schema and has_repo_tools),
+                        require_tool_evidence=require_repo_forensics,
                         context_summarizer=tool_context_llm,
                         max_rounds=max_tool_rounds,
                         max_calls=TASK_ANALYSIS_MAX_TOOL_CALLS if max_tool_rounds is not None else None,
@@ -903,7 +958,14 @@ def build_graph(provider: LlmProvider, model: LlmProviderModel, system_prompt: s
                                  for item in (ab.traces if ab is not None else []))
                     attachment_state = _attachment_state_from_bundle(ab) if ab is not None else {}
                     tool_evidence = "\n\n".join(bundle.evidence_context)
-                    if output == REPO_EVIDENCE_REQUIRED_MESSAGE:
+                    # A required repository read that the model never completed is a
+                    # review signal, not a reason to discard a usable form. Keep the
+                    # produced output/values and mark the run for human review.
+                    forensics_missing = require_repo_forensics and not any(
+                        item.get("tool") in REPO_EVIDENCE_TOOL_NAMES and item.get("status") == "succeeded"
+                        for item in bundle.traces
+                    )
+                    if output == REPO_EVIDENCE_REQUIRED_MESSAGE and not (output_schema and parse_schema_output(output_schema, output)[0]):
                         trace.append({"tool": "flowhub.repo.tools", "status": "blocked",
                                       "summary": "未完成最小仓库取证，已阻止自动采纳"})
                         return {"output": output, "tool_trace": trace,
@@ -922,6 +984,9 @@ def build_graph(provider: LlmProvider, model: LlmProviderModel, system_prompt: s
                                 "human", build_json_format_repair_prompt(output_schema, output),
                             )])
                             output = str(response.content)
+                    if forensics_missing:
+                        trace.append({"tool": "flowhub.repo.tools", "status": "blocked",
+                                      "summary": "未完成最小仓库取证，该表单产出未经代码实现验证，已转人工复核"})
                     if emitter is not None and output:
                         await _emit("token", {"text": output, "attemptId": attempt_id})
                     await _emit("trace", {"kind": "model", "tool": "模型生成", "status": "succeeded", "summary": f"第 {attempt_id} 轮草稿生成完成",
@@ -929,7 +994,7 @@ def build_graph(provider: LlmProvider, model: LlmProviderModel, system_prompt: s
                     return {"output": output, "tool_trace": trace,
                             "flowhub_context": f"{state.get('flowhub_context', '')}\n\n{tool_evidence}".strip(),
                             "attempt": int(state.get("attempt", 0)) + 1, "code_evidence": code_evidence,
-                            "attachmentEvidence": attachment_state,
+                            "attachmentEvidence": attachment_state, "repo_evidence_required": forensics_missing,
                             "format_strategy": format_strategy}
             except RepoToolLoopUnavailable as exc:
                 trace.append({"tool": "flowhub.repo.tools", "status": "unavailable",
@@ -943,7 +1008,7 @@ def build_graph(provider: LlmProvider, model: LlmProviderModel, system_prompt: s
                 # A failed optional repo-tool call (for example provider rate
                 # limiting) must not discard already available Graphify/static
                 # evidence. Only block when no code evidence exists at all.
-                if output_schema and any(str(getattr(tool, "name", "")).startswith("repo_") for tool in bundle.tools) and not code_evidence:
+                if require_repo_forensics and not code_evidence:
                     trace.append({"tool": "flowhub.repo.tools", "status": "blocked",
                                   "summary": "仓库取证未完成，已阻止自动采纳"})
                     return {"output": REPO_EVIDENCE_REQUIRED_MESSAGE, "tool_trace": trace,
@@ -994,6 +1059,12 @@ def build_graph(provider: LlmProvider, model: LlmProviderModel, system_prompt: s
     async def validate_node(state: GraphState) -> dict:
         output = str(state.get("output") or "")
         if state.get("repo_evidence_required"):
+            # Forensics were mandated but not completed. If the model still
+            # produced a parseable form from attachments/context, keep it as a
+            # reviewable candidate instead of discarding it as a format failure.
+            if output_schema and parse_schema_output(output_schema, output)[0]:
+                return {"validation_issues": ["未完成最小仓库取证，表单产出未经代码实现验证"],
+                        "quality_status": "needs_human_review", "format_status": state.get("format_status") or "valid"}
             return {"validation_issues": ["未完成最小仓库取证，禁止自动采纳该表单产出。"],
                     "quality_status": "needs_human_review", "format_status": "invalid"}
         # Node output is a machine-readable form contract. It may contain the
@@ -1046,28 +1117,51 @@ def build_graph(provider: LlmProvider, model: LlmProviderModel, system_prompt: s
         return {**result, **({"format_status": format_status} if format_status else {})}
 
     async def format_repair_node(state: GraphState) -> dict:
-        """One bounded, content-preserving repair for a malformed schema response."""
+        """Bounded, content-preserving repairs for a malformed schema response.
+
+        The first pass uses the full repair prompt under JSON mode.  If the model
+        still returns non-JSON, a second, compact pass (form contract + trimmed
+        recent context) is attempted before giving up, so a long original answer
+        is not dropped merely because the gateway truncated or wrapped it.
+        """
         llm = make_model(ChatOpenAI, model, provider, decrypt_secret(provider.api_key), retries=0)
         original = str(state.get("output") or "")
         await _emit("trace", {"kind": "format", "tool": "flowhub.output.format_repair", "status": "running",
                               "summary": "正在将模型产出归位为节点 JSON"})
-        try:
-            repair_prompt = [("human", build_json_format_repair_prompt(output_schema or [], original))]
+
+        def _is_json(text: str) -> bool:
+            _values, warnings = parse_schema_output(output_schema or [], text)
+            return not any("不是 JSON" in warning or "无法解析" in warning for warning in warnings)
+
+        async def _repair(prompt, strategy: str) -> tuple[str, str]:
             structured_llm = make_model(
                 ChatOpenAI, model, provider, decrypt_secret(provider.api_key), retries=min(generation_retries, 1),
                 response_format=_JSON_OBJECT_RESPONSE_FORMAT, send_max_tokens=not unbounded_output,
             )
             try:
-                response = await structured_llm.ainvoke(repair_prompt)
-                repair_strategy = "native_json_object_repair"
+                response = await structured_llm.ainvoke(prompt)
+                return str(getattr(response, "content", "") or ""), strategy
             except Exception as exc:
                 if not _json_mode_is_unsupported(exc):
                     raise
-                response = await llm.ainvoke(repair_prompt)
-                repair_strategy = "prompt_json_repair_fallback"
-            repaired = str(getattr(response, "content", "") or "")
-            _values, warnings = parse_schema_output(output_schema or [], repaired)
-            if any("不是 JSON" in warning or "无法解析" in warning for warning in warnings):
+                response = await llm.ainvoke(prompt)
+                return str(getattr(response, "content", "") or ""), f"{strategy}_prompt_fallback"
+
+        try:
+            repaired, repair_strategy = await _repair(
+                [("human", build_json_format_repair_prompt(output_schema or [], original))], "json_repair",
+            )
+            if not _is_json(repaired):
+                # Second, compact attempt: keep only the field contract plus the
+                # most recent task context, which survives gateway output limits.
+                await _emit("trace", {"kind": "format", "tool": "flowhub.output.format_repair", "status": "retry",
+                                      "summary": "首次格式修复未通过，改用紧凑契约重试"})
+                compact = compact_schema_retry_messages(output_schema or [], [
+                    ("human", str(state.get("prompt") or "")),
+                    ("human", original),
+                ])
+                repaired, repair_strategy = await _repair(compact, "compact_json_retry")
+            if not _is_json(repaired):
                 raise ValueError("格式修复模型仍未输出有效 JSON")
         except Exception as exc:  # malformed output is a reviewable result, never a second repair loop
             message = str(exc)[:200] or "JSON 格式修复失败"
@@ -1353,16 +1447,29 @@ async def execute_run(session: AsyncSession, run: ExpertRun, version: ExpertVers
         run.quality_result = {'status': quality, 'issues': quality_issues[:3],
                               'contentHash': content_hash(run.output)}
         run.status = 'succeeded' if run.output else 'failed'
+        failure_kind = ''
         if not run.output:
             run.error = '模型未生成有效内容'
+            failure_kind = 'empty_output'
         await _snapshot_parsed_for_task(session, run, result)
         if run.config_snapshot.get('schema') and not (run.parsed or {}).get('values'):
-            run.status = 'failed'
-            run.error = '模型未生成可采纳的表单内容，请检查 Provider 上下文配置后重新生成。'
+            # A schema run that produced no adoptable fields keeps whatever content
+            # the model generated for human review instead of a hard failure. Only a
+            # completely empty model response is an unrecoverable failure.
+            if run.output:
+                quality = 'needs_human_review'
+                run.error = '模型未生成可自动回填的表单字段，已保留原始产出并转人工复核；可编辑后覆盖采纳。'
+                failure_kind = 'non_json_output'
+            else:
+                run.status = 'failed'
+                run.error = '模型未生成可采纳的表单内容，请检查 Provider 上下文配置后重新生成。'
+                failure_kind = 'empty_output'
         run.parsed = {**(run.parsed or {}), 'qualityStatus': quality,
             'qualityIssues': run.quality_result['issues'],
             'contentHash': run.quality_result['contentHash'],
+            'failureKind': failure_kind,
             'attachmentEvidence': result.get('attachmentEvidence') or {}}
+        run.quality_result = {**run.quality_result, 'status': quality, 'failureKind': failure_kind}
         if emitter:
             for item in result.get('tool_trace') or []:
                 await emitter('trace', {'kind': 'tool', 'tool': item.get('tool', 'tool'),
@@ -1380,6 +1487,7 @@ async def execute_run(session: AsyncSession, run: ExpertRun, version: ExpertVers
             await lease_guard()  # Lost owners must not persist even a failure.
         logger.exception('Expert Run %s 执行失败', run.id)
         run.status, run.error = 'failed', '运行未完成，请检查模型配置、上下文预算或重新生成。' if not isinstance(exc, ValueError) else str(exc)
+        run.parsed = {**(run.parsed or {}), 'failureKind': _failure_kind_for_exception(exc)}
         if emitter:
             await emitter('trace', {'kind': 'model', 'tool': '模型调用', 'status': 'failed', 'summary': run.error})
         else:

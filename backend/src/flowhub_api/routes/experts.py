@@ -501,7 +501,7 @@ def run_brief(run: ExpertRun) -> dict:
             duration = f"{max(0, (datetime.fromisoformat(run.finished_at) - datetime.fromisoformat(run.started_at)).total_seconds()):.1f}s"
         except ValueError:
             pass
-    return {"id": run.id, "session": run.input[:64], "expert": run.expert_id, "version": run.expert_version_id, "deployment": run.deployment_id or "—", "expertId": run.expert_id, "versionId": run.expert_version_id, "deploymentId": run.deployment_id, "status": run.status, "input": run.input, "output": run.output, "traceId": run.trace_id, "error": run.error, "duration": duration, "started": run.started_at, "startedAt": run.started_at, "finishedAt": run.finished_at, "quality": run.quality_result or {"status": (run.parsed or {}).get("qualityStatus", "unknown"), "issues": (run.parsed or {}).get("qualityIssues", [])}, "events": []}
+    return {"id": run.id, "session": run.input[:64], "expert": run.expert_id, "version": run.expert_version_id, "deployment": run.deployment_id or "—", "expertId": run.expert_id, "versionId": run.expert_version_id, "deploymentId": run.deployment_id, "status": run.status, "input": run.input, "output": run.output, "traceId": run.trace_id, "error": run.error, "duration": duration, "started": run.started_at, "startedAt": run.started_at, "finishedAt": run.finished_at, "failureKind": (run.parsed or {}).get("failureKind") or (run.quality_result or {}).get("failureKind") or "", "quality": run.quality_result or {"status": (run.parsed or {}).get("qualityStatus", "unknown"), "issues": (run.parsed or {}).get("qualityIssues", [])}, "events": []}
 
 
 @router.post("/experts/{expert_id}/versions/{version_id}/publish")
@@ -564,7 +564,16 @@ async def list_runs(session: Annotated[AsyncSession, Depends(get_db)], user: Ann
     statuses = (await session.execute(select(ExpertRun.status).where(ExpertRun.requested_by == user.id))).scalars().all()
     succeeded, failed = statuses.count("succeeded"), statuses.count("failed")
     settled = succeeded + failed
-    return ok({"items": [run_brief(row) for row in rows], "total": total, "page": page, "page_size": page_size, "metrics": {"running": statuses.count("running"), "interrupted": statuses.count("interrupted"), "succeeded": succeeded, "failed": failed, "success_rate": round(succeeded * 100 / settled, 1) if settled else None}})
+    failure_kinds: dict[str, int] = {}
+    for row in (await session.execute(
+        select(ExpertRun).where(ExpertRun.requested_by == user.id, ExpertRun.status == "failed")
+    )).scalars().all():
+        kind = (row.parsed or {}).get("failureKind") or (row.quality_result or {}).get("failureKind") or "unknown"
+        failure_kinds[kind] = failure_kinds.get(kind, 0) + 1
+    criticized = sum(1 for row in (await session.execute(
+        select(ExpertRun).where(ExpertRun.requested_by == user.id, ExpertRun.status == "succeeded")
+    )).scalars().all() if ((row.quality_result or {}).get("status") in ("needs_human_review", "needs_revision")))
+    return ok({"items": [run_brief(row) for row in rows], "total": total, "page": page, "page_size": page_size, "metrics": {"running": statuses.count("running"), "interrupted": statuses.count("interrupted"), "succeeded": succeeded, "failed": failed, "needs_review": criticized, "failureKinds": failure_kinds, "success_rate": round(succeeded * 100 / settled, 1) if settled else None}})
 
 
 @router.post("/expert-runs")

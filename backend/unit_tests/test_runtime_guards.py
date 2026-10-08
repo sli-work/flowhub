@@ -121,4 +121,5 @@ async def test_schema_output_stops_after_one_failed_format_repair(monkeypatch):
     assert result['output'] == '初始原文不是 JSON'
     assert result['format_status'] == 'invalid'
     assert result['quality_status'] == 'needs_human_review'
-    assert len(calls) == 2
+    # 初始生成 + 首次格式修复 + 一次紧凑契约重试；修复始终有界（不再无界重试）。
+    assert len(calls) == 3

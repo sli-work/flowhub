@@ -257,6 +257,30 @@ def _publish_flow_template(client, headers, deployment_id):
     return tpl["id"]
 
 
+def _publish_simple_template(client, headers, deployment_id):
+    """简版流程：AI 节点仅含必填 textarea（无 upload），用于验证人工覆盖采纳路径。"""
+    tpl = client.post("/api/v1/templates", headers=headers, json={"name": f"AI简版-{uuid.uuid4().hex[:6]}", "type": "requirement"}).json()["data"]["template"]
+    nodes = [
+        {"id": "n1", "label": "需求提交", "type": "start", "x": 24, "y": 24, "width": 118, "height": 56,
+         "cfg": {"typeLine": "START", "purpose": "", "handler": "系统", "fallback": "", "sla": "", "output": "",
+                 "schema": [{"key": "title", "label": "标题", "type": "input", "required": True}]}},
+        {"id": "n2", "label": "AI 产出", "type": "task", "x": 200, "y": 24, "width": 118, "height": 56,
+         "cfg": {"typeLine": "TASK", "purpose": "生成分析产出", "handler": "人工 + Expert 可协助", "fallback": "", "sla": "24 小时",
+                 "output": "x",
+                 "schema": [{"key": "conclusion", "label": "分析结论", "type": "textarea", "required": True}],
+                 "deliverable": {"instruction": "生成分析", "acceptance": [], "aiGuidance": "", "example": ""},
+                 "split": {"mode": "off"},
+                 "expert": {"expertDeploymentId": deployment_id}}},
+        {"id": "n3", "label": "完成", "type": "end", "x": 376, "y": 24, "width": 118, "height": 56,
+         "cfg": {"typeLine": "END", "purpose": "", "handler": "系统", "fallback": "", "sla": "", "output": "", "schema": []}},
+    ]
+    edges = [["n1", "n2"], ["n2", "n3"]]
+    r = client.post(f"/api/v1/templates/{tpl['id']}/versions/save-and-publish", headers=headers,
+                    json={"nodes": nodes, "edges": edges, "fallbacks": []})
+    assert r.status_code == 200, r.text
+    return tpl["id"]
+
+
 # ---------- Expert 协助填充（人工确认 → 回填表单） ----------
 
 def _wait_wi_task_status(client, headers, wi_id, node_id, status, timeout=8.0):
@@ -370,7 +394,7 @@ def test_ai_fill_generates_values_and_document(client, org_headers, fake_model):
 
 
 def test_non_json_run_is_retained_but_cannot_be_adopted(client, org_headers, fake_model):
-    """格式修复一次后仍非 JSON：保留原文供复核，但不得回填、生成文档或采纳。"""
+    """格式修复（含紧凑重试）后仍非 JSON：保留原文转人工复核，但不得自动回填、生成文档或采纳。"""
     headers = org_headers
     _model_id, dep_id = _publish_expert_with_deployment(client, headers, "fill-dep-invalid-json")
     tpl_id = _publish_flow_template(client, headers, dep_id)
@@ -380,18 +404,40 @@ def test_non_json_run_is_retained_but_cannot_be_adopted(client, org_headers, fak
     task_id = _get_open_tasks(client, headers, wi_id)[0]["id"]
 
     runs = _wait_run_succeeded(client, headers, task_id)
-    assert runs and runs[0]["status"] == "failed"
     run = runs[0]
-    assert run["output"] == FakeChatOpenAI.payload
+    # 有产出但无字段：不再硬判 failed，改为 succeeded + 待人工复核，保留原文供编辑覆盖采纳。
+    assert run["status"] == "succeeded"
     assert run["parsed"]["formatStatus"] == "invalid"
     assert run["parsed"]["values"] == {}
+    assert run["parsed"]["qualityStatus"] == "needs_human_review"
+    assert run["parsed"]["failureKind"] == "non_json_output"
     assert run["parsed"]["formatRepair"]["attempted"] is True
+    assert run["output"] == FakeChatOpenAI.payload
 
     adopted = client.post(f"/api/v1/tasks/{task_id}/adopt-run", headers=headers, json={"run_id": run["id"]})
     assert adopted.status_code == 422
-    assert "failed" in adopted.json()["message"]
     docs = client.get(f"/api/v1/documents?wi={wi_id}", headers=headers).json()["data"]["items"]
     assert docs == []
+
+
+def test_non_json_run_can_be_recovered_by_manual_override(client, org_headers, fake_model):
+    """有产出但非 JSON 的运行：人工补齐必填字段后可覆盖采纳入库（run 为 succeeded 才可编辑）。"""
+    headers = org_headers
+    _model_id, dep_id = _publish_expert_with_deployment(client, headers, "fill-dep-override")
+    tpl_id = _publish_simple_template(client, headers, dep_id)
+    pid = _make_project(client, headers, tpl_id, "v1", [])
+    FakeChatOpenAI.payload = "这不是 JSON，只是分析正文"
+    wi_id = _create_wi(client, headers, pid, tpl_id, "AI覆盖采纳")
+    task_id = _get_open_tasks(client, headers, wi_id)[0]["id"]
+
+    run = _wait_run_succeeded(client, headers, task_id)[0]
+    assert run["status"] == "succeeded" and run["parsed"]["failureKind"] == "non_json_output"
+
+    overridden = client.post(f"/api/v1/tasks/{task_id}/adopt-run", headers=headers, json={
+        "run_id": run["id"], "values": {"conclusion": "人工核对后的结论"}, "approve_quality_override": True,
+    })
+    assert overridden.status_code == 200, overridden.text
+    assert overridden.json()["data"]["values"]["conclusion"] == "人工核对后的结论"
 
 
 def test_ai_fill_rerun_with_context(client, org_headers, fake_model):
