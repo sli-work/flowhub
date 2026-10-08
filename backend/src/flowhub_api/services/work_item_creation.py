@@ -10,6 +10,23 @@ from flowhub_api.services.audit import AuditService
 from flowhub_api.services.workflow import WorkflowService
 
 
+async def filter_registered_labels(session: AsyncSession, labels: Iterable[str] | None) -> list[str]:
+    """Keep only labels registered in the tag pool, de-duplicated and order-stable.
+
+    Shared by work-item creation and editing so a work item can never carry a
+    label that the tag-management page cannot show or filter on.
+    """
+    requested = [str(label).strip() for label in (labels or []) if str(label).strip()]
+    if not requested:
+        return []
+    registered = set((await session.execute(
+        select(TagItem.name).where(
+            TagItem.name.in_(requested), TagItem.deleted == False,  # noqa: E712
+        )
+    )).scalars().all())
+    return [label for label in dict.fromkeys(requested) if label in registered]
+
+
 def _attachment_ids(values: dict | None) -> set[str]:
     """Extract only stable document references from a start-form payload."""
     ids: set[str] = set()
@@ -45,14 +62,10 @@ async def create_work_item(
         project_id, template_id, effective_start_values, user,
     )
     wi = result["item"]
-    requested_labels = labels or []
-    if requested_labels:
-        registered = set((await session.execute(
-            select(TagItem.name).where(
-                TagItem.name.in_(requested_labels), TagItem.deleted == False,  # noqa: E712
-            )
-        )).scalars().all())
-        wi.labels = [label for label in dict.fromkeys(requested_labels) if label in registered]
+    if labels:
+        # 显式传入非空标签时以标签池为准；否则保留 create_instance 从 start_values 读到的值
+        # （HTTP 请求体 labels 默认 []，不能用 is not None 判断，否则会清空起始表单标签）。
+        wi.labels = await filter_registered_labels(session, labels)
 
     attachment_ids = _attachment_ids(start_values)
     if attachment_ids:

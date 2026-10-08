@@ -151,6 +151,72 @@ class TestWorkItemCreate:
         assert all(task["priority"] == "P0" for task in detail["tasks"] if task["status"] not in ("completed", "cancelled"))
         assert any(task["priority"] == "P3" for task in detail["tasks"] if task["status"] == "completed")
 
+    def test_update_work_item_edits_title_due_priority_and_labels(self, client: TestClient, leader_headers: dict, org_headers: dict, _created_project: str):
+        """通用编辑接口：标题/截止/优先级/标签一次提交，标签以登记池为准。"""
+        tag_name = _uniq("迭代-")
+        created_tag = client.post("/api/v1/tags", headers=org_headers, json={"name": tag_name, "color": "pur"})
+        assert created_tag.status_code == 200, created_tag.text
+        created = client.post("/api/v1/work-items", headers=leader_headers, json={
+            "project_id": _created_project, "template_id": "tpl-req", "priority": "P2",
+            "start_values": _start_values(_uniq("编辑工作项")),
+        })
+        assert created.status_code == 200, created.text
+        wi_id = created.json()["data"]["item"]["id"]
+        new_title = _uniq("改名后标题")
+        updated = client.patch(f"/api/v1/work-items/{wi_id}", headers=leader_headers, json={
+            "title": new_title, "due": "12-31", "priority": "P0", "labels": [tag_name, "未登记标签"],
+        })
+        assert updated.status_code == 200, updated.text
+        item = updated.json()["data"]["item"]
+        assert item["title"] == new_title
+        assert item["due"] == "12-31"
+        assert item["priority"] == "P0"
+        assert item["labels"] == [tag_name], "未登记标签必须被过滤"
+        assert updated.json()["data"]["updatedOpenTaskCount"] >= 1
+        detail = client.get(f"/api/v1/work-items/{wi_id}", headers=leader_headers).json()["data"]
+        assert detail["item"]["title"] == new_title
+        assert detail["startValues"]["title"] == new_title
+        assert detail["startValues"]["priority"] == "P0"
+        assert all(task["priority"] == "P0" for task in detail["tasks"] if task["status"] not in ("completed", "cancelled"))
+
+    def test_update_work_item_partial_update_leaves_other_fields(self, client: TestClient, leader_headers: dict, _created_project: str):
+        """局部更新：未传入的字段保持原值，标签不因省略而被清空。"""
+        created = client.post("/api/v1/work-items", headers=leader_headers, json={
+            "project_id": _created_project, "template_id": "tpl-req", "priority": "P3",
+            "start_values": _start_values(_uniq("局部更新")),
+        })
+        wi_id = created.json()["data"]["item"]["id"]
+        original_title = created.json()["data"]["item"]["title"]
+        updated = client.patch(f"/api/v1/work-items/{wi_id}", headers=leader_headers, json={"due": "09-09"})
+        assert updated.status_code == 200, updated.text
+        payload = updated.json()["data"]
+        assert payload["item"]["due"] == "09-09"
+        assert payload["item"]["title"] == original_title
+        assert payload["item"]["priority"] == "P3"
+        assert payload["updatedOpenTaskCount"] == 0, "未改优先级不应同步任务"
+
+    def test_update_work_item_requires_perm(self, client: TestClient, leader_headers: dict, dev_headers: dict, _created_project: str):
+        created = client.post("/api/v1/work-items", headers=leader_headers, json={
+            "project_id": _created_project, "template_id": "tpl-req",
+            "start_values": _start_values(_uniq("无权限编辑")),
+        })
+        wi_id = created.json()["data"]["item"]["id"]
+        denied = client.patch(f"/api/v1/work-items/{wi_id}", headers=dev_headers, json={"title": "越权改名"})
+        assert denied.status_code == 403
+
+    def test_update_work_item_rejects_empty_title(self, client: TestClient, leader_headers: dict, _created_project: str):
+        created = client.post("/api/v1/work-items", headers=leader_headers, json={
+            "project_id": _created_project, "template_id": "tpl-req",
+            "start_values": _start_values(_uniq("空标题")),
+        })
+        wi_id = created.json()["data"]["item"]["id"]
+        bad = client.patch(f"/api/v1/work-items/{wi_id}", headers=leader_headers, json={"title": "   "})
+        assert bad.status_code == 400
+
+    def test_update_work_item_not_found(self, client: TestClient, leader_headers: dict):
+        r = client.patch("/api/v1/work-items/WI-NOT-EXIST", headers=leader_headers, json={"title": "x"})
+        assert r.status_code == 404
+
     def test_list_returns_all_current_node_assignees(self, client: TestClient, leader_headers: dict, _created_project: str):
         created = client.post("/api/v1/work-items", headers=leader_headers, json={
             "project_id": _created_project, "template_id": "tpl-req",

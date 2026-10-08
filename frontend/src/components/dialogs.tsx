@@ -822,6 +822,106 @@ export function CreateWorkItemDialog({ onClose }: { onClose: () => void }) {
   )
 }
 
+/* ============ 16. 编辑工作项（标题 / 优先级 / 截止 / 标签） ============ */
+export function EditWorkItemDialog({ wi, onClose, onSaved }: {
+  wi: { id: string; title: string; priority: 'P0' | 'P1' | 'P2' | 'P3'; due: string; labels: string[] }
+  onClose: () => void
+  onSaved: () => void
+}) {
+  const [title, setTitle] = useState(wi.title)
+  const [priority, setPriority] = useState<'P0' | 'P1' | 'P2' | 'P3'>(wi.priority)
+  const [due, setDue] = useState(wi.due || '')
+  const [tags, setTags] = useState<{ id: string; name: string; color: string }[]>([])
+  const [selLabels, setSelLabels] = useState<string[]>(wi.labels ?? [])
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    api.get<{ items: { id: string; name: string; color: string }[] }>('/api/v1/tags').then((d) => setTags(d.items)).catch(() => {})
+  }, [])
+
+  const toggleLabel = (name: string) =>
+    setSelLabels((prev) => (prev.includes(name) ? prev.filter((l) => l !== name) : [...prev, name]))
+
+  const canSubmit = title.trim().length > 0 && !busy
+
+  const submit = async () => {
+    setBusy(true)
+    try {
+      // 真实更新：PATCH /work-items/{id}（仅提交显式字段；标签以标签池为准）
+      await api.patch(`/api/v1/work-items/${wi.id}`, {
+        title: title.trim(), priority, due: due.trim(), labels: selLabels,
+      })
+      toast.success('工作项已更新')
+      onSaved()
+      onClose()
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : '更新工作项失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
+      <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-[560px]">
+        <DialogHeader>
+          <DialogTitle className="text-[15px]">编辑工作项</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <label className="text-[13px] font-medium text-slate-600 dark:text-slate-300">标题 <span className="text-red-500">*</span></label>
+            <Input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={255} placeholder="工作项标题" />
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <label className="text-[13px] font-medium text-slate-600 dark:text-slate-300">优先级</label>
+              <select className="h-9 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm outline-none focus:border-blue-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                value={priority} onChange={(e) => setPriority(e.target.value as 'P0' | 'P1' | 'P2' | 'P3')}>
+                <option value="P0">P0 · 紧急</option>
+                <option value="P1">P1 · 高</option>
+                <option value="P2">P2 · 普通</option>
+                <option value="P3">P3 · 低</option>
+              </select>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-[13px] font-medium text-slate-600 dark:text-slate-300">截止</label>
+              <Input value={due} onChange={(e) => setDue(e.target.value)} placeholder="如 08-18" />
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-[13px] font-medium text-slate-600 dark:text-slate-300">绑定标签 <span className="text-[11.5px] font-normal text-slate-400">（预定义，可多选）</span></label>
+            {tags.length > 0 ? (
+              <div className="flex flex-wrap gap-1.5">
+                {tags.map((t) => (
+                  <button key={t.id} type="button"
+                    className={cn('rounded-full border px-2.5 py-1 text-[11.5px] transition-colors',
+                      selLabels.includes(t.name)
+                        ? 'border-blue-500 bg-blue-50 text-blue-600 dark:bg-blue-500/15 dark:text-blue-300'
+                        : 'border-slate-200 text-slate-500 hover:border-blue-300 hover:text-blue-500 dark:border-slate-700 dark:text-slate-400')}
+                    onClick={() => toggleLabel(t.name)}>
+                    {t.name}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <p className="text-[11.5px] text-slate-400">暂无预定义标签，可在「工作项」页面管理。</p>
+            )}
+          </div>
+        </div>
+        <DialogFooter className="gap-2">
+          <Button variant="outline" onClick={onClose}>取消</Button>
+          <Button disabled={!canSubmit} onClick={submit}>
+            {busy && <LoaderCircle className="mr-1.5 h-4 w-4 animate-spin" aria-hidden="true" />}
+            {busy ? '保存中…' : '保存'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 /* ============ 发布校验（画布「发布校验」按钮）：调后端校验接口，问题清单 + 定位跳转 ============ */
 function ValidateDialog() {
   const { closeDialog, canvasTarget, setCheckProblems, locateCanvasNode, openCanvas } = useApp()

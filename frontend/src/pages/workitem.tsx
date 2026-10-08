@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowLeft, Paperclip, Tag, Calendar, User, Target, Inbox, StopCircle, Trash2 } from 'lucide-react'
+import { ArrowLeft, Paperclip, Tag, Calendar, User, Target, Inbox, StopCircle, Trash2, Pencil } from 'lucide-react'
 import { useApp, toast } from '../store/app-store'
 import { api, ApiError, getToken } from '../lib/api'
 import { cn } from '../lib/utils'
@@ -7,6 +7,7 @@ import {
   Badge, DocRow, SectionCard, Timeline, wiStatusBadge, taskStatusBadge, EmptyState, type Tone,
 } from '../components/common'
 import { DocumentViewerDrawer } from '../components/document-viewer-drawer'
+import { EditWorkItemDialog } from '../components/dialogs'
 import type { IssueSummary, WorkItem, WorkflowIssue } from '../types'
 
 const labelTone: Record<string, Tone> = {
@@ -27,6 +28,7 @@ export function WorkItemPage() {
   const [viewer, setViewer] = useState<{ open: boolean; initialId?: string }>({ open: false })
   const [issues, setIssues] = useState<WorkflowIssue[]>([])
   const [issueSummary, setIssueSummary] = useState<IssueSummary>({ total: 0, open: 0, blocking: 0, waitingVerification: 0 })
+  const [editOpen, setEditOpen] = useState(false)
 
   const refreshDocs = () => {
     if (!activeWiId) return
@@ -169,6 +171,11 @@ export function WorkItemPage() {
             <button className="rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-[13px] font-medium text-slate-600 transition-colors hover:border-blue-400 hover:text-blue-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300" onClick={() => navigate('templates')}>
               流程模板
             </button>
+            {wi && (
+              <button className="rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-[13px] font-medium text-slate-600 transition-colors hover:border-blue-400 hover:text-blue-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300" onClick={() => setEditOpen(true)}>
+                <Pencil className="mr-1 inline h-4 w-4" />编辑
+              </button>
+            )}
             {stoppable && (
               <button className="rounded-lg border border-red-200 bg-white px-3.5 py-2 text-[13px] font-medium text-red-500 transition-colors hover:border-red-400 hover:bg-red-50 dark:border-red-500/40 dark:bg-slate-900 dark:hover:bg-red-500/10" onClick={stopFlow}>
                 <StopCircle className="mr-1 inline h-4 w-4" />停止流程
@@ -277,6 +284,9 @@ export function WorkItemPage() {
         </div>
       </div>
       <DocumentViewerDrawer open={viewer.open} docs={docs} initialDocId={viewer.initialId} onClose={() => setViewer({ open: false })} />
+      {editOpen && wi && (
+        <EditWorkItemDialog wi={wi} onClose={() => setEditOpen(false)} onSaved={() => setReload((v) => v + 1)} />
+      )}
     </div>
   )
 }

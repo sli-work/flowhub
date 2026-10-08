@@ -116,6 +116,14 @@ class UpdateWorkItemPriorityReq(BaseModel):
     priority: Literal["P0", "P1", "P2", "P3"]
 
 
+class UpdateWorkItemReq(BaseModel):
+    """工作项属性编辑：字段全部可选，仅对显式传入的字段生效（局部更新）。"""
+    title: str | None = None
+    due: str | None = None
+    priority: Literal["P0", "P1", "P2", "P3"] | None = None
+    labels: list[str] | None = None  # 预定义标签；未登记的名称由后端过滤
+
+
 class TaskActionReq(BaseModel):
     action: str  # submit | return | transfer | claim | request_info | pause | cancel
     node_id: str | None = None

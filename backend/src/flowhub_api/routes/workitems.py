@@ -11,10 +11,13 @@ from flowhub_api.authz.authorizer import build_authorizer, get_current_user
 from flowhub_api.core.response import BizError, BizCode, ok
 from flowhub_api.db.session import get_db
 from flowhub_api.models import NotificationItem, TaskItem, User, WorkItem, WorkflowIssue
-from flowhub_api.schemas.api import CreateWorkItemReq, UpdateWorkItemPriorityReq
+from flowhub_api.schemas.api import CreateWorkItemReq, UpdateWorkItemPriorityReq, UpdateWorkItemReq
 from flowhub_api.seed.init import gen_id
 from flowhub_api.services.audit import AuditService
-from flowhub_api.services.work_item_creation import create_work_item as create_work_item_service
+from flowhub_api.services.work_item_creation import (
+    create_work_item as create_work_item_service,
+    filter_registered_labels,
+)
 from flowhub_api.services.task_lineage import historical_split_parent_ids_for_tasks
 from flowhub_api.services.task_issues import TaskIssueService
 from flowhub_api.services.workflow import WorkflowService
@@ -211,6 +214,75 @@ async def update_work_item_priority(
         {"item": _brief(wi), "updatedOpenTaskCount": len(open_tasks)},
         "工作项优先级已更新",
     )
+
+
+@router.patch("/{wi_id}")
+async def update_work_item(
+    wi_id: str,
+    body: UpdateWorkItemReq,
+    user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_db)],
+):
+    """编辑工作项属性（标题 / 截止 / 优先级 / 标签）。
+
+    仅改显式传入的字段；优先级沿用历史接口的同步规则（未终结任务一并更新）。
+    标签以「标签池」为准，未登记的名称会被过滤，避免列表页出现无法筛选的孤儿标签。
+    """
+    build_authorizer(user).require("workflow_instance:update")
+    wi = await session.get(WorkItem, wi_id)
+    if wi is None:
+        raise BizError(BizCode.NOT_FOUND, "工作项不存在")
+
+    fields = body.model_dump(exclude_unset=True)
+    before = {key: getattr(wi, key) for key in fields}
+    updated_open_task_count = 0
+
+    if "title" in fields:
+        title = str(fields["title"] or "").strip()
+        if not title:
+            raise BizError(BizCode.VALIDATION, "标题不能为空")
+        if len(title) > 255:
+            raise BizError(BizCode.VALIDATION, "标题过长（上限 255 字符）")
+        wi.title = title
+        # 起始节点任务标题跟随工作项，否则任务列表与详情会出现陈旧标题。
+        # 起始任务在创建时最先写入，按 id 升序即为首条（与详情页「起始任务稳定在首位」一致）。
+        start_task = (await session.execute(
+            select(TaskItem).where(TaskItem.wi_id == wi_id).order_by(TaskItem.id).limit(1)
+        )).scalar_one_or_none()
+        if start_task is not None:
+            start_task.title = title
+        wi.start_values = {**(wi.start_values or {}), "title": title}
+
+    if "due" in fields:
+        wi.due = str(fields["due"] or "").strip()
+
+    if "priority" in fields and fields["priority"] is not None:
+        wi.priority = fields["priority"]
+        # 起始表单是工作项事实快照的一部分，避免详情中仍展示旧值。
+        wi.start_values = {**(wi.start_values or {}), "priority": fields["priority"]}
+        open_tasks = (await session.execute(
+            select(TaskItem).where(
+                TaskItem.wi_id == wi_id,
+                TaskItem.status.not_in(["completed", "cancelled"]),
+            )
+        )).scalars().all()
+        for task in open_tasks:
+            task.priority = fields["priority"]
+        updated_open_task_count = len(open_tasks)
+
+    if "labels" in fields:
+        wi.labels = await filter_registered_labels(session, fields["labels"])
+
+    await AuditService(session).record(
+        actor=user.name,
+        action="workflow_instance:update",
+        target=f"{wi.id} · {wi.title}",
+        result="success",
+        before=before,
+        after={**{key: getattr(wi, key) for key in fields}, "updatedOpenTaskCount": updated_open_task_count},
+    )
+    await session.commit()
+    return ok({"item": _brief(wi), "updatedOpenTaskCount": updated_open_task_count}, "工作项已更新")
 
 
 @router.post("/{wi_id}/stop")
