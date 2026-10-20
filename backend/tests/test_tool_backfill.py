@@ -20,7 +20,7 @@ from flowhub_api.services import expert_scheduler as scheduler
 from flowhub_api.services import tool_automation as automation
 from flowhub_api.services.crypto import encrypt_secret
 from flowhub_api.services.runtime_quality import content_hash
-from test_tool_archive_integration import ObjectStore, seed
+from test_tool_archive_integration import ObjectStore, SUMMARY_MARKDOWN, seed
 
 
 @pytest.fixture
@@ -98,7 +98,7 @@ def test_duplicate_backfill_creates_one_run_and_jobs_and_never_submits(client, o
             assert task.status == 'assigned' and task.form_values == {} and task.expert_pending
             # Drive the real scheduler's completion hook after deterministic schema validation.
             run.status, run.output = 'succeeded', 'validated backfill output'
-            run.parsed = {'values': {'fmu4u8pua': '# Backfilled AI draft'}}
+            run.parsed = {'values': {'fmu4u8pua': SUMMARY_MARKDOWN}}
             run.quality_result = {'status': 'passed', 'contentHash': content_hash(run.output)}
             await scheduler.complete_workflow(session, run, expert_jobs[0].completion)
             expert_jobs[0].status = 'completed'
@@ -112,7 +112,7 @@ def test_duplicate_backfill_creates_one_run_and_jobs_and_never_submits(client, o
             assert len(docs) == 2
             summary = next(doc for doc in docs if doc.provenance.get('origin') == 'AI生成')
             assert summary.provenance['reviewStatus'] == 'pending_human_review'
-            assert case['store'].objects[summary.object_name] == b'# Backfilled AI draft'
+            assert case['store'].objects[summary.object_name] == SUMMARY_MARKDOWN.encode()
             task, wi = await session.get(TaskItem, ids['task']), await session.get(WorkItem, ids['wi'])
             assert task.status == 'assigned' and task.form_values == {} and not task.expert_pending
             assert wi.status == 'in_progress'

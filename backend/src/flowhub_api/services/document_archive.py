@@ -1,5 +1,6 @@
 """Scoped immutable acceptance archives backed by independent object bytes."""
 import asyncio
+import re
 from datetime import UTC, datetime
 from hashlib import sha256
 from io import BytesIO
@@ -174,6 +175,23 @@ async def summary_for_run(session, task, run):
                                  (run.parsed or {}).get('values') or {})
 
 
+def validate_summary_markdown(content):
+    """Check document completeness only; this never certifies facts or acceptance."""
+    if not isinstance(content, str) or not content.strip() or len(content.encode()) > MAX_ARCHIVE_BYTES:
+        raise ValueError('Summary format: content is empty or too large')
+    lines = content.strip().splitlines()
+    instruction = re.compile(r'^(?:only\s+(?:output|return)|(?:output|return)\s+only|(?:请)?(?:仅|只)(?:返回|输出))', re.I)
+    if any(instruction.match(line.lstrip(' >*-+0123456789.')) for line in lines):
+        raise ValueError('Summary format: instruction echo is not a delivery document')
+    headings = {match.group(1).strip() for line in lines
+                if (match := re.match(r'^#{1,6}\s+(.+?)\s*#*$', line))}
+    if len(headings) < 2:
+        raise ValueError('Summary format: at least two distinct Markdown headings are required')
+    body = '\n'.join(line for line in lines if not re.match(r'^#{1,6}\s+', line) and not line.lstrip().startswith('```'))
+    if len(re.sub(r'\s', '', body)) < 200:
+        raise ValueError('Summary format: at least 200 non-whitespace body characters are required')
+
+
 async def validated_summary(session, task, run, content):
     """Schema quality is formatting evidence only; the summary remains unreviewed."""
     from flowhub_api.services.expert_runtime import schema_validation_issues
@@ -193,8 +211,7 @@ async def validated_summary(session, task, run, content):
         raise ValueError('Summary does not match validated run output')
     if schema_validation_issues(schema, values):
         raise ValueError('Summary output schema validation failed')
-    if not isinstance(content, str) or not content.strip() or len(content.encode()) > MAX_ARCHIVE_BYTES:
-        raise ValueError('Summary content is empty or too large')
+    validate_summary_markdown(content)
 
 
 def _ref(doc):

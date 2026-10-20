@@ -15,6 +15,8 @@ from flowhub_api.models import (
 )
 from flowhub_api.models.tool import ToolAutomationJob, ToolInvocation
 from flowhub_api.services import document_archive as archive
+
+SUMMARY_MARKDOWN = '# Delivery summary\n\nThe delivery implements independent acceptance archives for the adopted predecessor files. Each archived document keeps its original bytes, sensitivity and source audit information. The generated summary is stored separately and remains a draft for the assigned human reviewer.\n\n## Verification and remaining review\n\nRegression checks cover authorization, deterministic archive keys, failed storage writes, duplicate backfill requests and approval resumption. The workflow task stays assigned with an unchanged form. A human must inspect the linked evidence and decide whether the delivery satisfies the acceptance criteria.'
 from flowhub_api.services import tool_automation as automation
 from flowhub_api.services.runtime_quality import content_hash
 
@@ -67,7 +69,7 @@ async def seed(factory, store):
         await session.flush()
         session.add(ExpertRun(id=ids['run'], expert_id=ids['expert'], expert_version_id=ids['version'], task_id=ids['task'],
             requested_by=user.id, status='succeeded', trace_id='trace-' + prefix, output='validated-output',
-            parsed={'values': {'fmu4u8pua': '# AI draft summary'}},
+            parsed={'values': {'fmu4u8pua': SUMMARY_MARKDOWN}},
             quality_result={'status': 'passed', 'contentHash': content_hash('validated-output')}))
         await session.commit()
     return ids, user.id
@@ -149,7 +151,7 @@ def test_durable_automation_recovers_expired_claim_and_archives_summary_without_
             assert len(docs) == 2
             summary = next(doc for doc in docs if doc.provenance.get('origin') == 'AI生成')
             assert summary.provenance['reviewStatus'] == 'pending_human_review'
-            assert store.objects[summary.object_name] == b'# AI draft summary'
+            assert store.objects[summary.object_name] == SUMMARY_MARKDOWN.encode()
             task = await session.get(TaskItem, ids['task'])
             assert task.status == 'assigned' and task.form_values == {}
         await engine.dispose()
@@ -176,7 +178,7 @@ def test_archive_batch_storage_failure_rolls_back_all_visible_metadata(client, m
             task, user, run = await session.get(TaskItem, ids['task']), await session.get(User, user_id), await session.get(ExpertRun, ids['run'])
             with pytest.raises(ValueError, match='storage write failed'):
                 await archive.archive_documents(session, task=task, user=user, source_document_ids=[ids['doc']],
-                                                run=run, summary_content='# AI draft summary')
+                                                run=run, summary_content=SUMMARY_MARKDOWN)
             await session.commit()
         async with factory() as session:
             docs = (await session.execute(select(DocItem).where(DocItem.wi == ids['wi'], DocItem.kind == archive.ARCHIVE_KIND))).scalars().all()
@@ -186,8 +188,36 @@ def test_archive_batch_storage_failure_rolls_back_all_visible_metadata(client, m
         async with factory() as session:
             task, user, run = await session.get(TaskItem, ids['task']), await session.get(User, user_id), await session.get(ExpertRun, ids['run'])
             result = await archive.archive_documents(session, task=task, user=user, source_document_ids=[ids['doc']],
-                                                    run=run, summary_content='# AI draft summary')
+                                                    run=run, summary_content=SUMMARY_MARKDOWN)
             assert len(result['documents']) == 2
             await session.commit()
+        await engine.dispose()
+    asyncio.run(scenario())
+
+
+def test_instruction_echo_is_a_durable_failed_summary_job_without_archive_success(client, monkeypatch):
+    store = ObjectStore()
+    monkeypatch.setattr(archive, 'get_minio', lambda: store)
+    async def scenario():
+        engine = create_async_engine(get_settings().sqlalchemy_url, poolclass=NullPool)
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        ids, user_id = await seed(factory, store)
+        async with factory() as session:
+            task, user, run = await session.get(TaskItem, ids['task']), await session.get(User, user_id), await session.get(ExpertRun, ids['run'])
+            content = 'Only output the JSON object.'
+            run.output = content
+            run.parsed = {'values': {'fmu4u8pua': content}}
+            run.quality_result = {'status': 'passed', 'contentHash': content_hash(content)}
+            jobs = await automation.schedule_automation(session, task=task, actor=user,
+                expert_version_id=ids['version'], event='expert_output_validated', run=run)
+            job_id = jobs[0].id
+            await session.commit()
+        async with factory() as session:
+            job = await session.get(ToolAutomationJob, job_id)
+            assert job.status == 'failed' and 'Summary format' in job.error
+            assert job.result_json == {} and 'freeze_error' in job.payload_json
+            docs = (await session.execute(select(DocItem).where(DocItem.wi == ids['wi'], DocItem.kind == archive.ARCHIVE_KIND))).scalars().all()
+            assert docs == []
+            assert (await session.get(TaskItem, ids['task'])).status == 'assigned'
         await engine.dispose()
     asyncio.run(scenario())

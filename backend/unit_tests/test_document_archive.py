@@ -7,6 +7,8 @@ import pytest
 
 from flowhub_api.services import document_archive as archive
 
+SUMMARY_MARKDOWN = '# Delivery summary\n\nThe delivery implements independent acceptance archives for the adopted predecessor files. Each archived document keeps its original bytes, sensitivity and source audit information. The generated summary is stored separately and remains a draft for the assigned human reviewer.\n\n## Verification and remaining review\n\nRegression checks cover authorization, deterministic archive keys, failed storage writes, duplicate backfill requests and approval resumption. The workflow task stays assigned with an unchanged form. A human must inspect the linked evidence and decide whether the delivery satisfies the acceptance criteria.'
+
 
 class Store:
     def __init__(self):
@@ -187,13 +189,13 @@ async def test_independent_summary_archive_requires_validated_content_and_keeps_
     monkeypatch.setattr(archive, 'validated_summary', validated)
     run = N(id='run', execution_generation=2)
     result = await archive.archive_documents(session, task=task, user=user,
-        source_document_ids=[], run=run, summary_content='Draft summary')
-    validated.assert_awaited_once_with(session, task, run, 'Draft summary')
+        source_document_ids=[], run=run, summary_content=SUMMARY_MARKDOWN)
+    validated.assert_awaited_once_with(session, task, run, SUMMARY_MARKDOWN)
     doc = next(row for row in session.rows if getattr(row, 'kind', '') == '验收归档')
     assert doc.provenance['origin'] == 'AI生成'
     assert doc.provenance['reviewStatus'] == 'pending_human_review'
     assert result['reviewStatus'] == 'pending_human_review'
-    assert store.objects[doc.object_name] == b'Draft summary'
+    assert store.objects[doc.object_name] == SUMMARY_MARKDOWN.encode()
     assert task.status == 'assigned'
 
 
@@ -203,16 +205,16 @@ async def test_summary_schema_and_hash_must_match(setup, monkeypatch):
     session, source, task, user, store = setup
     monkeypatch.setattr(archive, 'frozen_canvas', AsyncMock(return_value=N(nodes=[{
         'id': 'acceptance', 'cfg': {'schema': [{'key': 'summaryContent', 'type': 'textarea', 'required': True}]}}])))
-    run = N(id='run', task_id=task.id, status='succeeded', output='output', parsed={'values': {'summaryContent': 'Summary'}},
+    run = N(id='run', task_id=task.id, status='succeeded', output='output', parsed={'values': {'summaryContent': SUMMARY_MARKDOWN}},
             quality_result={'status': 'passed', 'contentHash': content_hash('output')})
-    await archive.validated_summary(session, task, run, 'Summary')
+    await archive.validated_summary(session, task, run, SUMMARY_MARKDOWN)
     with pytest.raises(ValueError, match='does not match'):
         await archive.validated_summary(session, task, run, 'Unvalidated summary')
     run.output = 'changed'
     with pytest.raises(ValueError, match='does not match'):
-        await archive.validated_summary(session, task, run, 'Summary')
+        await archive.validated_summary(session, task, run, SUMMARY_MARKDOWN)
     with pytest.raises(ValueError, match='successful'):
-        await archive.validated_summary(session, task, None, 'Summary')
+        await archive.validated_summary(session, task, None, SUMMARY_MARKDOWN)
 
 
 @pytest.mark.asyncio
@@ -293,3 +295,23 @@ async def test_bytes_changed_after_scheduling_cannot_replace_frozen_archive(setu
     assert not session.rows
     with pytest.raises(ValueError, match='source set'):
         await archive.archive_documents(session, task=task, user=user, source_document_ids=['source'], frozen_sources=[])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('content', [
+    'Only output the JSON object.',
+    'acceptance-summary.md',
+    '# Summary\n\nDone.\n\n## Verification\n\nPassed.',
+    'The delivery has been reviewed and awaits human acceptance. ' * 8,
+    '# Summary\n\nOnly output the JSON object.\n\n## Verification\n\n' + 'Only output the JSON object. ' * 15,
+])
+async def test_schema_passed_summary_still_rejects_instruction_echo_or_incomplete_markdown(setup, monkeypatch, content):
+    from flowhub_api.services.runtime_quality import content_hash
+    session, source, task, user, store = setup
+    monkeypatch.setattr(archive, 'frozen_canvas', AsyncMock(return_value=N(nodes=[{
+        'id': 'acceptance', 'cfg': {'schema': [{'key': 'summaryContent', 'type': 'file', 'required': True}]}}])))
+    run = N(task_id=task.id, status='succeeded', output=content,
+            parsed={'values': {'summaryContent': content}},
+            quality_result={'status': 'passed', 'contentHash': content_hash(content)})
+    with pytest.raises(ValueError, match='Summary format'):
+        await archive.validated_summary(session, task, run, content)
