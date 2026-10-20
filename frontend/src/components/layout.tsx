@@ -38,6 +38,7 @@ const NAV: { grp: string; items: { id: PageId; label: string; icon: React.ReactN
     items: [
       { id: 'expert-center', label: 'Expert 中心', icon: <Boxes className="h-[17px] w-[17px]" /> },
       { id: 'skill-center', label: 'Expert Skill', icon: <BrainCircuit className="h-[17px] w-[17px]" /> },
+      { id: 'tool-center', label: '工具中心', icon: <Cable className="h-[17px] w-[17px]" /> },
       { id: 'mcp-center', label: 'MCP 中心', icon: <Cable className="h-[17px] w-[17px]" /> },
       { id: 'provider-center', label: 'Provider', icon: <CircleCheck className="h-[17px] w-[17px]" /> },
 
@@ -234,6 +235,7 @@ export function Topbar() {
     'expert-center': ['Expert 中心', 'AI 构建 / Expert 中心'],
     'expert-editor': ['Expert 编辑器', 'AI 构建 / Expert 中心 / Expert 编辑器'],
     'skill-center': ['Expert Skill', 'AI 构建 / Expert Skill'],
+    'tool-center': ['工具中心', 'AI 构建 / 工具中心'],
     'mcp-center': ['MCP 中心', 'AI 构建 / MCP 中心'],
     'provider-center': ['Provider', 'AI 构建 / Provider'],
     knowledge: ['知识库', '知识库 / 知识库'],

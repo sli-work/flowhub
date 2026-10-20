@@ -143,7 +143,7 @@ export function DocumentsPage() {
                         'bg-blue-50 text-blue-600 dark:bg-blue-500/15 dark:text-blue-400')}>{kindIcon(d.kind)}</span>
                       <div className="min-w-0">
                         <div className="cursor-pointer truncate font-medium text-slate-700 hover:text-blue-600 dark:text-slate-200" onClick={() => openViewer(d)}>{d.name}</div>
-                        <div className="text-[11px] text-slate-400">{d.kind}</div>
+                        <div className="text-[11px] text-slate-400">{d.kind}{d.provenance?.reviewStatus === 'pending_human_review' && <span className="ml-2 rounded bg-amber-50 px-2 text-amber-700">{d.provenance?.origin === 'AI生成' ? 'AI生成 / ' : ''}待人工验收</span>}</div>
                       </div>
                     </div>
                   </td>

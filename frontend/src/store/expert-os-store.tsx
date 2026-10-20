@@ -33,6 +33,7 @@ export interface ExpertDraft {
   model: string
   skills: string[]
   knowledgeBaseIds: string[]
+  toolBindings?: import('../lib/tools').ToolBinding[]
 }
 
 /** 发布检查分组，编辑器右栏按此滚动定位到对应表单分区 */
@@ -166,7 +167,7 @@ export function ExpertOsProvider({ children }: { children: ReactNode }) {
         const skills = fulfilledValue(results[5], { items: [] as SkillRecord[] })
         const mcp = fulfilledValue(results[6], { items: [] as McpServerRecord[] })
         if (!active) return
-        const details = await Promise.all(experts.items.map((expert) => api.get<{ expert: ExpertRecord; versions: { id: string; systemPrompt: string; providerModelId?: string; model?: string; skills: string[]; knowledgeBaseIds: string[]; status?: string; testedAt?: string }[] }>(`/api/v1/experts/${expert.id}`).catch(() => null)))
+        const details = await Promise.all(experts.items.map((expert) => api.get<{ expert: ExpertRecord; versions: { id: string; systemPrompt: string; providerModelId?: string; model?: string; skills: string[]; knowledgeBaseIds: string[]; toolBindings?: import('../lib/tools').ToolBinding[]; status?: string; testedAt?: string }[] }>(`/api/v1/experts/${expert.id}`).catch(() => null)))
         if (!active) return
       const configs = Object.fromEntries(details.filter((detail): detail is NonNullable<typeof detail> => !!detail).map((detail) => {
         const version = detail.versions.find((item) => item.id === detail.expert.currentVersionId) ?? detail.versions.at(-1)
@@ -179,7 +180,7 @@ export function ExpertOsProvider({ children }: { children: ReactNode }) {
             if (entry) { providerId = provider.id; model = entry.model; break }
           }
         }
-        return [detail.expert.id, { versionId: version?.id, systemPrompt: version?.systemPrompt ?? '', providerId, model, knowledgeBaseIds: version?.knowledgeBaseIds ?? [], revision: 1, testedRevision: version?.status === 'published' || version?.testedAt ? 1 : null }]
+        return [detail.expert.id, { versionId: version?.id, systemPrompt: version?.systemPrompt ?? '', providerId, model, knowledgeBaseIds: version?.knowledgeBaseIds ?? [], toolBindings: version?.toolBindings ?? [], revision: 1, testedRevision: version?.status === 'published' || version?.testedAt ? 1 : null }]
       }))
         setState((current) => ({ ...current, experts: experts.items, configs: { ...current.configs, ...configs }, providers: providers.items, deployments: deployments.items, runs: runs.items, approvals: approvals.items, skills: skills.items, mcpServers: mcp.items, mcpTools: deriveMcpTools(mcp.items) }))
       } catch { /* 网络不可用时保留上次成功数据，避免概览卡短暂清空 */ }
@@ -205,13 +206,13 @@ export function ExpertOsProvider({ children }: { children: ReactNode }) {
 
   const createOrSaveExpert = async (draft: ExpertDraft) => {
     // slug 仅创建时可提交（后端不支持修改）；provider_model_id 沿用既有约定：传 provider id，由服务端按模型归属解析
-    const basePayload = { name: draft.name.trim(), description: draft.description.trim(), system_prompt: draft.systemPrompt, provider_model_id: draft.providerId, model: draft.model, skills: draft.skills, knowledge_base_ids: draft.knowledgeBaseIds, tool_policies: {} }
+    const basePayload = { name: draft.name.trim(), description: draft.description.trim(), system_prompt: draft.systemPrompt, provider_model_id: draft.providerId, model: draft.model, skills: draft.skills, knowledge_base_ids: draft.knowledgeBaseIds, tool_policies: {}, tool_bindings: draft.toolBindings ?? [] }
     const payload = draft.id ? basePayload : { ...basePayload, slug: draft.slug.trim() }
     const response = draft.id
       ? await api.patch<{ expert: ExpertRecord; version: { id: string } }>('/api/v1/experts/' + draft.id, payload)
       : await api.post<{ expert: ExpertRecord; version: { id: string } }>('/api/v1/experts', payload)
     const expert = response.expert
-    setState((current) => ({ ...current, experts: current.experts.some((item) => item.id === expert.id) ? current.experts.map((item) => item.id === expert.id ? expert : item) : [...current.experts, expert], configs: { ...current.configs, [expert.id]: { ...(current.configs[expert.id] ?? {}), versionId: response.version.id, systemPrompt: draft.systemPrompt, providerId: draft.providerId, model: draft.model, knowledgeBaseIds: draft.knowledgeBaseIds, revision: (current.configs[expert.id]?.revision ?? 0) + 1, testedRevision: null } } }))
+    setState((current) => ({ ...current, experts: current.experts.some((item) => item.id === expert.id) ? current.experts.map((item) => item.id === expert.id ? expert : item) : [...current.experts, expert], configs: { ...current.configs, [expert.id]: { ...(current.configs[expert.id] ?? {}), versionId: response.version.id, systemPrompt: draft.systemPrompt, providerId: draft.providerId, model: draft.model, knowledgeBaseIds: draft.knowledgeBaseIds, toolBindings: draft.toolBindings ?? [], revision: (current.configs[expert.id]?.revision ?? 0) + 1, testedRevision: null } } }))
     return { id: expert.id, versionId: response.version.id }
   }
 

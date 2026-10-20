@@ -25,6 +25,8 @@ class DocItem(Base):
     wi: Mapped[str | None] = mapped_column(String(40), nullable=True)
     object_name: Mapped[str | None] = mapped_column(String(255), nullable=True)  # MinIO key
     deleted: Mapped[bool] = mapped_column(default=False)
+    archive_key: Mapped[str | None] = mapped_column(String(128), nullable=True, unique=True)
+    provenance: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
 
 class TagItem(Base):

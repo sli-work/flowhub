@@ -33,6 +33,9 @@ async def lifespan(_: FastAPI):
             await migrate(conn)
         async with SessionFactory() as session:
             await seed_all(session)
+            from flowhub_api.services.tool_registry import seed_builtin_tools
+            await seed_builtin_tools(session)
+            await session.commit()
             from flowhub_api.services.runtime_config import load_runtime_config
             await load_runtime_config(session)
         from flowhub_api.services.expert_runtime import setup_checkpointer
@@ -106,6 +109,10 @@ async def health():
 
 for r in (auth, org, projects, templates, workitems, tasks, matrix, access_keys, experts, external_tools, documents, notifications, audits, dashboard, search, tags):
     app.include_router(r.router)
+
+from flowhub_api.routes import tool_registry, tool_automation
+app.include_router(tool_registry.router)
+app.include_router(tool_automation.router)
 
 # 代码仓库：连接管理 / 全局仓库列表 / 项目绑定（单模块三组前缀）
 app.include_router(repos.router)

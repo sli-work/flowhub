@@ -44,6 +44,7 @@ def _brief(d: DocItem) -> dict:
         "id": d.id, "name": d.name, "project": d.project, "version": d.version,
         "level": d.level, "scan": d.scan, "uploader": d.uploader, "size": d.size,
         "time": d.time, "kind": d.kind, "wi": d.wi,
+        "provenance": d.provenance,
         # 扩展名（前端类型图标/预览能力判断用）
         "ext": d.name.rsplit(".", 1)[-1].lower() if "." in d.name else "",
     }

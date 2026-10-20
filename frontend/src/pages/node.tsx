@@ -1,3 +1,4 @@
+import { ToolAutomationPanel } from '../components/tool-automation-panel'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   ArrowLeft, ArrowRight, Bot, ClipboardList, FileText, Layers, LoaderCircle, Users, Plus,
@@ -173,7 +174,7 @@ export function NodeProcessPage() {
   const [curSchema, setCurSchema] = useState<FormField[]>([])
   const [curNodeType, setCurNodeType] = useState<string>('')
   /* 节点产出契约与拆分配置（来自画布 cfg） */
-  const [curCfg, setCurCfg] = useState<{ purpose?: string; handler?: string; sla?: string; deliverable?: NodeDeliverable; splitMode?: string }>({})
+  const [curCfg, setCurCfg] = useState<{ purpose?: string; handler?: string; sla?: string; deliverable?: NodeDeliverable; splitMode?: string; automation?: { rules?: { enabled?: boolean }[] } }>({})
   const [acceptance, setAcceptance] = useState<AcceptanceChecks>({})
   const [fallbackTargets, setFallbackTargets] = useState<FallbackTarget[]>([])
   const [issues, setIssues] = useState<WorkflowIssue[]>([])
@@ -298,7 +299,7 @@ export function NodeProcessPage() {
       upstream?: typeof upstream
       subtasks?: SubtaskBrief[]
       expertRuns?: ExpertRunBrief[]
-      nodeCfg?: { purpose?: string; handler?: string; sla?: string; schema?: FormField[]; deliverable?: NodeDeliverable; split?: { mode?: string } }
+      nodeCfg?: { purpose?: string; handler?: string; sla?: string; schema?: FormField[]; deliverable?: NodeDeliverable; split?: { mode?: string }; automation?: { rules?: { enabled?: boolean }[] } }
       fallbackTargets?: FallbackTarget[]
       issues?: WorkflowIssue[]; issueSummary?: IssueSummary; issueTargets?: IssueTarget[]
       corrections?: TaskCorrection[]
@@ -323,7 +324,7 @@ export function NodeProcessPage() {
           engineCfgApplied = true
           setCurCfg({
             purpose: td.nodeCfg.purpose, handler: td.nodeCfg.handler, sla: td.nodeCfg.sla,
-            deliverable: td.nodeCfg.deliverable, splitMode: td.nodeCfg.split?.mode ?? 'off',
+            deliverable: td.nodeCfg.deliverable, splitMode: td.nodeCfg.split?.mode ?? 'off', automation: td.nodeCfg.automation,
           })
           if (td.nodeCfg.schema?.length) setCurSchema(td.nodeCfg.schema)
           const accList = td.nodeCfg.deliverable?.acceptance ?? []
@@ -814,6 +815,7 @@ export function NodeProcessPage() {
 
         {/* 中栏：任务书 + 表单 + 拆分 + 继承上下文 + Expert Run 结果 */}
         <div className="min-w-0 space-y-5">
+          {!loading && task && curCfg.automation?.rules?.some(rule => rule.enabled) && <ToolAutomationPanel taskId={task.id} allowBackfill={!['completed', 'cancelled'].includes(task.status)} />}
           {curNodeType !== 'start' && (curCfg.purpose || curCfg.deliverable?.instruction || task?.brief || Object.keys(acceptance).length > 0) && (
             /* 任务书：人与 AI 共用同一份产出契约 */
             <SectionCard title="任务书" extra={<Badge tone="cyn"><ClipboardList className="mr-1 h-3 w-3" />产出契约</Badge>} bodyClassName="p-4">

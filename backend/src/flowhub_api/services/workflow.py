@@ -508,7 +508,8 @@ class WorkflowService:
         names = [name if "." in name else f"{name}.md" for name in names]
         if names:
             stale_docs = (await self.session.execute(select(DocItem).where(
-                DocItem.wi == task.wi_id, DocItem.name.in_(names)))).scalars().all()
+                DocItem.wi == task.wi_id, DocItem.name.in_(names),
+                DocItem.kind == "节点表单附件", DocItem.archive_key.is_(None)))).scalars().all()
         new_doc_ids = set()
         for f in schema:
             key, ftype = f.get("key", ""), f.get("type", "")
@@ -764,6 +765,7 @@ class WorkflowService:
             await self.session.flush()
             # 运行发起人：节点处理人优先；待分配时回退工作项创建人，再回退系统管理员
             expert_user = (await self.session.execute(select(User).where(User.name == new_task.assignee))).scalar_one_or_none()
+            archive_actor = expert_user
             if expert_user is None:
                 wi_row = await self.session.get(WorkItem, new_task.wi_id)
                 if wi_row is not None:
@@ -787,12 +789,26 @@ class WorkflowService:
             if is_auto:
                 # 自动节点处理期间禁止人工提交（后台完成后自动采纳流转，失败回退 assigned）
                 new_task.status = "pending_confirmation"
-            await schedule_deployment_run(
+            scheduled_run = await schedule_deployment_run(
                 self.session, deployment_id, brief_text,
                 expert_user, task_id=new_task.id,
                 completion={"automatic": is_auto, "auto_depth": auto_depth},
                 quality_mode="fast", generation_retries=1, unbounded_output=True,
             )
+            if (canvas_cfg or {}).get("automation"):
+                from flowhub_api.services.expert_runtime import add_event
+                if archive_actor is None:
+                    await add_event(self.session, scheduled_run.id, 1, "tool", "failed",
+                        "验收归档未排队", {"summary": "当前节点缺少明确的归档处理人，请人工指定后重试"})
+                else:
+                    from flowhub_api.services.tool_automation import schedule_automation
+                    try:
+                        async with self.session.begin_nested():
+                            await schedule_automation(self.session, task=new_task, event="node_entered",
+                                actor=archive_actor, expert_version_id=scheduled_run.expert_version_id, run=scheduled_run)
+                    except Exception as exc:
+                        await add_event(self.session, scheduled_run.id, 1, "tool", "failed",
+                            "验收归档未排队", {"summary": str(exc)[:300]})
         self.session.add(new_task)
         await self.session.flush()
         return new_task

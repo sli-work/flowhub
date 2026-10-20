@@ -453,6 +453,39 @@ def _validate_canvas(payload: dict) -> list[dict]:
     return errors
 
 
+async def _validate_automation_bindings(session: AsyncSession, payload: dict) -> list[dict]:
+    from flowhub_api.models import ExpertDeployment
+    from flowhub_api.services.tool_automation import validate_automation_rule
+
+    errors = []
+    for node in payload.get("nodes", []):
+        cfg = node.get("cfg") or {}
+        automation = cfg.get("automation") or {}
+        rules = automation.get("rules", []) if isinstance(automation, dict) else None
+        if rules is None or not isinstance(rules, list) or len(rules) > 10 or any(not isinstance(rule, dict) for rule in rules):
+            errors.append({"node_id": node.get("id"), "message": "自动化规则必须为不超过 10 项的列表"})
+            continue
+        enabled = [rule for rule in rules if isinstance(rule, dict) and rule.get("enabled", True)]
+        if not enabled:
+            continue
+        dep = await session.get(ExpertDeployment, (cfg.get("expert") or {}).get("expertDeploymentId", ""))
+        if dep is None or dep.status != "active" or node.get("type") not in {"end", "acceptance"}:
+            errors.append({"node_id": node.get("id"), "message": "归档自动化必须绑定可用 Expert 的验收节点"})
+            continue
+        seen = set()
+        for rule in enabled:
+            rule_id = rule.get("id")
+            if not rule_id or rule_id in seen or rule.get("event") not in {"node_entered", "expert_output_validated"}:
+                errors.append({"node_id": node.get("id"), "message": "自动化规则标识或触发事件无效"})
+                continue
+            seen.add(rule_id)
+            try:
+                await validate_automation_rule(session, rule, dep.expert_version_id)
+            except ValueError as exc:
+                errors.append({"node_id": node.get("id"), "message": str(exc)})
+    return errors
+
+
 @router.post("/{template_id}/versions/{version}/canvas/validate")
 async def validate_canvas(template_id: str, version: str, payload: dict):
     """发布校验（docs/04 §7）：开始/结束数量、入出边、悬空、回退自指。"""
@@ -571,6 +604,7 @@ async def save_draft_and_publish(
 
     # 静态校验：未通过 → 草稿保留为 draft（可继续编辑），返回 422
     errors = _validate_canvas(payload)
+    errors.extend(await _validate_automation_bindings(session, payload))
     if errors:
         await AuditService(session).record(
             actor=user.name, action="workflow_template:edit",
@@ -622,6 +656,7 @@ async def publish_version(
     errors = _validate_canvas({
         "nodes": canvas.nodes, "edges": canvas.edges, "fallbacks": canvas.fallbacks,
     })
+    errors.extend(await _validate_automation_bindings(session, {"nodes": canvas.nodes}))
     if errors:
         raise BizError(
             BizCode.FLOW_VALIDATE,

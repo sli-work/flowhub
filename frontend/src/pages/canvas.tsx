@@ -1,3 +1,4 @@
+import { NodeAutomationEditor } from '../components/node-automation-editor'
 import { useRef, useState, useEffect, useMemo, type MouseEvent as ReactMouseEvent } from 'react'
 import { ReactFlow, Background, Controls, Handle, MarkerType, MiniMap, Position, type Connection, type Edge, type Node, type NodeChange, type NodeProps, type ReactFlowInstance } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
@@ -1163,10 +1164,11 @@ export function CanvasPage() {
                  <p className="mt-2 text-[11px] leading-relaxed text-slate-400">节点配置只能限制 Expert 运行范围，不能扩大授权用户权限。</p>
               </div>
 
+              <NodeAutomationEditor key={selected.id} deploymentId={selected.cfg.expert?.expertDeploymentId} rules={selected.cfg.automation?.rules ?? []} disabled={mode !== 'edit'} onChange={(rules) => updateNodeCfg(selected.id, { automation: { rules } })} />
               {mode === 'edit' ? (
                 <div className="flex gap-2">
                   <button className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-blue-600 py-2 text-[12.5px] font-medium text-white hover:bg-blue-700"
-                    onClick={() => { setSnapshotDraft(); toast.success(`节点「${selected.label}」配置已保存`) }}>
+                    onClick={() => { setSnapshotDraft(); toast.success(`节点「${selected.label}」配置已暂存，请保存画布草稿或发布`) }}>
                     <Check className="h-4 w-4" />保存配置
                   </button>
                   {selected.type !== 'start' && selected.type !== 'end' && (

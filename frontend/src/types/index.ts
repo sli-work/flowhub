@@ -3,7 +3,7 @@
 export type PageId =
   | 'tasks' | 'notif' | 'dashboard' | 'projects' | 'workitem' | 'workitems' | 'node'
   | 'templates' | 'canvas' | 'docs' | 'org' | 'matrix' | 'audit' | 'channel'
-  | 'os-overview' | 'aichat' | 'expert-center' | 'skill-center' | 'mcp-center'
+  | 'tool-center' | 'os-overview' | 'aichat' | 'expert-center' | 'skill-center' | 'mcp-center'
   | 'provider-center' | 'knowledge' | 'memory' | 'runtime-center' | 'approvals' | 'external-tools'
   | 'expert-editor' | 'repos'
 
@@ -294,6 +294,7 @@ export interface CanvasNode {
     split?: { mode: SplitMode }
     /** 节点级 Expert Deployment 绑定：Expert 自动节点必须指定已发布 Deployment。 */
     expert?: { expertDeploymentId: string }
+    automation?: { rules: import('../lib/tools').AutomationRule[] }
     /** 决策节点分支条件：{ 目标节点id: {field, op(eq/ne/contains), value} } + 默认分支 */
     branches?: Record<string, { field: string; op: string; value: string }>
     defaultBranch?: string
@@ -346,6 +347,7 @@ export interface ExpertRecord {
 }
 
 export interface ExpertConfig {
+  toolBindings?: import('../lib/tools').ToolBinding[]
   versionId?: string
   systemPrompt: string
   providerId: string
@@ -455,6 +457,7 @@ export interface AccessKeyItem {
 }
 
 export interface DocItem {
+  provenance?: { reviewStatus?: string; generatedBy?: string; [key: string]: unknown } | null
   id: string
   name: string
   project: string

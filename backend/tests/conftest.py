@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import os
+from urllib.parse import urlsplit
 
 _TEST_DB_HOST = os.environ.get("FLOWHUB_TEST_DB_HOST", "192.168.21.4")
 os.environ.setdefault("DATABASE_URL", f"postgresql+psycopg://flowhub:flowhub123@{_TEST_DB_HOST}:5432/flowhub_test")
@@ -31,7 +32,12 @@ ADMIN_PASSWORD = "Admin@123456"
 
 def _reset_test_db() -> None:
     """重建测试库 schema（会话开始时调用一次）。"""
-    conn = psycopg.connect(f"postgresql://flowhub:flowhub123@{_TEST_DB_HOST}:5432/flowhub_test", autocommit=True)
+    database_url = os.environ["DATABASE_URL"].replace("postgresql+psycopg://", "postgresql://", 1)
+    database_name = urlsplit(database_url).path.lstrip("/")
+    expected_name = os.environ.get("FLOWHUB_TEST_DB_NAME", "flowhub_test")
+    if database_name != expected_name or not (database_name.endswith("_test") or "_test_" in database_name):
+        raise RuntimeError("Refusing to reset a database that is not the explicitly selected test database")
+    conn = psycopg.connect(database_url, autocommit=True)
     try:
         with conn.cursor() as cur:
             cur.execute("DROP SCHEMA IF EXISTS public CASCADE")

@@ -376,6 +376,7 @@ async def get_task(
             "schema": node_cfg.get("schema") or [],
             "deliverable": node_cfg.get("deliverable") or {},
             "split": node_cfg.get("split") or {"mode": "off"},
+            "automation": node_cfg.get("automation") or {"rules": []},
         },
         # 回退目标必须来自该工作项冻结版本的画布，前端不能使用模板演示数据。
         "fallbackTargets": fallback_targets,

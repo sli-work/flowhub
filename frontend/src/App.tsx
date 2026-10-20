@@ -1,3 +1,4 @@
+import { ToolCenterPage } from './pages/tool-center'
 import { useApp } from './store/app-store'
 import { Sidebar, Topbar } from './components/layout'
 import { DialogHost } from './components/dialogs'
@@ -33,6 +34,7 @@ function PageRouter() {
     case 'expert-center': return <ExpertCenterPage />
     case 'expert-editor': return <ExpertEditorPage />
     case 'skill-center': return <ResourceCenterPage kind="skill" />
+    case 'tool-center': return <ToolCenterPage />
     case 'mcp-center': return <ResourceCenterPage kind="mcp" />
     case 'provider-center': return <ResourceCenterPage kind="provider" />
     case 'knowledge': return <ResourceCenterPage kind="knowledge" />

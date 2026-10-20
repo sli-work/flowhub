@@ -129,6 +129,7 @@ class ExpertVersion(Base):
     skills: Mapped[list] = mapped_column(JSON, default=list)
     knowledge_base_ids: Mapped[list] = mapped_column(JSON, default=list)
     tool_policies: Mapped[dict] = mapped_column(JSON, default=dict)
+    tool_bindings: Mapped[list] = mapped_column(JSON, default=list)
     validation: Mapped[dict] = mapped_column(JSON, default=dict)
     tested_at: Mapped[str] = mapped_column(String(40), default="")
     published_at: Mapped[str] = mapped_column(String(40), default="")

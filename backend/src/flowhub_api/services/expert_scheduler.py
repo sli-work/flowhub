@@ -80,6 +80,19 @@ async def complete_workflow(session, run: ExpertRun, completion: dict) -> None:
     if task is None:
         return
     task.expert_pending = False
+    # Archive delivery is independent of adopting/submitting a workflow form.
+    if run.status == "succeeded" and (getattr(run, "config_snapshot", None) or {}).get("tool_bindings"):
+        actor = await session.get(User, run.requested_by)
+        if actor is not None and not actor.deleted:
+            from flowhub_api.services.tool_automation import schedule_automation
+            try:
+                async with session.begin_nested():
+                    await schedule_automation(session, task=task, event="expert_output_validated",
+                        actor=actor, expert_version_id=run.expert_version_id, run=run)
+            except Exception as exc:
+                from flowhub_api.services.expert_runtime import add_event
+                await add_event(session, run.id, 1, "tool", "failed", "验收归档未排队",
+                                {"summary": str(exc)[:300]})
     if not completion.get("automatic") or task.status != "pending_confirmation":
         return
     if run.status == "succeeded" and int(completion.get("auto_depth", 0)) < 5:
@@ -132,6 +145,7 @@ async def execute_claim(claim: Claim) -> None:
         run = await session.get(ExpertRun, claim.run_id)
         if run is None or run.execution_generation != claim.generation:
             raise LeaseLost("Run execution generation changed")
+        execution_job = await session.get(ExpertJob, claim.job_id)
         version = await session.get(ExpertVersion, run.expert_version_id)
         actor = await session.get(User, run.requested_by)
         if version is None or actor is None or actor.deleted:
@@ -142,7 +156,8 @@ async def execute_claim(claim: Claim) -> None:
             run.status = "running"
             await publish_progress("trace", {"kind": "queue", "tool": "Worker 已领取任务", "status": "running", "summary": "正在准备运行环境"})
             await execute_run(session, run, version, actor,
-                              emitter=publish_progress, lease_guard=lambda: check_lease(claim), resume_checkpoint=claim.attempts > 1)
+                              emitter=publish_progress, lease_guard=lambda: check_lease(claim), resume_checkpoint=claim.attempts > 1,
+                              resume_approval=bool((execution_job.completion or {}).get("toolInvocationId")))
         # Lock only during final database writes. A stale worker cannot commit.
         with session.no_autoflush:
             job = (await session.execute(select(ExpertJob).where(owned(claim)).with_for_update())).scalar_one_or_none()
@@ -176,6 +191,8 @@ async def cleanup_one_object() -> None:
 async def worker(stop: asyncio.Event) -> None:
     while not stop.is_set():
         try:
+            from flowhub_api.services.tool_automation import process_one_automation_job
+            await process_one_automation_job()
             claim = await claim_next()
             if claim is None:
                 await cleanup_one_object()

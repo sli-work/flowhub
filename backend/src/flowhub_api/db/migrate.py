@@ -56,6 +56,21 @@ async def migrate(conn: AsyncConnection) -> None:
         ))
         if restored.rowcount:
             logger.info("migrate: restored %d historical task split links", restored.rowcount)
+    document_columns = await _existing_columns(conn, "documents")
+    if document_columns:
+        if "archive_key" not in document_columns:
+            await conn.execute(text("ALTER TABLE documents ADD COLUMN archive_key VARCHAR(128)"))
+        if "provenance" not in document_columns:
+            await conn.execute(text("ALTER TABLE documents ADD COLUMN provenance JSON"))
+        await conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_documents_archive_key ON documents (archive_key)"))
+
+    automation_status_length = await conn.scalar(text(
+        "SELECT character_maximum_length FROM information_schema.columns "
+        "WHERE table_schema = current_schema() AND table_name = 'tool_automation_jobs' AND column_name = 'status'"
+    ))
+    if automation_status_length is not None and automation_status_length < 24:
+        await conn.execute(text("ALTER TABLE tool_automation_jobs ALTER COLUMN status TYPE VARCHAR(24)"))
+
     # users：邮箱（编辑用户可改）与软删标记（删除用户保留审计引用）
     user_columns = await _existing_columns(conn, "users")
     user_columns_to_add = {
@@ -101,6 +116,7 @@ async def migrate(conn: AsyncConnection) -> None:
         "skills": "JSON DEFAULT '[]'",
         "knowledge_base_ids": "JSON DEFAULT '[]'",
         "tool_policies": "JSON DEFAULT '{}'",
+        "tool_bindings": "JSON NOT NULL DEFAULT '[]'",
         "validation": "JSON DEFAULT '{}'",
         "tested_at": "VARCHAR(40) DEFAULT ''",
         "created_by": "VARCHAR(32)",

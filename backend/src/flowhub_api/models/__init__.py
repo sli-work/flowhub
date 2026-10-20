@@ -20,3 +20,5 @@ __all__ = [
     "ExpertRun", "ExpertRunEvent", "ExpertApproval",
     "ExpertChatSession", "ExpertChatMessage",
 ]
+
+from flowhub_api.models.tool import ToolDefinition, ToolVersion, ToolInvocation, ToolAutomationJob

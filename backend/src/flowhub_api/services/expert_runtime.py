@@ -17,6 +17,7 @@ from uuid import uuid4
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import ToolMessage
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+from langgraph.errors import GraphBubbleUp
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 from sqlalchemy import or_, select, func
@@ -24,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from flowhub_api.models import ExpertApproval, ExpertChatMessage, ExpertChatSession, ExpertDeployment, ExpertRun, ExpertRunEvent, ExpertSkill, ExpertVersion, LlmProvider, LlmProviderModel, Project, TaskItem, User, WorkItem
 from flowhub_api.services.crypto import decrypt_secret
+from flowhub_api.services.checkpoint_serde import FlowHubCheckpointSerializer
 from flowhub_api.services.repo_mirror import create_repo_tool_bundle, repo_map_section, schedule_mirror_build
 
 from flowhub_api.services.runtime_model import make_model
@@ -286,6 +288,8 @@ async def run_repo_tool_loop(llm, messages: list, bundle, *, on_trace: Callable[
                 try:
                     content = await tool.ainvoke(args)
                     status = "succeeded"
+                except GraphBubbleUp:
+                    raise
                 except Exception as exc:  # return an observable tool result so the model can recover
                     content = json.dumps({"error": f"{type(exc).__name__}: {str(exc)[:200]}"}, ensure_ascii=False)
                     status = "failed"
@@ -293,7 +297,7 @@ async def run_repo_tool_loop(llm, messages: list, bundle, *, on_trace: Callable[
             message_content = content.get("content") if isinstance(content, dict) and isinstance(content.get("content"), list) else None
             content = str(content) if message_content is None else message_content
             await emit({"kind": "tool", "tool": name, "status": status,
-                        "summary": f"只读工具 {name}{' 已完成' if status == 'succeeded' else ' 未执行'} · 调用 {used} · 第 {rounds} 轮"})
+                        "summary": f"工具 {name}{' 已完成' if status == 'succeeded' else ' 未执行'} · 调用 {used} · 第 {rounds} 轮"})
             if status == "succeeded" and name in REPO_EVIDENCE_TOOL_NAMES:
                 successful_repo_evidence = True
             tool_results.append(ToolMessage(content=content, tool_call_id=call_id))
@@ -652,7 +656,7 @@ async def setup_checkpointer() -> None:
     Request transactions may already hold locks on FlowHub tables; running these
     migrations inside a Run request can block PostgreSQL indefinitely.
     """
-    async with AsyncPostgresSaver.from_conn_string(checkpoint_dsn()) as checkpointer:
+    async with AsyncPostgresSaver.from_conn_string(checkpoint_dsn(), serde=FlowHubCheckpointSerializer()) as checkpointer:
         await checkpointer.setup()
 
 
@@ -776,7 +780,7 @@ async def flowhub_read_snapshot(session: AsyncSession, user: User, prompt: str, 
 
 def build_graph(provider: LlmProvider, model: LlmProviderModel, system_prompt: str, flowhub_snapshot=None, emitter=None,
                 quality_mode: str = "accurate", repo_tools_factory=None, output_schema=None, cached_code_evidence=None,
-                force_code_reanalysis: bool = False, attachment_tools_factory=None,
+                force_code_reanalysis: bool = False, attachment_tools_factory=None, business_tools_factory=None,
                 generation_retries: int = 2, unbounded_output: bool = False, max_tool_rounds: int | None = None):
     """构建 LangGraph 运行图。
 
@@ -905,7 +909,7 @@ def build_graph(provider: LlmProvider, model: LlmProviderModel, system_prompt: s
         trace = list(state.get("tool_trace") or [])
         # Quality revisions must reuse the first pass evidence. Re-running the
         # tool loop here multiplied calls by the number of quality attempts.
-        if (repo_tools_factory is not None or attachment_tools_factory is not None) and int(state.get("attempt", 0)) == 0:
+        if (repo_tools_factory is not None or attachment_tools_factory is not None or business_tools_factory is not None) and int(state.get("attempt", 0)) == 0:
             # Whether the task truly needs code forensics is decided from the brief
             # after stripping auto-injected boilerplate (see is_code_analysis_question).
             wants_code_forensics = is_code_analysis_question(state.get("prompt", ""))
@@ -914,6 +918,12 @@ def build_graph(provider: LlmProvider, model: LlmProviderModel, system_prompt: s
                 bundle = RepoToolBundle(tools=[], traces=[], evidence_context=[])
                 attachment_state: dict = {}
                 ab = None
+                business_bundle = None
+                if business_tools_factory is not None:
+                    business_bundle = await business_tools_factory()
+                    bundle.tools += business_bundle.tools
+                    bundle.traces += business_bundle.traces
+                    bundle.evidence_context += business_bundle.evidence_context
                 if attachment_tools_factory is not None:
                     try:
                         ab = await attachment_tools_factory(state["prompt"])
@@ -956,6 +966,7 @@ def build_graph(provider: LlmProvider, model: LlmProviderModel, system_prompt: s
                     # （否则 check_attachment_citations 看不到「已调用附件工具」而误降级人工核对）。
                     trace.extend({"tool": item["tool"], "status": item["status"], "summary": item["summary"]}
                                  for item in (ab.traces if ab is not None else []))
+                    trace.extend(business_bundle.traces if business_bundle is not None else [])
                     attachment_state = _attachment_state_from_bundle(ab) if ab is not None else {}
                     tool_evidence = "\n\n".join(bundle.evidence_context)
                     # A required repository read that the model never completed is a
@@ -996,6 +1007,8 @@ def build_graph(provider: LlmProvider, model: LlmProviderModel, system_prompt: s
                             "attempt": int(state.get("attempt", 0)) + 1, "code_evidence": code_evidence,
                             "attachmentEvidence": attachment_state, "repo_evidence_required": forensics_missing,
                             "format_strategy": format_strategy}
+            except GraphBubbleUp:
+                raise
             except RepoToolLoopUnavailable as exc:
                 trace.append({"tool": "flowhub.repo.tools", "status": "unavailable",
                               "summary": f"模型不支持仓库工具调用，已回退静态代码上下文：{str(exc)[:160]}"})
@@ -1217,6 +1230,9 @@ async def validate_version(session: AsyncSession, version: ExpertVersion) -> lis
         blockers.append("知识库检索与权限索引尚未接入，含知识库绑定的 Expert 暂不能发布或运行")
     if version.tool_policies:
         blockers.append("自定义工具策略运行时尚未接入，配置后暂不能发布或运行")
+    if getattr(version, "tool_bindings", None):
+        from flowhub_api.services.tool_registry import validate_tool_bindings
+        blockers.extend(await validate_tool_bindings(session, version.tool_bindings))
     return blockers
 
 
@@ -1295,6 +1311,12 @@ async def prepare_run_snapshot(session, run, version, user, history='', provider
         return snapshot
     if not version.system_prompt.strip() or version.knowledge_base_ids or version.tool_policies:
         raise ValueError('Expert 缺少提示词或包含尚未支持的知识库／工具策略')
+    bindings = getattr(version, "tool_bindings", None) or []
+    if bindings:
+        from flowhub_api.services.tool_registry import validate_tool_bindings
+        binding_errors = await validate_tool_bindings(session, bindings)
+        if binding_errors:
+            raise ValueError("；".join(binding_errors))
     requested_model_id = provider_model_id or version.provider_model_id
     model, provider, fallback = await resolve_usable_provider_model(session, requested_model_id)
     if not model:
@@ -1310,7 +1332,8 @@ async def prepare_run_snapshot(session, run, version, user, history='', provider
         'quality_mode': quality_mode, 'generation_retries': max(0, min(int(generation_retries), 2)),
         'unbounded_output': bool(unbounded_output),
         'history': history, 'schema': await task_output_schema(session, run),
-        'version_id': version.id, 'requested_by': user.id}
+        'version_id': version.id, 'requested_by': user.id,
+        'tool_bindings': json.loads(json.dumps(bindings)), 'node_id': task.node_id if task else None}
     if fallback:
         run.config_snapshot['modelFallback'] = fallback
     return run.config_snapshot
@@ -1354,7 +1377,7 @@ async def execute_run(session: AsyncSession, run: ExpertRun, version: ExpertVers
         provider = await session.get(LlmProvider, model.provider_id) if model else None
         if not model or not model.enabled or not provider or provider.status != 'healthy' or not provider.credential_configured:
             raise ValueError('实际执行的 Provider / 模型不可用')
-        if getattr(user, 'deleted', False) or user.id != config['requested_by']:
+        if getattr(user, 'deleted', False) or getattr(user, 'status', 'active') != 'active' or user.id != config['requested_by']:
             raise ValueError('原发起人已失效或执行身份不匹配')
         project_name = config.get('project_name')
         if project_name:
@@ -1392,16 +1415,20 @@ async def execute_run(session: AsyncSession, run: ExpertRun, version: ExpertVers
         async def attachment_tools(prompt):
             from flowhub_api.services.attachment_tools import create_attachment_tool_bundle
             return await create_attachment_tool_bundle(session, task, user, supports_vision=bool(getattr(model, "supports_vision", False)))
+        async def business_tools():
+            from flowhub_api.services.business_tools import create_business_tool_bundle
+            return await create_business_tool_bundle(session, run, version, task if run.task_id else None, user)
         if lease_guard:
             await lease_guard()
             await session.commit()
         async with asyncio.timeout(900):
-            async with AsyncPostgresSaver.from_conn_string(checkpoint_dsn()) as checkpointer:
+            async with AsyncPostgresSaver.from_conn_string(checkpoint_dsn(), serde=FlowHubCheckpointSerializer()) as checkpointer:
                 graph = build_graph(provider, model, config['system_prompt'], flowhub_snapshot=snapshot,
                     emitter=emitter, quality_mode=config['quality_mode'], output_schema=config.get('schema'),
                     repo_tools_factory=repo_tools if project_name else None, cached_code_evidence=cached_code_evidence,
                     force_code_reanalysis=force_code_reanalysis,
                     attachment_tools_factory=attachment_tools if run.task_id and task else None,
+                    business_tools_factory=business_tools if config.get("tool_bindings") else None,
                     generation_retries=config.get('generation_retries', 2),
                     unbounded_output=bool(config.get('unbounded_output')),
                     # 带 task_id 的 Run 即任务分析路径（自动节点/协助填充/页面重跑），
@@ -1420,6 +1447,11 @@ async def execute_run(session: AsyncSession, run: ExpertRun, version: ExpertVers
             await lease_guard()
         if '__interrupt__' in result:
             run.status, run.finished_at = 'interrupted', ''
+            interrupts = result.get('__interrupt__') or []
+            tool_pending = any(isinstance(getattr(item, 'value', None), dict) and getattr(item, 'value', {}).get('toolInvocationId') for item in interrupts)
+            if tool_pending:
+                await add_event(session, run.id, 1, 'approval', 'pending', '工具调用等待审批', {})
+                return
             existing = (await session.execute(select(ExpertApproval).where(ExpertApproval.run_id == run.id))).scalar_one_or_none()
             if existing is None:
                 session.add(ExpertApproval(id=new_id('eap'), run_id=run.id, tool_name='flowhub.generation.resume',

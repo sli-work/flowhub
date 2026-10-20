@@ -1,3 +1,4 @@
+import { ToolGrantEditor } from '../components/tool-grant-editor'
 import { useEffect, useMemo, useState } from 'react'
 import { ArrowLeft, CircleCheck, CircleX, Play, Rocket, Save } from 'lucide-react'
 import { Button } from '../components/ui/button'
@@ -11,11 +12,11 @@ import { ExpertChatDrawer } from '../components/expert-chat-drawer'
 import { useApp, toast } from '../store/app-store'
 import { isValidSlug, providerUsable, suggestSlug, useExpertOs, validateDraft, type ExpertCheckSection, type ExpertDraft } from '../store/expert-os-store'
 
-type EditorFieldPick = Pick<ExpertDraft, 'name' | 'slug' | 'description' | 'systemPrompt' | 'providerId' | 'model' | 'skills' | 'knowledgeBaseIds'>
+type EditorFieldPick = Pick<ExpertDraft, 'name' | 'slug' | 'description' | 'systemPrompt' | 'providerId' | 'model' | 'skills' | 'knowledgeBaseIds' | 'toolBindings'>
 
-const emptyDraft = (): ExpertDraft => ({ name: '', slug: '', description: '', systemPrompt: '', providerId: '', model: '', skills: [], knowledgeBaseIds: [] })
+const emptyDraft = (): ExpertDraft => ({ name: '', slug: '', description: '', systemPrompt: '', providerId: '', model: '', skills: [], knowledgeBaseIds: [], toolBindings: [] })
 
-const fieldsOf = (draft: ExpertDraft): EditorFieldPick => ({ name: draft.name, slug: draft.slug, description: draft.description, systemPrompt: draft.systemPrompt, providerId: draft.providerId, model: draft.model, skills: draft.skills, knowledgeBaseIds: draft.knowledgeBaseIds })
+const fieldsOf = (draft: ExpertDraft): EditorFieldPick => ({ name: draft.name, slug: draft.slug, description: draft.description, systemPrompt: draft.systemPrompt, providerId: draft.providerId, model: draft.model, skills: draft.skills, knowledgeBaseIds: draft.knowledgeBaseIds, toolBindings: draft.toolBindings ?? [] })
 
 export function ExpertEditorPage() {
   const { expertEditorTarget, navigate } = useApp()
@@ -53,6 +54,7 @@ export function ExpertEditorPage() {
       model: config?.model ?? '',
       skills: expert?.skills ?? [],
       knowledgeBaseIds: config?.knowledgeBaseIds ?? [],
+      toolBindings: config?.toolBindings ?? [],
     }
     setDraft(loaded)
     setBaseline(JSON.stringify(fieldsOf(loaded)))
@@ -273,6 +275,8 @@ export function ExpertEditorPage() {
           </SectionCard>
 
           <SectionCard id="sec-binding" index={3} title="能力与绑定" desc="Skills 与知识库为可选增强，状态异常时不能用于发布">
+            <p className="mb-3 text-xs text-slate-500">生产绑定：{state.deployments.filter(item => item.expertId === draft.id && item.environment === 'prod').map(item => `${item.name} · ${item.expertVersion || '固定发布版本'}`).join('、') || '尚无生产 Deployment'}。以下修改仅在当前草稿生效。</p>
+            <ToolGrantEditor bindings={draft.toolBindings ?? []} disabled={readOnly || hydrating} onChange={(toolBindings) => update({ toolBindings })} />
             <SubTitle>绑定 Skills</SubTitle>
             {boundSkillEntries.length ? (
               <div className="grid gap-2 sm:grid-cols-2">

@@ -272,7 +272,7 @@ def expert_brief(expert: Expert, deployments: int = 0, version: ExpertVersion | 
 
 
 def version_brief(version: ExpertVersion) -> dict:
-    return {"id": version.id, "expertId": version.expert_id, "version": version.version, "status": version.status, "systemPrompt": version.system_prompt, "providerModelId": version.provider_model_id, "skills": version.skills, "knowledgeBaseIds": version.knowledge_base_ids, "toolPolicies": version.tool_policies, "validation": version.validation, "testedAt": version.tested_at, "publishedAt": version.published_at}
+    return {"id": version.id, "expertId": version.expert_id, "version": version.version, "status": version.status, "systemPrompt": version.system_prompt, "providerModelId": version.provider_model_id, "skills": version.skills, "knowledgeBaseIds": version.knowledge_base_ids, "toolPolicies": version.tool_policies, "toolBindings": getattr(version, "tool_bindings", None) or [], "validation": version.validation, "testedAt": version.tested_at, "publishedAt": version.published_at}
 
 
 @router.get("/providers")
@@ -393,7 +393,7 @@ async def create_expert(body: ExpertCreateReq, user: Annotated[User, Depends(get
         raise BizError(BizCode.DUPLICATE_OPERATION, "Slug 已存在")
     expert = Expert(id=new_id("exp"), name=body.name, slug=body.slug, description=body.description, owner_id=user.id, created_at=now_iso(), updated_at=now_iso())
     provider_model_id = await resolve_model_id(session, body.provider_model_id, body.model)
-    version = ExpertVersion(id=new_id("ev"), expert_id=expert.id, version="v0.1", system_prompt=body.system_prompt, provider_model_id=provider_model_id, skills=body.skills, knowledge_base_ids=body.knowledge_base_ids, tool_policies=body.tool_policies, policy_json=body.tool_policies, output_contract_json={}, execution_profile_json={}, knowledge_policy_json={}, memory_policy_json={}, checksum="", published_by="", created_by=user.id, created_at=now_iso())
+    version = ExpertVersion(id=new_id("ev"), expert_id=expert.id, version="v0.1", system_prompt=body.system_prompt, provider_model_id=provider_model_id, skills=body.skills, knowledge_base_ids=body.knowledge_base_ids, tool_policies=body.tool_policies, tool_bindings=[item.model_dump() for item in body.tool_bindings], policy_json=body.tool_policies, output_contract_json={}, execution_profile_json={}, knowledge_policy_json={}, memory_policy_json={}, checksum="", published_by="", created_by=user.id, created_at=now_iso())
     expert.current_version_id = version.id
     session.add_all([expert, version])
     await AuditService(session).record(actor=user.name, action="expert:create", target=expert.name, result="success")
@@ -433,6 +433,7 @@ async def update_expert(expert_id: str, body: ExpertVersionReq, user: Annotated[
     expert.updated_at = now_iso()
     current.system_prompt, current.provider_model_id = body.system_prompt, await resolve_model_id(session, body.provider_model_id, body.model)
     current.skills, current.knowledge_base_ids, current.tool_policies = body.skills, body.knowledge_base_ids, body.tool_policies
+    current.tool_bindings = [item.model_dump() for item in body.tool_bindings]
     current.status, current.tested_at = "draft", ""
     await session.commit()
     return ok({"expert": expert_brief(expert, version=current), "version": version_brief(current)}, "Expert 草稿已保存")
@@ -466,7 +467,7 @@ async def duplicate_expert(expert_id: str, user: Annotated[User, Depends(get_cur
         slug = f"{source.slug}-copy-{suffix}"
         suffix += 1
     expert = Expert(id=new_id("exp"), name=f"{source.name} 副本", slug=slug, kind="custom", status="draft", description=source.description, owner_id=user.id, created_at=now_iso(), updated_at=now_iso())
-    copied = ExpertVersion(id=new_id("ev"), expert_id=expert.id, version="v0.1", system_prompt=version.system_prompt, provider_model_id=version.provider_model_id, skills=version.skills, knowledge_base_ids=version.knowledge_base_ids, tool_policies=version.tool_policies, output_contract_json={}, execution_profile_json={}, knowledge_policy_json={}, memory_policy_json={}, policy_json=version.tool_policies, checksum="", published_by="", created_by=user.id, created_at=now_iso())
+    copied = ExpertVersion(id=new_id("ev"), expert_id=expert.id, version="v0.1", system_prompt=version.system_prompt, provider_model_id=version.provider_model_id, skills=version.skills, knowledge_base_ids=version.knowledge_base_ids, tool_policies=version.tool_policies, tool_bindings=getattr(version, "tool_bindings", None) or [], output_contract_json={}, execution_profile_json={}, knowledge_policy_json={}, memory_policy_json={}, policy_json=version.tool_policies, checksum="", published_by="", created_by=user.id, created_at=now_iso())
     expert.current_version_id = copied.id
     session.add_all([expert, copied])
     await session.commit()

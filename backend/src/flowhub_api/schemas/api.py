@@ -198,6 +198,12 @@ class ProviderTestReq(BaseModel):
     model: str = Field(min_length=1, max_length=128)
 
 
+class ExpertToolBindingReq(BaseModel):
+    tool_version_id: str = Field(min_length=1, max_length=40)
+    scope: Literal["current_work_item"] = "current_work_item"
+    approval: Literal["inherit", "required"] = "inherit"
+
+
 class ExpertCreateReq(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     slug: str = Field(pattern=r"^[a-z][a-z0-9-]{0,95}$")
@@ -208,6 +214,7 @@ class ExpertCreateReq(BaseModel):
     skills: list[str] = []
     knowledge_base_ids: list[str] = []
     tool_policies: dict[str, str] = {}
+    tool_bindings: list[ExpertToolBindingReq] = Field(default_factory=list, max_length=100)
 
 
 class ExpertVersionReq(BaseModel):
@@ -218,6 +225,7 @@ class ExpertVersionReq(BaseModel):
     skills: list[str] = []
     knowledge_base_ids: list[str] = []
     tool_policies: dict[str, str] = {}
+    tool_bindings: list[ExpertToolBindingReq] = Field(default_factory=list, max_length=100)
 
 
 class DeploymentReq(BaseModel):
