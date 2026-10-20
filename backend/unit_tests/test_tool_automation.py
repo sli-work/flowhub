@@ -128,8 +128,10 @@ async def test_generated_summary_is_scheduled_before_adoption(scheduling, monkey
     assert jobs[0].payload_json['summary_content'] == 'summary'
     assert jobs[0].run_id == 'run' and jobs[0].generation == 2
     monkeypatch.setattr(automation, 'summary_for_run', AsyncMock(return_value=None))
-    assert await automation.schedule_automation(session, task=task, event='expert_output_validated', actor=actor,
-                                                expert_version_id='ev', run=run) == []
+    missing = await automation.schedule_automation(session, task=task, event='expert_output_validated', actor=actor,
+                                                   expert_version_id='ev', run=run)
+    assert missing[0].status == 'failed'
+    assert 'no summary document body' in missing[0].payload_json['freeze_error']
 
 
 @pytest.mark.asyncio

@@ -1,5 +1,6 @@
 """Real PostgreSQL archive/outbox regressions; disposable test DB fixture only."""
 import asyncio
+import pytest
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from uuid import uuid4
@@ -195,7 +196,8 @@ def test_archive_batch_storage_failure_rolls_back_all_visible_metadata(client, m
     asyncio.run(scenario())
 
 
-def test_instruction_echo_is_a_durable_failed_summary_job_without_archive_success(client, monkeypatch):
+@pytest.mark.parametrize('content', ['Only output the JSON object.', ''])
+def test_instruction_echo_is_a_durable_failed_summary_job_without_archive_success(client, monkeypatch, content):
     store = ObjectStore()
     monkeypatch.setattr(archive, 'get_minio', lambda: store)
     async def scenario():
@@ -204,7 +206,6 @@ def test_instruction_echo_is_a_durable_failed_summary_job_without_archive_succes
         ids, user_id = await seed(factory, store)
         async with factory() as session:
             task, user, run = await session.get(TaskItem, ids['task']), await session.get(User, user_id), await session.get(ExpertRun, ids['run'])
-            content = 'Only output the JSON object.'
             run.output = content
             run.parsed = {'values': {'fmu4u8pua': content}}
             run.quality_result = {'status': 'passed', 'contentHash': content_hash(content)}

@@ -67,7 +67,7 @@ async def schedule_automation(session, *, task, event, actor, expert_version_id,
         if event == 'expert_output_validated':
             content = await summary_for_run(session, task, run)
             if content is None:
-                return []
+                raise ValueError('Summary format: validated run has no summary document body')
             await validated_summary(session, task, run, content)
             payload['summary_content'] = content
     except Exception as exc:
