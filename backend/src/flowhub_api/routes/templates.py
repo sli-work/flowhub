@@ -468,6 +468,9 @@ async def _validate_automation_bindings(session: AsyncSession, payload: dict) ->
         enabled = [rule for rule in rules if isinstance(rule, dict) and rule.get("enabled", True)]
         if not enabled:
             continue
+        if cfg.get("handler") == "Expert 自动":
+            errors.append({"node_id": node.get("id"), "message": "验收归档节点须保留人工验收，请使用 Expert 协助或人工处理"})
+            continue
         dep = await session.get(ExpertDeployment, (cfg.get("expert") or {}).get("expertDeploymentId", ""))
         if dep is None or dep.status != "active" or node.get("type") not in {"end", "acceptance"}:
             errors.append({"node_id": node.get("id"), "message": "归档自动化必须绑定可用 Expert 的验收节点"})
